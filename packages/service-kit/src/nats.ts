@@ -2,6 +2,8 @@ import { auditEvent, subjects, type AuditEvent } from '@acp/protocol';
 import {
   connect,
   credsAuthenticator,
+  RetentionPolicy,
+  StorageType,
   type JetStreamClient,
   type KV,
   type NatsConnection,
@@ -77,4 +79,34 @@ export class AuditPublisher {
 
 export async function openKv(nc: NatsConnection, bucket: string): Promise<KV> {
   return nc.jetstream().views.kv(bucket, { history: 5 });
+}
+
+export const AUDIT_STREAM = 'ACP_AUDIT';
+
+/**
+ * Idempotent creation of the audit capture stream: file-backed,
+ * deny-delete/deny-purge (governance-and-policy.md — the stream is the
+ * capture ledger; long-horizon WORM tiering lands in Phase 3). Every
+ * audit publisher calls this at boot so no service depends on another's
+ * start order.
+ */
+export async function ensureAuditStream(nc: NatsConnection): Promise<void> {
+  const jsm = await nc.jetstreamManager();
+  const config = {
+    name: AUDIT_STREAM,
+    subjects: ['acp.*.audit.>'],
+    storage: StorageType.File,
+    retention: RetentionPolicy.Limits,
+    deny_delete: true,
+    deny_purge: true,
+    max_age: 0, // limits-mode with no age cap in dev; retention tiers are deployment policy
+  };
+  try {
+    await jsm.streams.add(config);
+  } catch (err) {
+    // Already exists with the same config → fine. Anything else is a real
+    // boot failure and must surface.
+    const info = await jsm.streams.info(AUDIT_STREAM).catch(() => null);
+    if (info === null) throw err;
+  }
 }

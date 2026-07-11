@@ -2,6 +2,7 @@ import process from 'node:process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import {
+  ensureAuditStream,
   AuditPublisher,
   JwtVerifier,
   connectBus,
@@ -35,6 +36,7 @@ const nc = await connectBus({
   user: env('ACP_NATS_SERVICE_USER', 'policy'),
   password: env('ACP_NATS_SERVICE_PASSWORD', 'policy-dev-password'),
 });
+await ensureAuditStream(nc);
 
 const app = buildPolicyApp({
   verifier: new JwtVerifier(
