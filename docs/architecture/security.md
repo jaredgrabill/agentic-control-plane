@@ -85,7 +85,7 @@ yields scoped, expiring platform tokens — not ITSM passwords or cloud keys.
 - Red-team suite (prompt injection, extraction, jailbreak, tool-abuse cases)
   is a **blocking CI gate** for agent changes and a recurring production
   probe — see [evaluation.md](evaluation.md).
-- Vulnerability handling per [SECURITY.md](../../SECURITY.md) — agentic
+- Vulnerability handling per [SECURITY.md](https://github.com/acp-project/agentic-control-plane/blob/main/SECURITY.md) — agentic
   bypasses (policy evasion, injection-based privilege escalation, audit
   evasion) are explicitly in scope as vulnerabilities.
 

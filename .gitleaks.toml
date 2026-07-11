@@ -1,0 +1,16 @@
+# Secret-scanning config. The allowlist below covers material that is
+# synthetic BY POLICY (testing.md: no production data in fixtures — the
+# acme-corp corpus, protocol contract fixtures, and dev-stack credentials
+# are invented). Anything outside these paths that looks like a secret is
+# a real finding.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic test fixtures and documented dev-stack defaults"
+paths = [
+  '''packages/protocol/fixtures/.*''',
+  '''deploy/dev/token-clients\.json''',
+  '''fixtures/acme-corp/.*''',
+  '''.*/tests?/.*''',
+]
