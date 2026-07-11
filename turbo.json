@@ -1,0 +1,20 @@
+{
+  "$schema": "https://turborepo.com/schema.json",
+  "tasks": {
+    "gen": {
+      "inputs": ["schemas/**", "scripts/**"],
+      "outputs": ["src/generated/**", "../../python/acp-protocol/src/acp_protocol/generated/**"]
+    },
+    "build": {
+      "dependsOn": ["^build", "gen"],
+      "outputs": ["dist/**"]
+    },
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "lint": {},
+    "test": {
+      "dependsOn": ["^build"]
+    }
+  }
+}

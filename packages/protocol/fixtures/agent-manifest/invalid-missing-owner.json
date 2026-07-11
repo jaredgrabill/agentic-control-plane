@@ -1,0 +1,15 @@
+{
+  "id": "orphan-agent",
+  "name": "Orphan Agent",
+  "description": "Invalid: no owner — the platform refuses ownerless agents.",
+  "capabilities": [
+    {
+      "name": "echo.reply",
+      "description": "Returns its input.",
+      "risk": "R0",
+      "input_schema": { "type": "object" },
+      "output_schema": { "type": "object" },
+      "examples": [{ "input": {} }, { "input": {} }, { "input": {} }]
+    }
+  ]
+}

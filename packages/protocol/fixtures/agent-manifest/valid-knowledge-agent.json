@@ -1,0 +1,59 @@
+{
+  "id": "knowledge-agent",
+  "name": "Knowledge & Policy Agent",
+  "owner": "team-platform",
+  "description": "Authoritative retrieval and interpretation of organizational knowledge with citations.",
+  "capabilities": [
+    {
+      "name": "knowledge.search",
+      "description": "Hybrid search over the governed corpus; returns chunks with citations.",
+      "risk": "R0",
+      "input_schema": {
+        "type": "object",
+        "required": ["query"],
+        "properties": {
+          "query": { "type": "string" },
+          "k": { "type": "integer", "minimum": 1, "maximum": 50 }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": ["results"],
+        "properties": { "results": { "type": "array" } }
+      },
+      "examples": [
+        { "input": { "query": "change freeze policy" }, "description": "policy lookup" },
+        { "input": { "query": "incident runbook for payments" }, "description": "runbook lookup" },
+        { "input": { "query": "TLS configuration standard", "k": 5 } }
+      ]
+    },
+    {
+      "name": "knowledge.answer_with_citations",
+      "description": "Synthesized answer grounded in retrieved chunks; abstains below the confidence floor.",
+      "risk": "R0",
+      "input_schema": {
+        "type": "object",
+        "required": ["question"],
+        "properties": { "question": { "type": "string" } }
+      },
+      "output_schema": {
+        "type": "object",
+        "required": ["text", "citations", "confidence"],
+        "properties": {
+          "text": { "type": "string" },
+          "citations": { "type": "array" },
+          "confidence": { "type": "number" }
+        }
+      },
+      "examples": [
+        { "input": { "question": "What does our policy say about change freezes?" } },
+        { "input": { "question": "Who must approve emergency changes?" } },
+        { "input": { "question": "What is the data retention period for audit logs?" } }
+      ]
+    }
+  ],
+  "tools": [{ "server": "knowledge-store", "scopes": ["knowledge:search:read"] }],
+  "models": { "allowed": ["default-tier"] },
+  "data_classification": "confidential",
+  "sla": { "p95_latency_s": 30, "quality_slo": 0.9 }
+}

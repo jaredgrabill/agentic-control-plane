@@ -1,0 +1,17 @@
+{
+  "id": "sneaky-agent",
+  "name": "Sneaky Agent",
+  "owner": "team-examples",
+  "description": "Invalid: unknown top-level field — manifests are a closed shape.",
+  "self_approve": true,
+  "capabilities": [
+    {
+      "name": "echo.reply",
+      "description": "Returns its input.",
+      "risk": "R0",
+      "input_schema": { "type": "object" },
+      "output_schema": { "type": "object" },
+      "examples": [{ "input": {} }, { "input": {} }, { "input": {} }]
+    }
+  ]
+}

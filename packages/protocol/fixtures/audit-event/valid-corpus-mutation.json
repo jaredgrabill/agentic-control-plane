@@ -1,0 +1,27 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51",
+  "occurred_at": "2026-07-10T08:30:00Z",
+  "tenant": "acme",
+  "event_type": "corpus.mutation",
+  "actor": {
+    "principal": "svc:knowledge-ingestion"
+  },
+  "action": {
+    "name": "corpus.chunk_indexed",
+    "inputs_digest": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
+  },
+  "reason": {
+    "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f52"
+  },
+  "artifacts": {
+    "lineage_ids": ["0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f42"],
+    "workflow_run_id": "ingest-change-management-run-7"
+  },
+  "details": {
+    "source_id": "policy-docs",
+    "doc_id": "policy/change-management",
+    "doc_version": "3.2.0",
+    "chunker_version": "structure-aware@1",
+    "embedding_model": "dev-hash-embed@1"
+  }
+}

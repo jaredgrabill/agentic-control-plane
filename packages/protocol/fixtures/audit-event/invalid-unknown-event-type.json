@@ -1,0 +1,8 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f54",
+  "occurred_at": "2026-07-10T09:00:00Z",
+  "tenant": "acme",
+  "event_type": "agent.did_something",
+  "actor": { "principal": "agent:mystery@0.0.1" },
+  "action": { "name": "unknown" }
+}

@@ -1,0 +1,11 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f55",
+  "occurred_at": "2026-07-10T09:00:00Z",
+  "tenant": "acme",
+  "event_type": "step.completed",
+  "actor": { "principal": "agent:knowledge-agent@0.1.0" },
+  "action": {
+    "name": "knowledge.search",
+    "inputs_digest": "md5:0123456789abcdef"
+  }
+}

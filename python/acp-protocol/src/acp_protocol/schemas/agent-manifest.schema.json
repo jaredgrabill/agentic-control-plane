@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp.dev/schemas/v1/agent-manifest.schema.json",
+  "title": "AgentManifest",
+  "description": "Capability manifest authored by an agent team and versioned in git. A superset of an A2A-compatible agent card; the Registry adds platform-managed fields at registration.",
+  "type": "object",
+  "required": ["id", "name", "owner", "description", "capabilities"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$",
+      "description": "Stable agent identifier (kebab-case)."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "owner": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Accountable human team (required — no ownerless agents)."
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/capability" }
+    },
+    "tools": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/tool_binding" },
+      "description": "MCP servers this agent may bind. Absent means no tool access."
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["allowed"],
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string" },
+          "description": "Model classes (e.g. default-tier), never hard-coded model IDs."
+        }
+      }
+    },
+    "data_classification": { "$ref": "#/$defs/classification" },
+    "sla": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "p95_latency_s": { "type": "number", "exclusiveMinimum": 0 },
+        "quality_slo": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "risk_class": {
+      "type": "string",
+      "enum": ["R0", "R1", "R2", "R3"],
+      "description": "Side-effect risk: R0 read, R1 draft, R2 write-gated, R3 write-auto."
+    },
+    "classification": {
+      "type": "string",
+      "enum": ["public", "internal", "confidential", "restricted"]
+    },
+    "capability": {
+      "type": "object",
+      "required": ["name", "description", "risk", "input_schema", "output_schema", "examples"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+          "description": "Namespaced narrow action, e.g. knowledge.search."
+        },
+        "description": { "type": "string", "minLength": 1 },
+        "risk": { "$ref": "#/$defs/risk_class" },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema 2020-12 for the capability input."
+        },
+        "output_schema": {
+          "type": "object",
+          "description": "JSON Schema 2020-12 for the capability output."
+        },
+        "examples": {
+          "type": "array",
+          "minItems": 3,
+          "items": {
+            "type": "object",
+            "required": ["input"],
+            "additionalProperties": false,
+            "properties": {
+              "input": { "type": "object" },
+              "output": { "type": "object" },
+              "description": { "type": "string" }
+            }
+          },
+          "description": "At least 3; used for semantic discovery and eval seeds."
+        },
+        "compensator": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+          "description": "Compensating capability for R2+ writes (e.g. change.submit ⇄ change.withdraw). R2/R3 capabilities MUST declare a compensator or irreversible:true — enforced at registration, where the rejection carries an operator-actionable message (conditional JSON Schema keywords do not survive both language bindings)."
+        },
+        "irreversible": {
+          "type": "boolean",
+          "description": "Declares an R2+ capability has no compensator; raises approval requirements."
+        },
+        "experimental": {
+          "type": "boolean",
+          "description": "Relaxed eval-baseline requirements; shadow-only routing."
+        },
+        "sla": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "p95_latency_s": { "type": "number", "exclusiveMinimum": 0 }
+          }
+        }
+      }
+    },
+    "tool_binding": {
+      "type": "object",
+      "required": ["server", "scopes"],
+      "additionalProperties": false,
+      "properties": {
+        "server": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "scopes": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9-]*(:[a-z][a-z0-9_-]*)+$" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,72 @@
+{
+  "description": "Shared cross-language contract fixtures. Both bindings (ajv in TypeScript, jsonschema in Python) must reach the verdict recorded here for the same bytes; valid documents must additionally parse into the generated typed models in both languages.",
+  "cases": [
+    {
+      "file": "agent-manifest/valid-knowledge-agent.json",
+      "schema": "agent-manifest",
+      "valid": true
+    },
+    { "file": "agent-manifest/valid-minimal.json", "schema": "agent-manifest", "valid": true },
+    {
+      "file": "agent-manifest/invalid-missing-owner.json",
+      "schema": "agent-manifest",
+      "valid": false
+    },
+    {
+      "file": "agent-manifest/invalid-broad-capability-name.json",
+      "schema": "agent-manifest",
+      "valid": false
+    },
+    {
+      "file": "agent-manifest/invalid-two-examples.json",
+      "schema": "agent-manifest",
+      "valid": false
+    },
+    {
+      "file": "agent-manifest/invalid-unknown-field.json",
+      "schema": "agent-manifest",
+      "valid": false
+    },
+    { "file": "task-contract/valid-task-request.json", "schema": "task-contract", "valid": true },
+    {
+      "file": "task-contract/valid-task-result-partial.json",
+      "schema": "task-contract",
+      "valid": true
+    },
+    {
+      "file": "task-contract/valid-task-result-abstained.json",
+      "schema": "task-contract",
+      "valid": true
+    },
+    { "file": "task-contract/valid-step-request.json", "schema": "task-contract", "valid": true },
+    {
+      "file": "task-contract/valid-step-result-error.json",
+      "schema": "task-contract",
+      "valid": true
+    },
+    {
+      "file": "task-contract/invalid-unknown-status.json",
+      "schema": "task-contract",
+      "valid": false
+    },
+    {
+      "file": "task-contract/invalid-missing-kind.json",
+      "schema": "task-contract",
+      "valid": false
+    },
+    {
+      "file": "task-contract/invalid-citation-missing-lineage.json",
+      "schema": "task-contract",
+      "valid": false
+    },
+    { "file": "audit-event/valid-policy-decision.json", "schema": "audit-event", "valid": true },
+    { "file": "audit-event/valid-corpus-mutation.json", "schema": "audit-event", "valid": true },
+    { "file": "audit-event/valid-retrieval-served.json", "schema": "audit-event", "valid": true },
+    {
+      "file": "audit-event/invalid-unknown-event-type.json",
+      "schema": "audit-event",
+      "valid": false
+    },
+    { "file": "audit-event/invalid-bad-digest.json", "schema": "audit-event", "valid": false }
+  ]
+}
