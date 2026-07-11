@@ -126,8 +126,8 @@ if (entry !== undefined && import.meta.url === pathToFileURL(entry).href) {
 
 export function register(agent: Agent): void {
   agent.capability('${capability}', (_ctx, input) => {
-    const audience = typeof input.audience === 'string' ? input.audience : '';
-    if (audience === '') {
+    const audience = input.audience as string;
+    if (!audience) {
       // Abstention beats a confident guess; needs_input beats silence.
       return Promise.reject(new CapabilityError(ErrorClass.NeedsInput, 'audience is required'));
     }

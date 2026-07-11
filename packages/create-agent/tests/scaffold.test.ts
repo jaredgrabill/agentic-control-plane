@@ -98,8 +98,8 @@ describe('renderTemplate', () => {
     // (the Python twin execs the rendered handler itself).
     const agent = new Agent({ manifest: agentManifest.parse(YAML.parse(files['manifest.yaml']!)) });
     agent.capability('incident_summary.hello', (_ctx, input) => {
-      const audience = typeof input.audience === 'string' ? input.audience : '';
-      if (audience === '') {
+      const audience = input.audience as string;
+      if (!audience) {
         return Promise.reject(new CapabilityError(ErrorClass.NeedsInput, 'audience is required'));
       }
       const builder = agent.answerBuilder();
