@@ -21,6 +21,7 @@ class GoldenCase:
     must_cite_docs: list[str] = field(default_factory=list)
     expect_abstain: bool = False
     min_confidence: float | None = None
+    expect_error_class: str | None = None
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "GoldenCase":
@@ -33,6 +34,7 @@ class GoldenCase:
             must_cite_docs=expect.get("must_cite_docs", []),
             expect_abstain=expect.get("abstain", False),
             min_confidence=expect.get("min_confidence"),
+            expect_error_class=expect.get("error_class"),
         )
 
 
@@ -126,7 +128,15 @@ class EvalHarness:
         cited_docs = [c["doc_id"] for c in citations]
         abstained = bool(output.get("abstained", False))
 
-        if step["status"] != "completed":
+        if case.expect_error_class is not None:
+            # A typed failure IS the expected behavior; any other outcome fails.
+            actual = step.get("error", {}).get("class") if step["status"] != "completed" else None
+            if actual != case.expect_error_class:
+                failures.append(
+                    f"expected a {case.expect_error_class} failure, "
+                    f"got {actual or 'a completed step'}"
+                )
+        elif step["status"] != "completed":
             failures.append(f"step failed: {step.get('error', {}).get('message', 'unknown')}")
         for needle in case.must_contain:
             if needle.lower() not in text.lower():
