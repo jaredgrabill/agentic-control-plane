@@ -55,7 +55,7 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
   const app = createHttpServer({ serviceName: 'gateway', logger: deps.logger });
 
   app.post('/v1/tasks', async (request, reply) => {
-    const claims = await authenticate(deps, request);
+    const { claims, token } = await authenticateReturningToken(deps, request);
     requireScope(claims, TASK_SUBMIT_SCOPE);
 
     const halt = deps.killSwitch.fleetHalt();
@@ -87,6 +87,9 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
         ...(body.context !== undefined ? { context: body.context } : {}),
       },
       ...(body.budget !== undefined ? { budget: body.budget } : {}),
+      // Forwarded for RFC 8693 exchange at each delegation hop; its ≤15min
+      // TTL bounds how long it lives in workflow state.
+      subject_token: token,
       submitted_at: (deps.now?.() ?? new Date()).toISOString(),
     });
 
@@ -142,11 +145,20 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
 }
 
 async function authenticate(deps: GatewayDeps, request: FastifyRequest): Promise<PlatformClaims> {
+  const claims = await authenticateReturningToken(deps, request);
+  return claims.claims;
+}
+
+async function authenticateReturningToken(
+  deps: GatewayDeps,
+  request: FastifyRequest,
+): Promise<{ claims: PlatformClaims; token: string }> {
   const header = request.headers.authorization;
   if (header?.startsWith('Bearer ') !== true) {
     throw new AuthError('missing Bearer token');
   }
-  return deps.verifier.verify(header.slice('Bearer '.length), GATEWAY_AUDIENCE);
+  const token = header.slice('Bearer '.length);
+  return { claims: await deps.verifier.verify(token, GATEWAY_AUDIENCE), token };
 }
 
 function requireScope(claims: PlatformClaims, scope: string): void {

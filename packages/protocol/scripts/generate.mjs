@@ -14,7 +14,15 @@ import { compileFromFile } from 'json-schema-to-typescript';
 import { execFileSync } from 'node:child_process';
 import console from 'node:console';
 import process from 'node:process';
-import { mkdirSync, readFileSync, readdirSync, writeFileSync, cpSync, rmSync } from 'node:fs';
+import {
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  writeFileSync,
+  cpSync,
+  rmSync,
+} from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -83,8 +91,11 @@ indexLines.push(`export * from './schemas.js';`, `export * from './subjects-data
 writeFileSync(join(tsOutDir, 'index.ts'), `${BANNER}\n${indexLines.join('\n')}\n`);
 
 // --- Python (pydantic v2) models ---
-rmSync(pyOutDir, { recursive: true, force: true });
-mkdirSync(pyOutDir, { recursive: true });
+// Generate into a staging dir and swap at the end: a failed run (uv
+// missing, codegen error) must never leave the committed tree wiped.
+const pyStagingDir = `${pyOutDir}.staging`;
+rmSync(pyStagingDir, { recursive: true, force: true });
+mkdirSync(pyStagingDir, { recursive: true });
 for (const file of schemaFiles) {
   execFileSync(
     'uv',
@@ -98,7 +109,7 @@ for (const file of schemaFiles) {
       '--input-file-type',
       'jsonschema',
       '--output',
-      join(pyOutDir, `${pyModuleName(file)}.py`),
+      join(pyStagingDir, `${pyModuleName(file)}.py`),
       '--output-model-type',
       'pydantic_v2.BaseModel',
       '--target-python-version',
@@ -119,7 +130,9 @@ const pyInit = [
   ...schemaFiles.map((f) => `from . import ${pyModuleName(f)} as ${pyModuleName(f)}`),
   '',
 ].join('\n');
-writeFileSync(join(pyOutDir, '__init__.py'), pyInit);
+writeFileSync(join(pyStagingDir, '__init__.py'), pyInit);
+rmSync(pyOutDir, { recursive: true, force: true });
+renameSync(pyStagingDir, pyOutDir);
 
 // --- Schema documents as Python package data (runtime validation + subjects) ---
 const pySchemasDir = join(pyPkgDir, 'schemas');

@@ -32,3 +32,6 @@ site/
 
 # Claude Code session-local settings
 .claude/settings.local.json
+
+# codegen staging (atomic swap)
+generated.staging/
