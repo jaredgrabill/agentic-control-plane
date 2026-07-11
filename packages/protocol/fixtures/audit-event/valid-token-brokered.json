@@ -1,0 +1,27 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f63",
+  "occurred_at": "2026-07-11T09:00:05Z",
+  "tenant": "acme",
+  "event_type": "token.brokered",
+  "actor": {
+    "principal": "svc:orchestrator",
+    "delegation_chain": [
+      { "sub": "user:jane.doe" },
+      { "sub": "svc:orchestrator" },
+      { "sub": "agent:cloud-agent@0.1.0" }
+    ]
+  },
+  "action": { "name": "token.brokered" },
+  "reason": { "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40" },
+  "details": {
+    "audience": "acp:agent:cloud-agent",
+    "scope": "cloud:inventory:read cloud:cost:read",
+    "subject": "user:jane.doe",
+    "actor": "agent:cloud-agent@0.1.0",
+    "grounds": {
+      "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+      "subject_jti": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f41",
+      "verified_at": "2026-07-11T09:00:00Z"
+    }
+  }
+}

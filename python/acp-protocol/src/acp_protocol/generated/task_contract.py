@@ -126,7 +126,7 @@ class TaskRequest(BaseModel):
     budget: Budget | None = None
     subject_token: str | None = Field(
         None,
-        description="The caller's platform JWT, forwarded so the orchestrator can perform RFC 8693 exchange per delegation (scopes intersect, act chain grows). TTL ≤ 15 min bounds its life in workflow state; v0 supports single-step tasks that complete within it — durable re-delegation is a Phase 2 concern.",
+        description="The caller's platform JWT, consumed exactly once at intake by the orchestrator's snapshot activity (ADR-0007): verified claims are recorded into durable workflow state and per-step tokens are minted via the broker grant. Its ≤ 15-min TTL no longer bounds task duration.",
     )
     submitted_at: Timestamp | None = None
 
@@ -147,6 +147,11 @@ class StepRequest(BaseModel):
     agent_version: str | None = None
     capability: CapabilityName
     input: dict[str, Any]
+    delegation_depth: int | None = Field(
+        None,
+        description="1 = delegated directly from the user task; +1 per re-delegation. Platform cap is 3 (agent-patterns.md); exceeding is a planning failure, never a retry.",
+        ge=1,
+    )
     delegated_token: str | None = Field(
         None,
         description="RFC 8693-exchanged JWT: audience = this agent, scopes = intersection, act chain included.",
@@ -189,6 +194,25 @@ class Citation(BaseModel):
     snippet: str | None = None
 
 
+class PlanStep(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    step_id: Uuid
+    capability: CapabilityName
+    agent_id: str | None = Field(
+        None,
+        description="Optional pin; absent means registry discovery at dispatch time (kill-switch keeps stopping traffic per step).",
+        pattern="^[a-z][a-z0-9-]{1,62}[a-z0-9]$",
+    )
+    input: dict[str, Any]
+    depends_on: list[Uuid] | None = Field(
+        None,
+        description="step_ids that must complete successfully first. A failed dependency skips this step (recorded as a gap), never retries the plan.",
+    )
+    rationale: str | None = None
+
+
 class Answer(BaseModel):
     """
     Free-text answers ride inside a schema: text + citations + confidence.
@@ -204,6 +228,27 @@ class Answer(BaseModel):
         None,
         description="True when the agent declined to answer below its confidence floor.",
     )
+
+
+class Plan(BaseModel):
+    """
+    Typed plan artifact materialized before execution and recorded to the audit stream (task.planned) — auditors see intent, not just outcomes. v1 plans are flat: no nesting, no mid-course replanning.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    plan_id: Uuid
+    task_id: Uuid
+    tenant: TenantId
+    planner: str = Field(
+        ...,
+        description="Planner implementation and version, e.g. rule-planner@1.",
+        min_length=1,
+    )
+    steps: list[PlanStep] = Field(..., max_length=20, min_length=1)
+    rationale: str | None = None
+    created_at: Timestamp
 
 
 class TaskResult(BaseModel):
@@ -223,6 +268,7 @@ class TaskResult(BaseModel):
         None, description="For partial status: which sub-results are missing and why."
     )
     error: CapabilityError | None = None
+    plan: Plan | None = None
     workflow_run_id: str | None = None
     completed_at: Timestamp | None = None
 

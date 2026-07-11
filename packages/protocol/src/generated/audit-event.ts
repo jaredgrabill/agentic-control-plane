@@ -8,12 +8,15 @@ export type Uuid = string;
  */
 export type EventType =
   | 'task.submitted'
+  | 'task.planned'
   | 'task.completed'
   | 'step.dispatched'
   | 'step.completed'
+  | 'step.skipped'
   | 'policy.decision'
   | 'token.issued'
   | 'token.exchanged'
+  | 'token.brokered'
   | 'agent.registered'
   | 'agent.lifecycle_changed'
   | 'agent.baseline_recorded'

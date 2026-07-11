@@ -1,0 +1,12 @@
+{
+  "kind": "step_request",
+  "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51",
+  "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+  "tenant": "acme",
+  "agent_id": "cloud-agent",
+  "agent_version": "0.1.0",
+  "capability": "cloud.cost_analysis",
+  "input": {},
+  "delegation_depth": 0,
+  "delegated_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRldi0xIn0.e30.c2lnbmF0dXJl"
+}
