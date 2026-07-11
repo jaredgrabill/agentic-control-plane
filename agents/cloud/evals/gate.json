@@ -1,0 +1,10 @@
+{
+  "schema": "acp-eval-gate/v1",
+  "description": "Zero tolerance on every gated metric: the cloud agent's golden suite is fully deterministic (fixture tool servers over in-memory MCP, templated extractive answers, no model), so any metric drop is a real behavioral regression, not eval noise.",
+  "tolerances": {
+    "pass_rate": 0,
+    "citation_precision": 0,
+    "abstention_accuracy": 0
+  },
+  "default_tolerance": 0
+}

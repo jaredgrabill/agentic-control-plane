@@ -1,0 +1,86 @@
+id: cloud-agent
+name: Cloud Estate Agent
+owner: team-platform
+description: >
+  Read-only visibility into the acme cloud estate: inventory search over the
+  governed snapshot and week-over-week cost analysis against the billing
+  export, with citations carrying document version and lineage. Answers are
+  deterministic and extractive in v0 — no model calls.
+capabilities:
+  - name: cloud.inventory_query
+    description: >
+      Search the cloud inventory snapshot by service, environment, resource
+      type, or region. At least one filter is required; results sort by
+      monthly cost.
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: false
+      anyOf:
+        - required: [service]
+        - required: [env]
+        - required: [resource_type]
+        - required: [region]
+      properties:
+        service: { type: string, minLength: 1 }
+        env: { type: string, enum: [prod, staging, dev] }
+        resource_type: { type: string, minLength: 1 }
+        region: { type: string, minLength: 1 }
+        limit: { type: integer, minimum: 1, maximum: 50 }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: { service: payments-api, env: prod }
+      - input: { resource_type: rds.instance }
+      - input: { env: prod, region: us-east-1, limit: 10 }
+  - name: cloud.cost_analysis
+    description: >
+      Week-over-week spend deltas from the governed cost report. Without a
+      service it analyses total spend and attributes any spike over the
+      threshold to the inventory changes behind it.
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        service: { type: string, minLength: 1 }
+        period:
+          type: object
+          required: [start, end]
+          additionalProperties: false
+          properties:
+            start: { type: string, format: date }
+            end: { type: string, format: date }
+        threshold_pct: { type: number, minimum: 1, maximum: 100 }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: {}
+      - input: { service: checkout-web }
+      - input:
+          service: payments-api
+          period: { start: '2026-06-08', end: '2026-07-05' }
+          threshold_pct: 25
+tools:
+  - server: cloud-estate
+    scopes: [cloud:inventory:read, cloud:cost:read]
+models:
+  allowed: [default-tier]
+data_classification: internal
+sla:
+  p95_latency_s: 30
+  quality_slo: 0.9

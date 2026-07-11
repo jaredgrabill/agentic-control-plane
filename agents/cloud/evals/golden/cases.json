@@ -1,0 +1,74 @@
+{
+  "description": "Golden set for the Cloud Estate agent. Deterministic, extractive handlers over the acme-corp cloud fixtures — every needle below is dry-run against the handler templates. The cost-spike case is half of the Phase 2 exit scenario.",
+  "cases": [
+    {
+      "name": "prod payments inventory names the loadtest fleet",
+      "capability": "cloud.inventory_query",
+      "input": { "service": "payments-api", "env": "prod" },
+      "expect": {
+        "must_contain": ["m5.4xlarge", "d-2026-07-01-042"],
+        "must_cite_docs": ["cloud/inventory-snapshot"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "resource-type filter finds the ledger databases",
+      "capability": "cloud.inventory_query",
+      "input": { "resource_type": "rds.instance" },
+      "expect": {
+        "must_contain": ["ledger-db"],
+        "must_cite_docs": ["cloud/inventory-snapshot"]
+      }
+    },
+    {
+      "name": "an empty result is a confident factual answer, not an abstention",
+      "capability": "cloud.inventory_query",
+      "input": { "service": "quantum-teleporter" },
+      "expect": {
+        "must_contain": ["no resources match"],
+        "must_cite_docs": ["cloud/inventory-snapshot"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "no filters is a typed needs_input failure",
+      "capability": "cloud.inventory_query",
+      "input": {},
+      "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "cost spike attributed to the loadtest deploy (Phase 2 exit half)",
+      "capability": "cloud.cost_analysis",
+      "input": {},
+      "expect": {
+        "must_contain": ["payments-api", "30.0", "d-2026-07-01-042"],
+        "must_cite_docs": ["cloud/cost-report", "cloud/inventory-snapshot"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "quiet service reports no anomaly",
+      "capability": "cloud.cost_analysis",
+      "input": { "service": "checkout-web" },
+      "expect": {
+        "must_contain": ["below the 20% threshold"],
+        "must_cite_docs": ["cloud/cost-report"]
+      }
+    },
+    {
+      "name": "incomplete billing window is flagged and confidence drops",
+      "capability": "cloud.cost_analysis",
+      "input": { "period": { "start": "2026-06-22", "end": "2026-07-08" } },
+      "expect": {
+        "must_contain": ["incomplete"],
+        "must_cite_docs": ["cloud/cost-report", "cloud/inventory-snapshot"]
+      }
+    },
+    {
+      "name": "inverted period is a typed needs_input failure",
+      "capability": "cloud.cost_analysis",
+      "input": { "period": { "start": "2026-07-05", "end": "2026-06-01" } },
+      "expect": { "error_class": "needs_input" }
+    }
+  ]
+}
