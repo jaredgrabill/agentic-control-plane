@@ -1,0 +1,22 @@
+{
+  "name": "@acp/evaluation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Evaluation Service v0: baseline-relative eval gate CLI — runs agent golden suites, gates reports against committed baselines, records baselines on the registry card",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@acp/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "vitest": "^3.2.4"
+  }
+}

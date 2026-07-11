@@ -98,6 +98,36 @@ jobs:
       - name: compare reports
         run: node tests/parity/dist/main.js compare "$RUNNER_TEMP/report-ts.json" "$RUNNER_TEMP/report-py.json"
 
+  evals:
+    name: eval gate (golden suites vs committed baselines)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with:
+          enable-cache: true
+      - run: pnpm install --frozen-lockfile
+      - run: uv sync --locked
+        working-directory: python
+      - run: pnpm --filter @acp/evaluation... build
+      # Positive control: every roster agent's suite runs hermetically and
+      # must land within tolerance of its committed baseline.
+      - name: golden suites within tolerance of baselines
+        run: node apps/evaluation/dist/main.js run --manifest apps/evaluation/agents.json
+      # Regression proof: the gate itself is gated. A report regressed below
+      # baseline − tolerance MUST fail, or this job fails.
+      - name: the gate rejects a regressed report
+        run: |
+          if node apps/evaluation/dist/main.js gate --report apps/evaluation/fixtures/regressed/report.json --baseline apps/evaluation/fixtures/regressed/baseline.json; then
+            echo '::error::the eval gate accepted a report regressed below baseline - tolerance'
+            exit 1
+          fi
+
   commitlint:
     runs-on: ubuntu-latest
     steps:

@@ -99,3 +99,30 @@ scenarios in [domains.md](../domains.md) are standing E2E evals with their
 own golden sets and gates. A change to *any* participating agent runs the
 composition suites it appears in — catching the failure mode where every
 agent passes its own evals and the composed answer is still wrong.
+
+## Status: v0 implementation
+
+What exists today versus the target above:
+
+- **`apps/evaluation` (@acp/evaluation)** — the offline gate as a CLI, not
+  yet a long-running service: `run` executes every agent on the
+  `agents.json` roster (each agent's SDK harness emits an
+  `acp-eval-report/v1` document), `gate` applies baseline-relative
+  tolerance math, `baseline` distills an accepted report into
+  `<agent>/evals/baseline.json`, and `record` writes the baseline onto the
+  registry's agent card (`PUT /v1/agents/:id/baseline`, audited as
+  `agent.baseline_recorded`).
+- **Protocol**: `eval-report.schema.json` pins the report and baseline
+  shapes; the agent card's `eval_baseline` field now references them.
+  Reports carry a `suite.digest` (sha256 over the golden files, identical
+  across both SDKs), so the gate refuses to compare metrics across
+  different suites — a golden-set change forces a re-baseline in the same
+  PR.
+- **CI**: the `evals` job runs the roster on every PR (deterministic,
+  hermetic suites only) plus an inverted step proving the gate rejects a
+  committed regressed-report fixture — the gate itself is gated.
+- **Gate 2 only.** Deterministic metrics (pass rate, citation precision,
+  abstention accuracy) from the SDK EvalHarness; the knowledge agent gates
+  at zero tolerance because its suite is fully deterministic. Judge
+  rubrics, calibration, shadow/canary (gates 4–5), online sampling, drift
+  detection, and replay arrive with the Deployment Controller (Phase 3).
