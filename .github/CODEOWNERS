@@ -1,0 +1,7 @@
+# Default owners for everything in the repo.
+# Later: split ownership by area (docs/architecture, docs/standards, packages/*).
+* @ionshiftlabs/maintainers
+
+# Architecture decisions require architecture owners.
+/docs/adr/ @ionshiftlabs/architecture
+/docs/architecture/ @ionshiftlabs/architecture
