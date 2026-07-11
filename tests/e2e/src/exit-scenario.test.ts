@@ -9,12 +9,12 @@
  * Prerequisites: `make dev` (substrate), `pnpm build`, `uv sync` (in
  * python/). The suite boots the platform itself via scripts/run-platform.mjs.
  */
-import { execFile, spawn, type ChildProcess } from 'node:child_process';
+import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import process from 'node:process';
 import { promisify } from 'node:util';
-import type { AuditEvent, TaskResult } from '@acp/protocol';
+import type { AgentCard, AuditEvent, TaskResult } from '@acp/protocol';
 import { parse as parseYaml } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -149,6 +149,55 @@ describe('phase 1 exit scenario', () => {
       body: JSON.stringify({ state: 'active', reason: 'phase 1 walking skeleton promotion' }),
     });
     expect(activate.status, await activate.clone().text()).toBe(200);
+  });
+
+  it('records the eval baseline on the agent card (Evaluation Service v0)', async () => {
+    // The same CLI CI uses; svc-ci's existing registry:write grant suffices.
+    execFileSync(
+      'node',
+      [
+        join(repoRoot, 'apps', 'evaluation', 'dist', 'main.js'),
+        'record',
+        '--baseline',
+        join(repoRoot, 'python', 'agents', 'knowledge', 'evals', 'baseline.json'),
+        '--registry',
+        REGISTRY_URL,
+        '--token-url',
+        TOKEN_URL,
+        '--client-id',
+        'svc-ci',
+        '--client-secret',
+        'ci-dev-secret',
+      ],
+      { cwd: repoRoot },
+    );
+
+    const readToken = await ciToken('acp:registry', 'registry:read');
+    const res = await fetch(`${REGISTRY_URL}/v1/agents/knowledge-agent`, {
+      headers: { authorization: `Bearer ${readToken}` },
+    });
+    expect(res.status).toBe(200);
+    const card = (await res.json()) as AgentCard;
+    // The previous block activated the agent; recording a baseline must not
+    // touch lifecycle state.
+    expect(card.lifecycle_state).toBe('active');
+    expect(card.eval_baseline?.schema).toBe('acp-eval-baseline/v1');
+    expect(card.eval_baseline?.agent_version).toBe('0.1.0');
+    expect(card.eval_baseline?.metrics.pass_rate).toBe(1);
+    expect(card.eval_baseline?.suite.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+
+    // Registry events land on the platform tenant; the audit consumer is
+    // asynchronous — give the stream a moment.
+    let recorded: AuditEvent | undefined;
+    for (let i = 0; i < 20 && recorded === undefined; i++) {
+      recorded = (await auditEvents(undefined, 'platform')).find(
+        (e) => e.event_type === 'agent.baseline_recorded',
+      );
+      if (recorded === undefined) await new Promise((r) => setTimeout(r, 1000));
+    }
+    expect(recorded, 'no agent.baseline_recorded audit event').toBeDefined();
+    expect(recorded!.artifacts?.agent_id).toBe('knowledge-agent');
+    expect((recorded!.details as { suite_digest?: string }).suite_digest).toMatch(/^sha256:/);
   });
 
   it('ingests the acme-corp corpus with lineage ledger blocks', async () => {
