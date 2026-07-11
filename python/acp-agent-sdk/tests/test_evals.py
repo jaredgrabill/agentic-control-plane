@@ -177,6 +177,12 @@ class TestSuiteDigest:
         (tmp_path / "a.json").write_text("B", encoding="utf-8")
         assert suite_digest(tmp_path) != digest
 
+    def test_raises_on_a_nonexistent_directory(self, tmp_path: Path) -> None:
+        # A mistyped suite_dir must fail loudly (as the TypeScript twin does),
+        # never hash to the plausible-looking empty-input digest.
+        with pytest.raises(FileNotFoundError, match="no-such-suite"):
+            suite_digest(tmp_path / "no-such-suite")
+
 
 class TestReportPayload:
     PARITY_GOLDEN = Path(__file__).resolve().parents[3] / "fixtures" / "parity" / "golden"

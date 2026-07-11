@@ -50,8 +50,14 @@ def suite_digest(directory: str | Path) -> str:
     LF), 0x00; return ``"sha256:" + hexdigest``. CRLF normalization keeps
     the digest stable across checkout line-ending policies (Windows).
     """
+    suite_dir = Path(directory)
+    if not suite_dir.is_dir():
+        # Path.glob on a nonexistent directory yields nothing, which would
+        # produce the (plausible-looking) empty-input digest for a mistyped
+        # suite_dir. The TypeScript twin throws ENOENT here; match it.
+        raise FileNotFoundError(f"golden suite directory not found: {suite_dir}")
     h = hashlib.sha256()
-    for path in sorted(Path(directory).glob("*.json"), key=lambda p: p.name):
+    for path in sorted(suite_dir.glob("*.json"), key=lambda p: p.name):
         # Bytes, not text mode: universal newlines would also fold lone \r,
         # which the TypeScript twin does not do.
         text = path.read_bytes().decode("utf-8").replace("\r\n", "\n")
