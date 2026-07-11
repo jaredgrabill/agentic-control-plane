@@ -23,6 +23,14 @@
     "scopes": ["registry:read", "policy:decide"]
   },
   {
+    "client_id": "svc-tool-gateway",
+    "client_secret": "tool-gateway-dev-secret",
+    "principal": "svc:tool-gateway",
+    "tenant": "platform",
+    "roles": ["platform"],
+    "scopes": ["policy:decide"]
+  },
+  {
     "client_id": "svc-knowledge",
     "client_secret": "knowledge-dev-secret",
     "principal": "svc:knowledge",
