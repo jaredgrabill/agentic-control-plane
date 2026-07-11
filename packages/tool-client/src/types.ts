@@ -50,11 +50,7 @@ export interface ToolClient {
 
 /** Typed wire error codes — the closed vocabulary the client maps onto CapabilityError. */
 export type ToolErrorCode =
-  | 'rate_limited'
-  | 'unavailable'
-  | 'invalid_input'
-  | 'not_found'
-  | 'upstream_auth';
+  'rate_limited' | 'unavailable' | 'invalid_input' | 'not_found' | 'upstream_auth';
 
 /**
  * The wire envelope every ACP tool result rides in (inside MCP

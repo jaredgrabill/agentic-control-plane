@@ -70,7 +70,11 @@ describe('JwtVerifier.verifyWithAudience', () => {
   it('accepts any audience the predicate accepts', async () => {
     const { token, jwks } = await makeToken(GOOD_CLAIMS); // aud acp:test
     const verifier = new JwtVerifier({ jwks }, ISSUER);
-    const claims = await verifier.verifyWithAudience(token, (aud) => aud === 'acp:test', 'acp:test');
+    const claims = await verifier.verifyWithAudience(
+      token,
+      (aud) => aud === 'acp:test',
+      'acp:test',
+    );
     expect(claims.sub).toBe('user:jane.doe');
     await expect(
       verifier.verifyWithAudience(token, acceptTools, 'acp:tools or acp:agent:{id}'),
