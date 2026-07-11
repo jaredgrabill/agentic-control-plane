@@ -72,6 +72,32 @@ jobs:
             exit 1
           }
 
+  parity:
+    name: sdk parity (typescript vs python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+        with:
+          enable-cache: true
+      - run: pnpm install --frozen-lockfile
+      - run: uv sync --locked
+        working-directory: python
+      - run: pnpm --filter @acp/parity-harness... build
+      - name: typescript harness report
+        run: node tests/parity/dist/main.js run --fixtures fixtures/parity --out "$RUNNER_TEMP/report-ts.json"
+      - name: python harness report
+        run: uv run python parity/runner.py --fixtures ../fixtures/parity --out "$RUNNER_TEMP/report-py.json"
+        working-directory: python
+      # Same goldens, same verdicts: the two SDKs must agree case by case.
+      - name: compare reports
+        run: node tests/parity/dist/main.js compare "$RUNNER_TEMP/report-ts.json" "$RUNNER_TEMP/report-py.json"
+
   commitlint:
     runs-on: ubuntu-latest
     steps:

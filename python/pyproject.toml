@@ -44,9 +44,10 @@ select = [
 python_version = "3.12"
 strict = true
 warn_unreachable = true
-# src-layout: module names resolve from each package's src/ base.
+# src-layout: module names resolve from each package's src/ base. parity/
+# holds plain scripts (run with sys.path[0] = parity/), so it is its own base.
 explicit_package_bases = true
-mypy_path = ["acp-protocol/src", "acp-agent-sdk/src", "acp-create-agent/src"]
+mypy_path = ["acp-protocol/src", "acp-agent-sdk/src", "acp-create-agent/src", "parity"]
 # Strict on src/ per coding-standards; each package's tests import as a
 # same-named `tests` module, which mypy cannot disambiguate in one run.
 files = [
@@ -54,6 +55,7 @@ files = [
     "acp-agent-sdk/src",
     "acp-create-agent/src",
     "acp-protocol/tests",
+    "parity",
 ]
 # Generated pydantic models are checked, but line-length/style oddities in
 # codegen output must not fail the human-code gate.

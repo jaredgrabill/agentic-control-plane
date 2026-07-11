@@ -1,0 +1,49 @@
+id: parity-agent
+name: Parity Agent
+owner: team-platform
+description: >
+  Cross-SDK behavioral parity fixture: one manifest, one golden suite, two
+  language runtimes. The TypeScript and Python harness reports over this
+  agent must agree verdict-for-verdict — see HANDLERS.md for the normative
+  handler behavior both implementations follow.
+capabilities:
+  - name: parity.answer
+    description: Deterministic canned answers with citations; abstains below the floor.
+    risk: R0
+    input_schema:
+      type: object
+      required: [question]
+      properties:
+        question:
+          type: string
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: { question: 'What is the change freeze policy?' }
+      - input: { question: 'this is unanswerable' }
+      - input: { question: '' }
+  - name: parity.bad_output
+    description: Always violates its own output schema, exercising the repair-retry path.
+    risk: R0
+    input_schema:
+      type: object
+    output_schema:
+      type: object
+      required: [text]
+      properties:
+        text: { type: string }
+    examples:
+      - input: {}
+      - input: {}
+      - input: {}
+models:
+  allowed: [default-tier]
+data_classification: internal
+sla:
+  p95_latency_s: 30
