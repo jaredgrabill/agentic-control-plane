@@ -201,6 +201,48 @@ describe('phase 2 tool agents scenario', () => {
     expect(usage!.llm_calls, 'tool agents are zero-LLM in v0').toBe(0);
   });
 
+  it('recorded both gateway tool calls with the full chain, allow decisions, and lineage', async () => {
+    // Item 5: the cost-spike path now traverses the Tool Gateway — one
+    // tool.called event per upstream call (cost_report, then the follow-up
+    // inventory_search), joined to the task by the forwarded x-acp-task-id.
+    let toolEvents: AuditEvent[] = [];
+    for (let i = 0; i < 20; i++) {
+      toolEvents = (await auditEvents(costTaskId)).filter((e) => e.event_type === 'tool.called');
+      if (toolEvents.length >= 2) break;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    expect(toolEvents.map((e) => e.action.name).sort()).toEqual([
+      'tool:cloud-estate:cost_report',
+      'tool:cloud-estate:inventory_search',
+    ]);
+
+    for (const event of toolEvents) {
+      const chain = event.actor.delegation_chain!.map((l) => l.sub);
+      expect(chain).toHaveLength(3);
+      expect(chain[0]).toBe('user:jane.doe');
+      expect(chain[1]).toBe('svc:orchestrator');
+      expect(chain[2]).toMatch(/^agent:cloud-agent@/);
+      expect(event.actor.principal).toMatch(/^agent:cloud-agent@/);
+      expect(event.reason?.policy?.decision).toBe('allow');
+      expect(event.action.inputs_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+      const details = event.details as { server?: string; outcome?: string };
+      expect(details.server).toBe('cloud-estate');
+      expect(details.outcome).toBe('ok');
+      expect(event.artifacts?.lineage_ids?.length).toBeGreaterThan(0);
+    }
+
+    const costEvent = toolEvents.find((e) => e.action.name === 'tool:cloud-estate:cost_report')!;
+    expect(costEvent.reason?.policy?.determining_policies).toContain(
+      'allow-tool-cloud-estate-cost',
+    );
+    const inventoryEvent = toolEvents.find(
+      (e) => e.action.name === 'tool:cloud-estate:inventory_search',
+    )!;
+    expect(inventoryEvent.reason?.policy?.determining_policies).toContain(
+      'allow-tool-cloud-estate-inventory',
+    );
+  });
+
   it('produced one trace across gateway → orchestrator → cloud-agent', async () => {
     let services = new Set<string>();
     for (let i = 0; i < 30; i++) {
