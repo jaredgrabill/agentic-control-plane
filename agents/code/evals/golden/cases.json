@@ -1,0 +1,74 @@
+{
+  "description": "Golden set for the Source Code agent. Deterministic, extractive handlers over the acme-corp code fixtures — every needle below is dry-run against the handler templates. The ci-health deploy linkage (d-2026-07-01-042) is the code half of the Phase 2 exit scenario.",
+  "cases": [
+    {
+      "name": "payments direct dependencies name the sdk and the shim",
+      "capability": "code.dependency_query",
+      "input": { "repo": "acme/payments-service" },
+      "expect": {
+        "must_contain": ["platform-sdk", "openssl-shim"],
+        "must_cite_docs": ["code/dependency-graph"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "dependents of payments are the checkout and partner edges",
+      "capability": "code.dependency_query",
+      "input": { "repo": "acme/payments-service", "direction": "dependents" },
+      "expect": {
+        "must_contain": ["checkout-web", "partner-gateway"],
+        "must_cite_docs": ["code/dependency-graph"]
+      }
+    },
+    {
+      "name": "transitive walk dedups the shared platform-sdk edge",
+      "capability": "code.dependency_query",
+      "input": { "repo": "acme/payments-service", "transitive": true },
+      "expect": {
+        "must_contain": ["ledger-core"],
+        "must_cite_docs": ["code/dependency-graph"]
+      }
+    },
+    {
+      "name": "an unknown repo is a typed needs_input failure",
+      "capability": "code.dependency_query",
+      "input": { "repo": "acme/does-not-exist" },
+      "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "a missing repo is a typed needs_input failure",
+      "capability": "code.dependency_query",
+      "input": {},
+      "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "ci health links the loadtest deploy (Phase 2 exit half)",
+      "capability": "code.ci_health",
+      "input": { "repo": "acme/payments-service" },
+      "expect": {
+        "must_contain": ["d-2026-07-01-042", "77.8"],
+        "must_cite_docs": ["code/ci-activity"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "a quiet repo is a confident factual answer, not an abstention",
+      "capability": "code.ci_health",
+      "input": { "repo": "acme/openssl-shim" },
+      "expect": {
+        "must_contain": ["no ci runs"],
+        "must_cite_docs": ["code/ci-activity"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "a narrow window is anchored on the snapshot as_of date",
+      "capability": "code.ci_health",
+      "input": { "repo": "acme/payments-service", "window_days": 5 },
+      "expect": {
+        "must_contain": ["since 2026-07-03"],
+        "must_cite_docs": ["code/ci-activity"]
+      }
+    }
+  ]
+}
