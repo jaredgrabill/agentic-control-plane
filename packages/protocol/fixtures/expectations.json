@@ -28,8 +28,14 @@
       "valid": false
     },
     { "file": "agent-card/valid-registered.json", "schema": "agent-card", "valid": true },
+    { "file": "agent-card/valid-with-baseline.json", "schema": "agent-card", "valid": true },
     { "file": "agent-card/invalid-unknown-state.json", "schema": "agent-card", "valid": false },
     { "file": "agent-card/invalid-unsigned.json", "schema": "agent-card", "valid": false },
+    {
+      "file": "agent-card/invalid-baseline-missing-suite.json",
+      "schema": "agent-card",
+      "valid": false
+    },
     { "file": "task-contract/valid-task-request.json", "schema": "task-contract", "valid": true },
     {
       "file": "task-contract/valid-task-result-partial.json",
@@ -70,6 +76,13 @@
       "schema": "audit-event",
       "valid": false
     },
-    { "file": "audit-event/invalid-bad-digest.json", "schema": "audit-event", "valid": false }
+    { "file": "audit-event/invalid-bad-digest.json", "schema": "audit-event", "valid": false },
+    { "file": "audit-event/valid-baseline-recorded.json", "schema": "audit-event", "valid": true },
+    { "file": "eval-report/valid-knowledge-run.json", "schema": "eval-report", "valid": true },
+    {
+      "file": "eval-report/invalid-metric-out-of-range.json",
+      "schema": "eval-report",
+      "valid": false
+    }
   ]
 }

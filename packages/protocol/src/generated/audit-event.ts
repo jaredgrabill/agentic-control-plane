@@ -16,6 +16,7 @@ export type EventType =
   | 'token.exchanged'
   | 'agent.registered'
   | 'agent.lifecycle_changed'
+  | 'agent.baseline_recorded'
   | 'corpus.mutation'
   | 'retrieval.served'
   | 'killswitch.activated'

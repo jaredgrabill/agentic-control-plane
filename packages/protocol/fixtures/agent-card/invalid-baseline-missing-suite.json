@@ -1,0 +1,40 @@
+{
+  "manifest": {
+    "id": "knowledge-agent",
+    "name": "Knowledge & Policy Agent",
+    "owner": "team-platform",
+    "description": "Authoritative retrieval and interpretation of organizational knowledge with citations.",
+    "capabilities": [
+      {
+        "name": "knowledge.search",
+        "description": "Hybrid search over the governed corpus.",
+        "risk": "R0",
+        "input_schema": { "type": "object" },
+        "output_schema": { "type": "object" },
+        "examples": [
+          { "input": { "query": "change freeze policy" } },
+          { "input": { "query": "incident runbook" } },
+          { "input": { "query": "TLS standard" } }
+        ]
+      }
+    ],
+    "models": { "allowed": ["default-tier"] }
+  },
+  "version": "0.1.0",
+  "lifecycle_state": "active",
+  "eval_baseline": {
+    "schema": "acp-eval-baseline/v1",
+    "agent_id": "knowledge-agent",
+    "agent_version": "0.1.0",
+    "metrics": {
+      "pass_rate": 1.0,
+      "citation_precision": 0.9583,
+      "abstention_accuracy": 1.0
+    },
+    "harness": "acp-agent-sdk-py@0.1.0",
+    "recorded_at": "2026-07-11T08:30:00Z"
+  },
+  "registered_at": "2026-07-10T08:00:00Z",
+  "updated_at": "2026-07-11T08:30:00Z",
+  "card_signature": "eyJhbGciOiJFZERTQSIsImtpZCI6InJlZy0xIn0.eyJmYWtlIjoicGF5bG9hZCJ9.c2ln"
+}

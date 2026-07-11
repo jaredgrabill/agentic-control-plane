@@ -1,0 +1,33 @@
+{
+  "schema": "acp-eval-report/v1",
+  "sdk": "acp-agent-sdk-py@0.1.0",
+  "agent_id": "knowledge-agent",
+  "agent_version": "0.1.0",
+  "suite": {
+    "digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "case_count": 7,
+    "path": "python/agents/knowledge/evals/golden"
+  },
+  "metrics": {
+    "pass_rate": 1.0,
+    "citation_precision": 0.9583,
+    "abstention_accuracy": 1.0
+  },
+  "cases": [
+    {
+      "name": "change freeze policy (the Phase 1 exit question)",
+      "passed": true,
+      "abstained": false,
+      "cited_docs": ["policy/change-management"],
+      "failures": []
+    },
+    {
+      "name": "abstains on questions the corpus cannot ground",
+      "passed": true,
+      "abstained": true,
+      "cited_docs": [],
+      "failures": []
+    }
+  ],
+  "generated_at": "2026-07-11T08:30:00Z"
+}

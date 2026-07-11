@@ -22,7 +22,7 @@
     },
     "lifecycle_state": { "$ref": "#/$defs/lifecycle_state" },
     "eval_baseline": {
-      "type": "object",
+      "$ref": "eval-report.schema.json#/$defs/eval_baseline",
       "description": "Scores the current active version achieves; gates are relative to this."
     },
     "registered_at": { "type": "string", "format": "date-time" },

@@ -5,6 +5,7 @@ import {
   agentCard,
   agentManifest,
   auditEvent,
+  evalReport,
   taskMessage,
   ProtocolValidationError,
 } from '../src/index.js';
@@ -13,7 +14,7 @@ const fixturesDir = join(import.meta.dirname, '..', 'fixtures');
 
 interface Case {
   file: string;
-  schema: 'agent-manifest' | 'agent-card' | 'task-contract' | 'audit-event';
+  schema: 'agent-manifest' | 'agent-card' | 'task-contract' | 'audit-event' | 'eval-report';
   valid: boolean;
 }
 const { cases } = JSON.parse(readFileSync(join(fixturesDir, 'expectations.json'), 'utf8')) as {
@@ -25,6 +26,7 @@ const parsers = {
   'agent-card': agentCard,
   'task-contract': taskMessage,
   'audit-event': auditEvent,
+  'eval-report': evalReport,
 } as const;
 
 describe('shared contract fixtures', () => {

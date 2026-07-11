@@ -1,0 +1,16 @@
+{
+  "schema": "acp-eval-report/v1",
+  "sdk": "acp-agent-sdk-ts@0.1.0",
+  "agent_id": "knowledge-agent",
+  "agent_version": "0.1.0",
+  "suite": {
+    "digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "case_count": 7
+  },
+  "metrics": {
+    "pass_rate": 1.2,
+    "citation_precision": 0.9583,
+    "abstention_accuracy": 1.0
+  },
+  "cases": []
+}

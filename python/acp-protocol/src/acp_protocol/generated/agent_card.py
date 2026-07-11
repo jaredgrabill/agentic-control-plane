@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Any
+from typing import Any, Dict, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel
 
@@ -111,6 +111,56 @@ class ToolBinding(BaseModel):
     scopes: list[Scope] = Field(..., min_length=1)
 
 
+class UnitInterval(RootModel[float]):
+    root: float = Field(..., ge=0.0, le=1.0)
+
+
+class EvalMetrics(BaseModel):
+    """
+    Gated metrics, all higher-is-better on [0, 1]. Extra domain-specific metrics are allowed and gate like the core three.
+    """
+
+    model_config = ConfigDict(
+        extra="allow",
+    )
+    __annotations__ = {
+        "__pydantic_extra__": Dict[str, UnitInterval],
+    }
+    pass_rate: UnitInterval
+    citation_precision: UnitInterval
+    abstention_accuracy: UnitInterval
+
+
+class EvalSuite(BaseModel):
+    """
+    Identity of the golden suite the run scored: a content digest over the case files, so a baseline can refuse comparison when the suite itself changed.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    digest: str = Field(
+        ...,
+        description="sha256 over the sorted *.json case files (basename NUL content NUL per file, CRLF normalized to LF).",
+        pattern="^sha256:[0-9a-f]{64}$",
+    )
+    case_count: int = Field(..., ge=1)
+    path: str | None = Field(
+        None, description="Repo-relative suite directory, informational."
+    )
+
+
+class EvalCaseResult(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    name: str = Field(..., min_length=1)
+    passed: bool
+    abstained: bool
+    cited_docs: list[str]
+    failures: list[str]
+
+
 class LifecycleState(StrEnum):
     """
     Full lifecycle vocabulary (agent-lifecycle.md). Registry v0 transitions only among registered/active/suspended; the rest arrive with the Deployment Controller.
@@ -155,6 +205,29 @@ class AgentManifest(BaseModel):
     sla: Sla | None = None
 
 
+class EvalBaseline(BaseModel):
+    """
+    Scores an accepted version achieves, distilled from an EvalReport. Recorded on the agent card; CI gates candidate reports against this, relative to per-metric tolerances.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    schema_: Literal["acp-eval-baseline/v1"] = Field(..., alias="schema")
+    agent_id: str = Field(..., pattern="^[a-z][a-z0-9-]{1,62}[a-z0-9]$")
+    agent_version: str = Field(
+        ..., pattern="^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?$"
+    )
+    metrics: EvalMetrics
+    suite: EvalSuite
+    harness: str = Field(
+        ...,
+        description="The sdk string of the report the baseline was distilled from.",
+        min_length=1,
+    )
+    recorded_at: AwareDatetime
+
+
 class AgentCard(BaseModel):
     """
     Registry record for one agent version: the team-authored manifest plus platform-managed fields added at registration. A superset of an A2A agent card; card_signature is a JWS over the identity content so consumers can verify provenance.
@@ -170,7 +243,7 @@ class AgentCard(BaseModel):
         pattern="^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?$",
     )
     lifecycle_state: LifecycleState
-    eval_baseline: dict[str, Any] | None = Field(
+    eval_baseline: EvalBaseline | None = Field(
         None,
         description="Scores the current active version achieves; gates are relative to this.",
     )

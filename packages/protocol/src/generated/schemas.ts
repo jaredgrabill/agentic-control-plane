@@ -29,7 +29,7 @@ export const agentCardSchema = {
       "$ref": "#/$defs/lifecycle_state"
     },
     "eval_baseline": {
-      "type": "object",
+      "$ref": "eval-report.schema.json#/$defs/eval_baseline",
       "description": "Scores the current active version achieves; gates are relative to this."
     },
     "registered_at": {
@@ -429,6 +429,7 @@ export const auditEventSchema = {
         "token.exchanged",
         "agent.registered",
         "agent.lifecycle_changed",
+        "agent.baseline_recorded",
         "corpus.mutation",
         "retrieval.served",
         "killswitch.activated",
@@ -495,6 +496,196 @@ export const auditEventSchema = {
     "uuid": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    }
+  }
+} as const;
+
+export const evalReportSchema = {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp.dev/schemas/v1/eval-report.schema.json",
+  "title": "EvalReport",
+  "description": "One run of an agent's golden eval suite, emitted by an SDK harness (evaluation.md). The report is the evidence; the eval_baseline derived from an accepted run is what the registry records on the agent card and what CI gates against — gates are baseline-relative, never absolute.",
+  "type": "object",
+  "required": [
+    "schema",
+    "sdk",
+    "agent_id",
+    "agent_version",
+    "suite",
+    "metrics",
+    "cases"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "const": "acp-eval-report/v1"
+    },
+    "sdk": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Harness that produced the run, e.g. acp-agent-sdk-py@0.1.0 or acp-agent-sdk-ts@0.1.0."
+    },
+    "agent_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$",
+      "description": "Stable agent identifier (kebab-case); same pattern as the manifest id."
+    },
+    "agent_version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?$",
+      "description": "Semver of the capability contract the suite ran against."
+    },
+    "suite": {
+      "$ref": "#/$defs/eval_suite"
+    },
+    "metrics": {
+      "$ref": "#/$defs/eval_metrics"
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/eval_case_result"
+      },
+      "description": "Per-case verdicts in run (golden-file) order."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "$defs": {
+    "unit_interval": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "eval_metrics": {
+      "type": "object",
+      "title": "EvalMetrics",
+      "description": "Gated metrics, all higher-is-better on [0, 1]. Extra domain-specific metrics are allowed and gate like the core three.",
+      "required": [
+        "pass_rate",
+        "citation_precision",
+        "abstention_accuracy"
+      ],
+      "properties": {
+        "pass_rate": {
+          "$ref": "#/$defs/unit_interval"
+        },
+        "citation_precision": {
+          "$ref": "#/$defs/unit_interval"
+        },
+        "abstention_accuracy": {
+          "$ref": "#/$defs/unit_interval"
+        }
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/unit_interval"
+      }
+    },
+    "eval_suite": {
+      "type": "object",
+      "title": "EvalSuite",
+      "description": "Identity of the golden suite the run scored: a content digest over the case files, so a baseline can refuse comparison when the suite itself changed.",
+      "required": [
+        "digest",
+        "case_count"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "description": "sha256 over the sorted *.json case files (basename NUL content NUL per file, CRLF normalized to LF)."
+        },
+        "case_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "path": {
+          "type": "string",
+          "description": "Repo-relative suite directory, informational."
+        }
+      }
+    },
+    "eval_case_result": {
+      "type": "object",
+      "title": "EvalCaseResult",
+      "required": [
+        "name",
+        "passed",
+        "abstained",
+        "cited_docs",
+        "failures"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "passed": {
+          "type": "boolean"
+        },
+        "abstained": {
+          "type": "boolean"
+        },
+        "cited_docs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "failures": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "eval_baseline": {
+      "type": "object",
+      "title": "EvalBaseline",
+      "description": "Scores an accepted version achieves, distilled from an EvalReport. Recorded on the agent card; CI gates candidate reports against this, relative to per-metric tolerances.",
+      "required": [
+        "schema",
+        "agent_id",
+        "agent_version",
+        "metrics",
+        "suite",
+        "harness",
+        "recorded_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "schema": {
+          "const": "acp-eval-baseline/v1"
+        },
+        "agent_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$"
+        },
+        "agent_version": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?$"
+        },
+        "metrics": {
+          "$ref": "#/$defs/eval_metrics"
+        },
+        "suite": {
+          "$ref": "#/$defs/eval_suite"
+        },
+        "harness": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The sdk string of the report the baseline was distilled from."
+        },
+        "recorded_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
     }
   }
 } as const;
