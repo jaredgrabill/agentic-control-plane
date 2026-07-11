@@ -1,0 +1,33 @@
+{
+  "name": "@acp/knowledge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Knowledge Service: governed ingestion with corpus lineage ledger, hybrid retrieval with citations",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run --coverage",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@acp/protocol": "workspace:*",
+    "@acp/service-kit": "workspace:*",
+    "@temporalio/client": "^1.13.0",
+    "@temporalio/worker": "^1.13.0",
+    "@temporalio/workflow": "^1.13.0",
+    "fastify": "^5.4.0",
+    "nats": "^2.29.3",
+    "pg": "^8.16.0"
+  },
+  "devDependencies": {
+    "@temporalio/testing": "^1.13.0",
+    "@types/node": "^22.15.0",
+    "@types/pg": "^8.15.4",
+    "@vitest/coverage-v8": "^3.2.4",
+    "jose": "^6.0.11",
+    "vitest": "^3.2.4"
+  }
+}
