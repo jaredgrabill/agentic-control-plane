@@ -1,0 +1,159 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterAll, describe, expect, it } from 'vitest';
+import { expand, loadToolServerConfig, parseToolServerConfig } from '../src/config.js';
+
+const SAMPLE = {
+  schema: 'acp-tool-servers/v1',
+  servers: [
+    {
+      id: 'cloud-estate',
+      url: 'http://localhost:7301/mcp',
+      auth: {
+        mode: 'static-headers',
+        headers: {
+          'x-acp-broker-credential': '${ACP_TOOL_CRED_CLOUD_ESTATE:-cloud-estate-dev-broker}',
+        },
+      },
+      tools: {
+        inventory_search: { scope: 'cloud:inventory:read' },
+        cost_report: { scope: 'cloud:cost:read' },
+      },
+      rate_limit: { per_minute: 60, burst: 20 },
+      timeout_ms: 15000,
+    },
+    {
+      id: 'knowledge',
+      url: 'http://localhost:7105/mcp',
+      auth: { mode: 'token-exchange', audience: 'acp:knowledge', scope: ['knowledge:search:read'] },
+      tools: { knowledge_search: { scope: 'knowledge:search:read' } },
+      rate_limit: { per_minute: 60, burst: 5 },
+      tool_rate_limits: { knowledge_search: { per_minute: 30, burst: 5 } },
+    },
+  ],
+};
+
+const text = (value: unknown) => JSON.stringify(value);
+
+describe('parseToolServerConfig', () => {
+  it('parses servers, expands env defaults, and defaults timeout_ms', () => {
+    const config = parseToolServerConfig(text(SAMPLE), {});
+    expect([...config.servers.keys()]).toEqual(['cloud-estate', 'knowledge']);
+
+    const cloud = config.servers.get('cloud-estate')!;
+    expect(cloud.auth).toEqual({
+      mode: 'static-headers',
+      headers: { 'x-acp-broker-credential': 'cloud-estate-dev-broker' },
+    });
+    expect(cloud.tools.inventory_search).toEqual({ scope: 'cloud:inventory:read' });
+    expect(cloud.timeout_ms).toBe(15000);
+
+    const knowledge = config.servers.get('knowledge')!;
+    expect(knowledge.auth).toEqual({
+      mode: 'token-exchange',
+      audience: 'acp:knowledge',
+      scope: ['knowledge:search:read'],
+    });
+    expect(knowledge.timeout_ms).toBe(15000); // default applied
+    expect(knowledge.tool_rate_limits).toEqual({
+      knowledge_search: { per_minute: 30, burst: 5 },
+    });
+  });
+
+  it('prefers the environment value over the ${VAR:-default}', () => {
+    const config = parseToolServerConfig(text(SAMPLE), {
+      ACP_TOOL_CRED_CLOUD_ESTATE: 'from-env',
+    });
+    const cloud = config.servers.get('cloud-estate')!;
+    expect(cloud.auth).toMatchObject({ headers: { 'x-acp-broker-credential': 'from-env' } });
+  });
+
+  it('throws at startup when a referenced variable has no value and no default', () => {
+    const noDefault = structuredClone(SAMPLE);
+    noDefault.servers[0]!.auth.headers = { 'x-acp-broker-credential': '${ACP_MISSING_CRED}' };
+    expect(() => parseToolServerConfig(text(noDefault), {})).toThrow(
+      /ACP_MISSING_CRED is not set and has no default/,
+    );
+  });
+
+  it('throws on duplicate server ids', () => {
+    const dup = structuredClone(SAMPLE);
+    dup.servers.push(structuredClone(dup.servers[0]!));
+    expect(() => parseToolServerConfig(text(dup), {})).toThrow(/duplicate tool server id/);
+  });
+
+  it('rejects a wrong schema marker and an empty server list', () => {
+    expect(() => parseToolServerConfig(text({ schema: 'nope', servers: [] }), {})).toThrow(
+      /schema must be "acp-tool-servers\/v1"/,
+    );
+    expect(() =>
+      parseToolServerConfig(text({ schema: 'acp-tool-servers/v1', servers: [] }), {}),
+    ).toThrow(/non-empty array/);
+  });
+
+  it.each([
+    ['missing url', (s: typeof SAMPLE) => delete (s.servers[0] as { url?: string }).url, /url/],
+    [
+      'unknown auth mode',
+      (s: typeof SAMPLE) => ((s.servers[0]!.auth as { mode: string }).mode = 'vault'),
+      /unknown auth\.mode/,
+    ],
+    [
+      'empty tools map',
+      (s: typeof SAMPLE) => ((s.servers[0] as { tools: object }).tools = {}),
+      /at least one governed tool/,
+    ],
+    [
+      'tool without scope',
+      (s: typeof SAMPLE) => {
+        delete (
+          (s.servers[0]!.tools as Record<string, { scope?: string }>).inventory_search as {
+            scope?: string;
+          }
+        ).scope;
+      },
+      /needs a \{scope\}/,
+    ],
+    [
+      'bad rate limit',
+      (s: typeof SAMPLE) =>
+        ((s.servers[0] as { rate_limit: object }).rate_limit = { per_minute: 0 }),
+      /positive \{per_minute, burst\}/,
+    ],
+    [
+      'bad timeout',
+      (s: typeof SAMPLE) => ((s.servers[0] as { timeout_ms: number }).timeout_ms = -5),
+      /timeout_ms must be positive/,
+    ],
+  ])('rejects %s with an actionable error', (_name, mutate, pattern) => {
+    const broken = structuredClone(SAMPLE);
+    mutate(broken);
+    expect(() => parseToolServerConfig(text(broken), {})).toThrow(pattern);
+  });
+});
+
+describe('loadToolServerConfig', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'acp-tool-servers-'));
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('reads the file from disk', () => {
+    const path = join(dir, 'tool-servers.json');
+    writeFileSync(path, text(SAMPLE));
+    const config = loadToolServerConfig(path, {});
+    expect(config.servers.size).toBe(2);
+  });
+});
+
+describe('expand', () => {
+  it('expands ${VAR}, ${VAR:-default}, and treats empty env values as unset', () => {
+    expect(expand('a ${X} b', { X: '1' }, 't')).toBe('a 1 b');
+    expect(expand('${X:-fallback}', {}, 't')).toBe('fallback');
+    expect(expand('${X:-fallback}', { X: '' }, 't')).toBe('fallback');
+    expect(expand('no vars', {}, 't')).toBe('no vars');
+    expect(() => expand('${X}', {}, 't')).toThrow(/X is not set/);
+  });
+});
