@@ -1,7 +1,7 @@
 # uv workspace root (virtual — not itself a published package).
 # All Python packages live under this directory; one lockfile for the workspace.
 [tool.uv.workspace]
-members = ["acp-protocol", "acp-agent-sdk", "acp-create-agent"]
+members = ["acp-protocol", "acp-agent-sdk", "acp-create-agent", "agents/knowledge"]
 
 [dependency-groups]
 dev = [

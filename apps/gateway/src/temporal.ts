@@ -1,5 +1,6 @@
 import type { TaskRequest, TaskResult } from '@acp/protocol';
 import { Client, Connection, WorkflowNotFoundError } from '@temporalio/client';
+import { OpenTelemetryWorkflowClientInterceptor } from '@temporalio/interceptors-opentelemetry';
 import { env } from '@acp/service-kit';
 import type { TaskStarter } from './app.js';
 
@@ -17,6 +18,9 @@ export async function connectTemporal(): Promise<TemporalTaskStarter> {
   const client = new Client({
     connection,
     namespace: env('ACP_TEMPORAL_NAMESPACE', 'default'),
+    // Carries the gateway's trace context into the workflow — one trace
+    // from HTTP intake through the agent's activities.
+    interceptors: { workflow: [new OpenTelemetryWorkflowClientInterceptor()] },
   });
   return new TemporalTaskStarter(client);
 }

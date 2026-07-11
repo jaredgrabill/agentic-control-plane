@@ -107,10 +107,13 @@ export class TokenIssuer {
         403,
       );
     }
-    const act: ActClaim = {
-      sub: actor,
-      ...(subject.act !== undefined ? { act: subject.act } : {}),
-    };
+    // Idempotent actor: re-exchanging under the same acting party (e.g. an
+    // agent narrowing its own token toward a tool audience) must not
+    // duplicate links in the delegation chain.
+    const act: ActClaim =
+      subject.act?.sub === actor
+        ? subject.act
+        : { sub: actor, ...(subject.act !== undefined ? { act: subject.act } : {}) };
 
     return this.sign(
       {

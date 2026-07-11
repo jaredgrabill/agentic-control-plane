@@ -42,6 +42,17 @@ function makeActivities(fetchImpl: typeof fetch, audit: AuditEvent[] = []) {
     tokenUrl: 'http://token.test',
     clientId: 'svc-orchestrator',
     clientSecret: 'secret',
+    verifier: {
+      verify: (token: string) =>
+        token === 'subject.jwt'
+          ? Promise.resolve({
+              sub: 'user:jane.doe',
+              tenant: 'acme',
+              roles: ['tenant-user'],
+              scope: 'task:submit knowledge:search:read',
+            })
+          : Promise.reject(new Error('token verification failed')),
+    },
     audit: {
       publish: (e) => {
         audit.push(e);
@@ -111,7 +122,8 @@ describe('authorizeDelegation', () => {
       tenant: 'acme',
       agent: card,
       capability: 'knowledge.answer_with_citations',
-      scopes: ['knowledge:search:read'],
+      subjectToken: 'subject.jwt',
+      requestedScopes: ['knowledge:search:read'],
       taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
       stepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44',
     });
@@ -120,9 +132,33 @@ describe('authorizeDelegation', () => {
       principal: { type: 'User', id: 'user:jane.doe' },
       action: 'delegate',
       resource: { type: 'Agent', id: 'knowledge-agent' },
-      context: { risk: 'R0', scopes: ['knowledge:search:read'] },
+      context: {
+        risk: 'R0',
+        // Cedar rules over the principal's verified scopes; the manifest's
+        // requested bindings ride separately for future policies.
+        scopes: ['task:submit', 'knowledge:search:read'],
+        requested_scopes: ['knowledge:search:read'],
+      },
       reason: { task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40' },
     });
+  });
+
+  it('refuses to authorize on an unverifiable subject token', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(jsonResponse({ access_token: 't' })),
+    ) as unknown as typeof fetch;
+    await expect(
+      makeActivities(fetchImpl).authorizeDelegation({
+        principal: 'user:jane.doe',
+        tenant: 'acme',
+        agent: card,
+        capability: 'knowledge.answer_with_citations',
+        subjectToken: 'forged.jwt',
+        requestedScopes: [],
+        taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+        stepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44',
+      }),
+    ).rejects.toThrow(/verification failed/);
   });
 
   it('classifies agent principals as Agent and unknown capabilities as R3', async () => {
@@ -138,7 +174,8 @@ describe('authorizeDelegation', () => {
       tenant: 'acme',
       agent: card,
       capability: 'not.declared',
-      scopes: [],
+      subjectToken: 'subject.jwt',
+      requestedScopes: [],
       taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
       stepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44',
     });
@@ -154,9 +191,14 @@ describe('authorizeDelegation', () => {
 describe('exchangeToken', () => {
   it('performs RFC 8693 exchange bound to the agent audience and actor', async () => {
     let exchangeBody: Record<string, unknown> | undefined;
+    const exchanges: Record<string, unknown>[] = [];
     const fetchImpl = vi.fn((_url: string | URL, init?: RequestInit) => {
-      exchangeBody = JSON.parse(init?.body as string) as Record<string, unknown>;
-      return jsonResponse({ access_token: 'delegated' });
+      const body = JSON.parse(init?.body as string) as Record<string, unknown>;
+      exchanges.push(body);
+      exchangeBody = body;
+      return jsonResponse({
+        access_token: body.audience === 'acp:orchestrator' ? 'orch.jwt' : 'delegated',
+      });
     }) as unknown as typeof fetch;
 
     const { token } = await makeActivities(fetchImpl).exchangeToken({
@@ -165,8 +207,17 @@ describe('exchangeToken', () => {
       scopes: ['knowledge:search:read'],
     });
     expect(token).toBe('delegated');
+    // Two hops: the orchestrator takes custody, then delegates to the agent
+    // — the act chain records user → orchestrator → agent.
+    expect(exchanges).toHaveLength(2);
+    expect(exchanges[0]).toMatchObject({
+      audience: 'acp:orchestrator',
+      subject_token: 'subject.jwt.here',
+    });
+    expect(exchanges[0]).not.toHaveProperty('actor');
     expect(exchangeBody).toMatchObject({
       grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+      subject_token: 'orch.jwt',
       audience: 'acp:agent:knowledge-agent',
       actor: 'agent:knowledge-agent@0.1.0',
       scope: 'knowledge:search:read',
@@ -183,7 +234,7 @@ describe('exchangeToken', () => {
         agent: card,
         scopes: [],
       }),
-    ).rejects.toThrow(/token exchange for agent knowledge-agent failed: 401/);
+    ).rejects.toThrow(/token exchange for acp:orchestrator failed: 401/);
   });
 });
 

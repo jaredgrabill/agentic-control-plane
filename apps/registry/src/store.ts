@@ -64,6 +64,7 @@ export class PgRegistryStore implements RegistryStore {
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const res = await this.pool.query<{ card: AgentCard }>(
       `SELECT card FROM agents ${where} ORDER BY agent_id`,
+      params,
     );
     return res.rows.map((r) => r.card);
   }

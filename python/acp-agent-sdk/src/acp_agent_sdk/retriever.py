@@ -11,6 +11,7 @@ from typing import Any, Protocol
 import httpx
 from acp_protocol import subjects
 from nats.aio.client import Client as NatsClient
+from opentelemetry import propagate
 
 from acp_agent_sdk.errors import CapabilityError, ErrorClass
 
@@ -87,6 +88,12 @@ class NatsRetriever:
             payload["task_id"] = task_id
         if step_id is not None:
             payload["step_id"] = step_id
+        # W3C context rides the request so the retrieval hop joins the task
+        # trace (observability.md: context propagation is SDK plumbing).
+        carrier: dict[str, str] = {}
+        propagate.inject(carrier)
+        if "traceparent" in carrier:
+            payload["traceparent"] = carrier["traceparent"]
 
         import json
 

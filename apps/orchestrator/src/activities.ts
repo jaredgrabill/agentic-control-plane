@@ -1,5 +1,5 @@
 import { auditEvent as auditEventParser, type AgentCard, type AuditEvent } from '@acp/protocol';
-import type { AuditPublisher, Logger } from '@acp/service-kit';
+import { scopesOf, type AuditPublisher, type Logger, type PlatformClaims } from '@acp/service-kit';
 import type { ControlActivities } from './types.js';
 
 export interface ControlDeps {
@@ -9,6 +9,8 @@ export interface ControlDeps {
   /** client_credentials for the orchestrator's own platform identity. */
   clientId: string;
   clientSecret: string;
+  /** Verifies the forwarded subject token before its scopes reach Cedar. */
+  verifier: { verify(token: string, audience: string): Promise<PlatformClaims> };
   audit: AuditPublisher | { publish(event: AuditEvent): Promise<void> };
   logger: Logger;
   fetchImpl?: typeof fetch;
@@ -62,6 +64,10 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
     },
 
     async authorizeDelegation(input) {
+      // Real verification, not decode-and-hope: the subject token was
+      // issued for the gateway audience and its scopes are what the
+      // principal actually holds.
+      const subject = await deps.verifier.verify(input.subjectToken, 'acp:gateway');
       const token = await serviceToken('acp:policy', 'policy:decide');
       const capability = input.agent.manifest.capabilities.find((c) => c.name === input.capability);
       const res = await doFetch(`${deps.policyUrl}/v1/authorize`, {
@@ -81,7 +87,8 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
           },
           context: {
             risk: capability?.risk ?? 'R3',
-            scopes: input.scopes,
+            scopes: scopesOf(subject),
+            requested_scopes: input.requestedScopes,
             tenant: input.tenant,
             capability: input.capability,
           },
@@ -95,27 +102,45 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
     },
 
     async exchangeToken(input) {
-      const res = await doFetch(`${deps.tokenUrl}/v1/token/exchange`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
-          client_id: deps.clientId,
-          client_secret: deps.clientSecret,
-          subject_token: input.subjectToken,
-          subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
-          audience: `acp:agent:${input.agent.manifest.id}`,
-          scope: input.scopes.join(' '),
-          actor: `agent:${input.agent.manifest.id}@${input.agent.version}`,
-        }),
-      });
-      if (!res.ok) {
-        throw new Error(
-          `token exchange for agent ${input.agent.manifest.id} failed: ${res.status} ${await res.text()}`,
-        );
-      }
-      const body = (await res.json()) as { access_token: string };
-      return { token: body.access_token };
+      // Two hops so the act chain records what actually happened:
+      // user → orchestrator (this service takes custody of the task),
+      // then user → orchestrator → agent (the agent acts on the step).
+      const exchange = async (
+        subjectToken: string,
+        audience: string,
+        actor?: string,
+        scope?: string,
+      ) => {
+        const res = await doFetch(`${deps.tokenUrl}/v1/token/exchange`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+            client_id: deps.clientId,
+            client_secret: deps.clientSecret,
+            subject_token: subjectToken,
+            subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+            audience,
+            ...(scope === undefined ? {} : { scope }),
+            ...(actor === undefined ? {} : { actor }),
+          }),
+        });
+        if (!res.ok) {
+          throw new Error(
+            `token exchange for ${audience} failed: ${res.status} ${await res.text()}`,
+          );
+        }
+        return ((await res.json()) as { access_token: string }).access_token;
+      };
+
+      const orchestratorToken = await exchange(input.subjectToken, 'acp:orchestrator');
+      const agentToken = await exchange(
+        orchestratorToken,
+        `acp:agent:${input.agent.manifest.id}`,
+        `agent:${input.agent.manifest.id}@${input.agent.version}`,
+        input.scopes.join(' '),
+      );
+      return { token: agentToken };
     },
 
     async emitAudit(event) {

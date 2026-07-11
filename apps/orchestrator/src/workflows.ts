@@ -74,6 +74,20 @@ export async function AgentStepWorkflow(
       `agent ${card.manifest.id} does not declare capability ${capability}`,
     );
   }
+  if (task.subject_token === undefined) {
+    return {
+      kind: 'step_result',
+      step_id: stepId,
+      task_id: task.task_id,
+      tenant: task.tenant,
+      status: 'failed',
+      error: {
+        class: 'permanent',
+        message: 'task carries no subject_token — the gateway must forward the caller credential',
+      },
+    };
+  }
+
   // Scopes the delegation may carry: the target's manifest bindings. The
   // token service intersects these with what the subject token holds —
   // delegation narrows, never widens.
@@ -84,7 +98,8 @@ export async function AgentStepWorkflow(
     tenant: task.tenant,
     agent: card,
     capability,
-    scopes: requestedScopes,
+    subjectToken: task.subject_token,
+    requestedScopes,
     taskId: task.task_id,
     stepId,
   });
@@ -101,20 +116,6 @@ export async function AgentStepWorkflow(
           `policy denied delegation of ${capability} to ${card.manifest.id} ` +
           `(bundle ${decision.bundle_version}) — the principal's scopes or the capability's ` +
           'risk class do not satisfy any permit',
-      },
-    };
-  }
-
-  if (task.subject_token === undefined) {
-    return {
-      kind: 'step_result',
-      step_id: stepId,
-      task_id: task.task_id,
-      tenant: task.tenant,
-      status: 'failed',
-      error: {
-        class: 'permanent',
-        message: 'task carries no subject_token — the gateway must forward the caller credential',
       },
     };
   }

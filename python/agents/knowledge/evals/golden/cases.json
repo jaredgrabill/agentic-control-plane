@@ -1,0 +1,62 @@
+{
+  "description": "Golden set for the Knowledge & Policy agent. Buckets: expected production questions, edge cases, abstention cases. Gated metrics: citation precision and abstention behavior (domains.md). Grows with every incident.",
+  "cases": [
+    {
+      "name": "change freeze policy (the Phase 1 exit question)",
+      "capability": "knowledge.answer_with_citations",
+      "input": { "question": "What does our policy say about change freezes?" },
+      "expect": {
+        "must_contain": ["fiscal quarter"],
+        "must_cite_docs": ["policy/change-management"],
+        "min_confidence": 0.4
+      }
+    },
+    {
+      "name": "emergency changes during a freeze",
+      "capability": "knowledge.answer_with_citations",
+      "input": { "question": "Which changes may proceed during a change freeze?" },
+      "expect": {
+        "must_contain": ["Emergency"],
+        "must_cite_docs": ["policy/change-management"]
+      }
+    },
+    {
+      "name": "critical vulnerability remediation window",
+      "capability": "knowledge.answer_with_citations",
+      "input": {
+        "question": "How quickly must critical vulnerabilities be remediated?"
+      },
+      "expect": {
+        "must_contain": ["72 hours"],
+        "must_cite_docs": ["policy/information-security"]
+      }
+    },
+    {
+      "name": "TLS protocol versions",
+      "capability": "knowledge.answer_with_citations",
+      "input": { "question": "Which TLS versions are required for new endpoints?" },
+      "expect": {
+        "must_contain": ["TLS 1.3"],
+        "must_cite_docs": ["standard/tls-configuration"]
+      }
+    },
+    {
+      "name": "change record retention period",
+      "capability": "knowledge.answer_with_citations",
+      "input": { "question": "How long are change records retained?" },
+      "expect": { "must_contain": ["seven years"] }
+    },
+    {
+      "name": "abstains on questions the corpus cannot ground",
+      "capability": "knowledge.answer_with_citations",
+      "input": { "question": "What is our policy on office pet iguanas?" },
+      "expect": { "abstain": true }
+    },
+    {
+      "name": "raw search returns cited passages",
+      "capability": "knowledge.search",
+      "input": { "query": "change freeze", "k": 3 },
+      "expect": {}
+    }
+  ]
+}

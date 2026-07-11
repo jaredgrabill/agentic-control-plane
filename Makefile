@@ -2,7 +2,7 @@
 COMPOSE_FILE := deploy/compose/docker-compose.yml
 COMPOSE := docker compose -f $(COMPOSE_FILE)
 
-.PHONY: dev dev-down dev-logs dev-clean lint test build gen
+.PHONY: dev dev-down dev-logs dev-clean lint test build gen platform e2e
 
 dev:
 	$(COMPOSE) up -d
@@ -31,3 +31,13 @@ build:
 
 gen:
 	pnpm gen
+
+# Control-plane services + knowledge agent worker against the dev stack.
+platform: build
+	cd python && uv sync
+	node scripts/run-platform.mjs
+
+# The Phase 1 exit scenario, end to end (needs `make dev` running).
+e2e: build
+	cd python && uv sync
+	pnpm --filter @acp/e2e run test:e2e

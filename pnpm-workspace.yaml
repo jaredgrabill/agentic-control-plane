@@ -2,6 +2,7 @@ packages:
   - apps/*
   - packages/*
   - agents/*
+  - tests/*
 allowBuilds:
   '@swc/core': true
   esbuild: true
