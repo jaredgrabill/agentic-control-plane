@@ -1,7 +1,7 @@
 # uv workspace root (virtual — not itself a published package).
 # All Python packages live under this directory; one lockfile for the workspace.
 [tool.uv.workspace]
-members = ["acp-protocol"]
+members = ["acp-protocol", "acp-agent-sdk", "acp-create-agent"]
 
 [dependency-groups]
 dev = [
@@ -12,6 +12,7 @@ dev = [
     "pytest-asyncio>=1.0",
     "datamodel-code-generator[http]>=0.31",
     "types-jsonschema>=4.23",
+    "types-pyyaml>=6.0.12.20260518",
 ]
 
 [tool.ruff]
@@ -31,13 +32,29 @@ select = [
     "RUF",
 ]
 [tool.ruff.lint.per-file-ignores]
-"**/tests/**" = ["S101"]  # assert is the point of tests
+# Asserts are the point of tests; fake credentials and fake transports are
+# how the SDK seams get exercised without infrastructure.
+"**/tests/**" = ["S101", "S105", "S106", "ASYNC109", "RUF043"]
 "**/generated/**" = ["E501", "UP"]
+# The template embeds rendered file bodies; their line lengths belong to
+# the scaffolded project, not this file.
+"**/acp_create_agent/template.py" = ["E501"]
 
 [tool.mypy]
 python_version = "3.12"
 strict = true
 warn_unreachable = true
+# src-layout: module names resolve from each package's src/ base.
+explicit_package_bases = true
+mypy_path = ["acp-protocol/src", "acp-agent-sdk/src", "acp-create-agent/src"]
+# Strict on src/ per coding-standards; each package's tests import as a
+# same-named `tests` module, which mypy cannot disambiguate in one run.
+files = [
+    "acp-protocol/src",
+    "acp-agent-sdk/src",
+    "acp-create-agent/src",
+    "acp-protocol/tests",
+]
 # Generated pydantic models are checked, but line-length/style oddities in
 # codegen output must not fail the human-code gate.
 [[tool.mypy.overrides]]
@@ -47,4 +64,14 @@ disallow_any_explicit = false
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["."]
-addopts = "-q"
+addopts = "-q --import-mode=importlib"
+
+[tool.coverage.run]
+source = [
+    "acp-protocol/src",
+    "acp-agent-sdk/src",
+    "acp-create-agent/src",
+]
+# The worker/bus runtime needs live Temporal + NATS and is exercised by the
+# E2E suite against the dev stack; decision logic is unit-covered.
+omit = ["**/generated/*"]

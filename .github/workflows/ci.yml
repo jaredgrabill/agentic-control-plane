@@ -44,7 +44,7 @@ jobs:
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
-      - run: uv run mypy .
+      - run: uv run mypy
       # Coverage floor per testing.md; the floor may rise, never fall.
       - run: uv run pytest --cov --cov-fail-under=85
 

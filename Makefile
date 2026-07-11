@@ -20,7 +20,7 @@ dev-clean:
 
 lint:
 	pnpm lint && pnpm format:check
-	cd python && uv run ruff check . && uv run ruff format --check . && uv run mypy .
+	cd python && uv run ruff check . && uv run ruff format --check . && uv run mypy
 
 test:
 	pnpm test
