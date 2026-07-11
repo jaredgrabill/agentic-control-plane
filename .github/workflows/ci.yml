@@ -16,17 +16,19 @@ jobs:
   typescript:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: pnpm/action-setup@v4.1.0
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
+      # Build first: the type-aware lint rules and typecheck resolve
+      # workspace dependencies from their built dist types.
+      - run: pnpm build
       - run: pnpm lint
       - run: pnpm typecheck
-      - run: pnpm build
       - run: pnpm test
 
   python:
@@ -35,8 +37,8 @@ jobs:
       run:
         working-directory: python
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: astral-sh/setup-uv@v6.4.3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
         with:
           enable-cache: true
       - run: uv sync --locked
@@ -50,13 +52,13 @@ jobs:
     name: cross-language contracts stay generated
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: pnpm/action-setup@v4.1.0
-      - uses: actions/setup-node@v4.4.0
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
-      - uses: astral-sh/setup-uv@v6.4.3
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
         with:
           enable-cache: true
       - run: pnpm install --frozen-lockfile
@@ -73,11 +75,11 @@ jobs:
   commitlint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - uses: pnpm/action-setup@v4.1.0
-      - uses: actions/setup-node@v4.4.0
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
@@ -93,25 +95,25 @@ jobs:
   docs:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
-      - uses: astral-sh/setup-uv@v6.4.3
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
       - run: uvx --with mkdocs-material mkdocs build --strict
 
   security:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
-      - uses: gitleaks/gitleaks-action@v2.3.9
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2.3.9
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - uses: pnpm/action-setup@v4.1.0
-      - uses: actions/setup-node@v4.4.0
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
           cache: pnpm
-      - uses: astral-sh/setup-uv@v6.4.3
+      - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
       - name: pip-audit
