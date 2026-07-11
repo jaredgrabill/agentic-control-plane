@@ -271,6 +271,38 @@ describe('RFC 8693 exchange', () => {
     expect((claims.act as { sub: string }).sub).toBe('svc:lowly');
   });
 
+  it('mints no act claim when the requested actor IS the subject and no chain exists', async () => {
+    // The tool gateway re-scopes a plain user token toward acp:knowledge with
+    // actor preserved: no delegation happened, so no act link may appear —
+    // otherwise the knowledge PEP would record a bogus [user, user] chain.
+    const userToken = await issueUserToken();
+    const res = await exchange({
+      subject_token: userToken,
+      audience: 'acp:knowledge',
+      scope: 'knowledge:search:read',
+      actor: 'user:jane.doe',
+    });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token);
+    expect(claims.sub).toBe('user:jane.doe');
+    expect(claims.act).toBeUndefined();
+
+    // But once a chain exists, an actor equal to the subject still appends —
+    // only the "no chain at all" case is a no-op.
+    const hop1 = await exchange({
+      subject_token: userToken,
+      audience: 'acp:orchestrator',
+      actor: 'svc:orchestrator',
+    });
+    const hop2 = await exchange({
+      subject_token: hop1.body.access_token,
+      audience: 'acp:knowledge',
+      actor: 'user:jane.doe',
+    });
+    const chained = decodeJwt(hop2.body.access_token);
+    expect((chained.act as { sub: string }).sub).toBe('user:jane.doe');
+  });
+
   it('emits token.exchanged audit events carrying the delegation chain', async () => {
     const userToken = await issueUserToken();
     auditEvents.length = 0;
