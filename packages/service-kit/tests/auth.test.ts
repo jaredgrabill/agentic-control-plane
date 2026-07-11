@@ -1,0 +1,101 @@
+import { exportJWK, generateKeyPair, SignJWT } from 'jose';
+import { describe, expect, it } from 'vitest';
+import {
+  AuthError,
+  JwtVerifier,
+  assertPlatformClaims,
+  delegationChain,
+  intersectScopes,
+  scopesOf,
+} from '../src/auth.js';
+
+const ISSUER = 'https://token.test.local';
+
+async function makeToken(claims: Record<string, unknown>, opts?: { issuer?: string }) {
+  const pair = await generateKeyPair('EdDSA');
+  const jwk = await exportJWK(pair.publicKey);
+  const token = await new SignJWT(claims)
+    .setProtectedHeader({ alg: 'EdDSA' })
+    .setIssuer(opts?.issuer ?? ISSUER)
+    .setAudience('acp:test')
+    .setIssuedAt()
+    .setExpirationTime('5m')
+    .sign(pair.privateKey);
+  return { token, jwks: { keys: [{ ...jwk, alg: 'EdDSA' }] } };
+}
+
+const GOOD_CLAIMS = {
+  sub: 'user:jane.doe',
+  tenant: 'acme',
+  roles: ['tenant-user'],
+  scope: 'task:submit',
+};
+
+describe('JwtVerifier', () => {
+  it('verifies a valid token and returns platform claims', async () => {
+    const { token, jwks } = await makeToken(GOOD_CLAIMS);
+    const claims = await new JwtVerifier({ jwks }, ISSUER).verify(token, 'acp:test');
+    expect(claims.sub).toBe('user:jane.doe');
+    expect(claims.tenant).toBe('acme');
+  });
+
+  it('rejects wrong audience, wrong issuer, and wrong key', async () => {
+    const { token, jwks } = await makeToken(GOOD_CLAIMS);
+    await expect(new JwtVerifier({ jwks }, ISSUER).verify(token, 'acp:other')).rejects.toThrow(
+      AuthError,
+    );
+    await expect(
+      new JwtVerifier({ jwks }, 'https://someone-else').verify(token, 'acp:test'),
+    ).rejects.toThrow(AuthError);
+    const { jwks: otherJwks } = await makeToken(GOOD_CLAIMS);
+    await expect(
+      new JwtVerifier({ jwks: otherJwks }, ISSUER).verify(token, 'acp:test'),
+    ).rejects.toThrow(AuthError);
+  });
+
+  it('rejects structurally valid JWTs missing platform claims', async () => {
+    const { token, jwks } = await makeToken({ sub: 'user:jane.doe' });
+    await expect(new JwtVerifier({ jwks }, ISSUER).verify(token, 'acp:test')).rejects.toThrow(
+      /tenant/,
+    );
+  });
+});
+
+describe('assertPlatformClaims', () => {
+  it.each([
+    [{}, /sub/],
+    [{ sub: 'u' }, /tenant/],
+    [{ sub: 'u', tenant: 't' }, /roles/],
+    [{ sub: 'u', tenant: 't', roles: ['r'] }, /scope/],
+    [{ sub: 'u', tenant: 't', roles: [1], scope: '' }, /roles/],
+  ])('rejects %j', (claims, pattern) => {
+    expect(() => assertPlatformClaims(claims as never)).toThrow(pattern);
+  });
+});
+
+describe('scopes', () => {
+  it('splits and intersects', () => {
+    expect(scopesOf({ scope: '' })).toEqual([]);
+    expect(scopesOf({ scope: 'a b' })).toEqual(['a', 'b']);
+    expect(intersectScopes(['a', 'c'], ['a', 'b'])).toEqual(['a']);
+    expect(intersectScopes([], ['a'])).toEqual([]);
+  });
+});
+
+describe('delegationChain', () => {
+  it('returns just the principal without act claims', () => {
+    expect(delegationChain({ sub: 'user:jane.doe' })).toEqual([{ sub: 'user:jane.doe' }]);
+  });
+
+  it('unwinds nested act claims outermost-principal-first', () => {
+    const chain = delegationChain({
+      sub: 'user:jane.doe',
+      act: { sub: 'agent:knowledge-agent@0.1.0', act: { sub: 'svc:orchestrator' } },
+    });
+    expect(chain.map((l) => l.sub)).toEqual([
+      'user:jane.doe',
+      'svc:orchestrator',
+      'agent:knowledge-agent@0.1.0',
+    ]);
+  });
+});
