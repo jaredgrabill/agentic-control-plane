@@ -5,8 +5,8 @@ behavior are the gated metrics for this agent (domains.md)."""
 from pathlib import Path
 
 from acp_agent_sdk import Agent, EvalHarness, load_golden
-from fixture_retriever import FixtureRetriever
 from knowledge_agent.capabilities.answer import register
+from knowledge_agent.fixture_retriever import FixtureRetriever
 
 AGENT_DIR = Path(__file__).resolve().parents[1]
 CORPUS = AGENT_DIR.parents[2] / "fixtures" / "acme-corp"

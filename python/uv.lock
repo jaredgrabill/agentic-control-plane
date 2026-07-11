@@ -530,10 +530,14 @@ version = "0.1.0"
 source = { editable = "agents/knowledge" }
 dependencies = [
     { name = "acp-agent-sdk" },
+    { name = "acp-protocol" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "acp-agent-sdk", editable = "acp-agent-sdk" }]
+requires-dist = [
+    { name = "acp-agent-sdk", editable = "acp-agent-sdk" },
+    { name = "acp-protocol", editable = "acp-protocol" },
+]
 
 [[package]]
 name = "librt"

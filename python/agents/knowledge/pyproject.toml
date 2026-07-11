@@ -3,7 +3,7 @@ name = "knowledge-agent"
 version = "0.1.0"
 description = "Knowledge & Policy agent: cited answers over the governed corpus"
 requires-python = ">=3.12"
-dependencies = ["acp-agent-sdk"]
+dependencies = ["acp-agent-sdk", "acp-protocol"]
 
 [build-system]
 requires = ["hatchling"]
@@ -14,3 +14,4 @@ packages = ["src/knowledge_agent"]
 
 [tool.uv.sources]
 acp-agent-sdk = { workspace = true }
+acp-protocol = { workspace = true }
