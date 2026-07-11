@@ -7,6 +7,8 @@ import type { KeyStore } from './keys.js';
 import { TokenIssuer, type IssuedToken } from './tokens.js';
 
 export const TOKEN_EXCHANGE_GRANT = 'urn:ietf:params:oauth:grant-type:token-exchange';
+/** Non-standard on purpose: RFC 8693 requires a live subject token; the broker grant asserts a verified claim set (ADR-0007). */
+export const BROKER_DELEGATION_GRANT = 'urn:acp:oauth:grant-type:broker-delegation';
 
 /** Audit sink: the real one publishes to JetStream; tests observe events in memory. */
 export interface AuditSink {
@@ -20,6 +22,8 @@ export interface TokenAppDeps {
   audit: AuditSink;
   logger: Logger;
   now?: () => Date;
+  /** ADR-0007: broker grounds older than this are refused. Default 86400s. */
+  brokerMaxTaskAgeSeconds?: number;
 }
 
 interface TokenBody {
@@ -32,12 +36,18 @@ interface TokenBody {
   subject_token?: string;
   subject_token_type?: string;
   actor?: string;
+  subject?: { sub?: string; tenant?: string; roles?: string[]; scopes?: string[] };
+  grounds?: { task_id?: string; subject_jti?: string; verified_at?: string };
 }
 
 export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance> {
   const app = createHttpServer({ serviceName: 'token-service', logger: deps.logger });
   await app.register(formbody);
-  const issuerSvc = new TokenIssuer(deps.keys, deps.issuer);
+  const issuerSvc = new TokenIssuer(deps.keys, deps.issuer, {
+    ...(deps.brokerMaxTaskAgeSeconds === undefined
+      ? {}
+      : { maxTaskAgeSeconds: deps.brokerMaxTaskAgeSeconds }),
+  });
 
   app.get('/.well-known/jwks.json', () => deps.keys.jwks);
 
@@ -99,6 +109,55 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     });
   });
 
+  app.post('/v1/token/delegate', async (request, reply) => {
+    const body = (request.body ?? {}) as TokenBody;
+    const client = authenticateClient(deps.clients, request, body);
+    if (body.grant_type !== BROKER_DELEGATION_GRANT) {
+      throw new AuthError(`grant_type must be ${BROKER_DELEGATION_GRANT}`, 400);
+    }
+    if (body.audience === undefined || body.audience === '') {
+      throw new AuthError('audience is required — brokered tokens are always audience-bound', 400);
+    }
+    if (body.subject === undefined || typeof body.subject !== 'object') {
+      throw new AuthError('subject is required — the claim set verified at task intake', 400);
+    }
+    if (body.grounds?.task_id === undefined || body.grounds.task_id === '') {
+      throw new AuthError('grounds.task_id is required — every mint must join to its task', 400);
+    }
+    if (body.grounds.verified_at === undefined || body.grounds.verified_at === '') {
+      throw new AuthError(
+        'grounds.verified_at is required — when the broker verified the subject token',
+        400,
+      );
+    }
+    const issued = await issuerSvc.delegate({
+      client,
+      subject: body.subject as { sub: string; tenant: string; roles: string[]; scopes: string[] },
+      audience: body.audience,
+      scopes: splitScope(body.scope),
+      actor: body.actor,
+      grounds: {
+        task_id: body.grounds.task_id,
+        ...(body.grounds.subject_jti === undefined
+          ? {}
+          : { subject_jti: body.grounds.subject_jti }),
+        verified_at: body.grounds.verified_at,
+      },
+      ttlSeconds: parseTtl(body.requested_ttl),
+    });
+    await emitAudit(deps, 'token.brokered', client, issued, {
+      reason: { task_id: body.grounds.task_id },
+      details: {
+        ...(body.actor === undefined ? {} : { actor: body.actor }),
+        grounds: body.grounds,
+      },
+    });
+    return reply.send({
+      ...toResponse(issued),
+      issued_token_type: 'urn:ietf:params:oauth:token-type:jwt',
+    });
+  });
+
   return app;
 }
 
@@ -144,9 +203,10 @@ function toResponse(issued: IssuedToken): Record<string, unknown> {
 
 async function emitAudit(
   deps: TokenAppDeps,
-  eventType: 'token.issued' | 'token.exchanged',
+  eventType: 'token.issued' | 'token.exchanged' | 'token.brokered',
   client: RegisteredClient,
   issued: IssuedToken,
+  extra?: { reason?: AuditEvent['reason']; details?: Record<string, unknown> },
 ): Promise<void> {
   const event: AuditEvent = {
     event_id: crypto.randomUUID(),
@@ -158,10 +218,12 @@ async function emitAudit(
       delegation_chain: delegationChain(issued.claims),
     },
     action: { name: eventType },
+    ...(extra?.reason === undefined ? {} : { reason: extra.reason }),
     details: {
       audience: issued.claims.aud,
       scope: issued.claims.scope,
       subject: issued.claims.sub,
+      ...extra?.details,
     },
   };
   try {

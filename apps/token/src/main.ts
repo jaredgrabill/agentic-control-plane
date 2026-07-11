@@ -39,6 +39,7 @@ const app = await buildTokenApp({
   issuer: env('ACP_TOKEN_ISSUER', 'https://token.acp.local'),
   audit: new AuditPublisher(nc, logger),
   logger,
+  brokerMaxTaskAgeSeconds: envInt('ACP_BROKER_MAX_TASK_AGE_SECONDS', 86_400),
 });
 
 const port = envInt('ACP_TOKEN_PORT', 7101);

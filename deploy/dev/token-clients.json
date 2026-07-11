@@ -19,7 +19,7 @@
     "client_secret": "orchestrator-dev-secret",
     "principal": "svc:orchestrator",
     "tenant": "platform",
-    "roles": ["platform"],
+    "roles": ["platform", "broker"],
     "scopes": ["registry:read", "policy:decide"]
   },
   {
