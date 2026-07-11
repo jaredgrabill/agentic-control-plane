@@ -80,6 +80,16 @@ describe('compareReports', () => {
     perturbed.metrics.pass_rate += 1e-6;
     expect(compareReports(report, perturbed).join('\n')).toContain('metrics.pass_rate');
 
+    // A missing metric must diff — NaN would slip through a bare |a-b| check.
+    const missingMetric = structuredClone(report);
+    delete (missingMetric.metrics as Partial<typeof missingMetric.metrics>).citation_precision;
+    expect(compareReports(report, missingMetric)).toEqual([
+      `metrics.citation_precision: ${String(report.metrics.citation_precision)} != undefined`,
+    ]);
+    expect(compareReports(missingMetric, report).join('\n')).toContain(
+      'metrics.citation_precision',
+    );
+
     const withinTolerance = structuredClone(report);
     withinTolerance.metrics.pass_rate += 1e-12;
     expect(compareReports(report, withinTolerance)).toEqual([]);

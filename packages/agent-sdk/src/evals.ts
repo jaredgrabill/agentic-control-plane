@@ -68,6 +68,20 @@ export function loadGolden(directory: string): GoldenCase[] {
   return cases;
 }
 
+/**
+ * Renders a string the way Python's `{s!r}` does: single-quoted, but
+ * double-quoted when the string contains an apostrophe and no double quote.
+ * Backslashes and the chosen quote are escaped. (Control-character escaping
+ * is out of scope — golden needles are printable text.) Keeps the
+ * `answer does not mention …` failure string byte-identical to the Python
+ * SDK's for the parity comparator.
+ */
+function pyRepr(value: string): string {
+  const quote = value.includes("'") && !value.includes('"') ? '"' : "'";
+  const escaped = value.replaceAll('\\', '\\\\').replaceAll(quote, `\\${quote}`);
+  return `${quote}${escaped}${quote}`;
+}
+
 export interface CaseResult {
   name: string;
   passed: boolean;
@@ -174,7 +188,7 @@ export class EvalHarness {
     }
     for (const needle of goldenCase.mustContain) {
       if (!text.toLowerCase().includes(needle.toLowerCase())) {
-        failures.push(`answer does not mention '${needle}'`);
+        failures.push(`answer does not mention ${pyRepr(needle)}`);
       }
     }
     for (const doc of goldenCase.mustCiteDocs) {
@@ -192,6 +206,12 @@ export class EvalHarness {
       goldenCase.minConfidence !== undefined &&
       Number(output.confidence ?? 0) < goldenCase.minConfidence
     ) {
+      // Parity constraint (fixtures/parity/HANDLERS.md "String-formatting
+      // constraints"): JSON.parse erases the int/float distinction, so a
+      // whole-number confidence renders "1" here but "1.0" in Python — golden
+      // min_confidence values and handler confidences must not be whole
+      // numbers. A missing confidence renders "undefined" here vs "None" in
+      // Python, so missing-confidence cases are not parity-safe either.
       failures.push(
         `confidence ${String(output.confidence)} below floor ${String(goldenCase.minConfidence)}`,
       );

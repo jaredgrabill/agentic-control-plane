@@ -64,6 +64,15 @@ class TestEvalHarness:
         assert "unicorns" in report.summary()
         assert report.pass_rate == 0.5
 
+    async def test_apostrophe_needles_render_double_quoted(self) -> None:
+        # Pins {needle!r}'s quote-switching rule (apostrophe and no double
+        # quote -> double-quoted repr). The TypeScript SDK replicates it and
+        # asserts the identical string, keeping the parity comparator honest.
+        report = await EvalHarness(make_agent()).run(
+            [case(name="apostrophe needle", expect={"must_contain": ["unicorn's horn"]})]
+        )
+        assert report.results[0].failures == ['answer does not mention "unicorn\'s horn"']
+
     async def test_citation_precision_counts_expected_docs_only(self) -> None:
         report = await EvalHarness(make_agent()).run(
             [case(expect={"must_cite_docs": ["policy/change-management"]})]

@@ -28,8 +28,10 @@ export function compareReports(a: ParityReport, b: ParityReport): string[] {
   }
   for (const metric of ['pass_rate', 'citation_precision', 'abstention_accuracy'] as const) {
     const [ma, mb] = [a.metrics[metric], b.metrics[metric]];
-    if (Math.abs(ma - mb) > METRIC_TOLERANCE) {
-      diffs.push(`metrics.${metric}: ${ma} != ${mb}`);
+    // A missing or non-numeric metric would sneak past a bare |a-b| check
+    // (NaN > tolerance is false); treat any non-finite side as a diff.
+    if (!Number.isFinite(ma) || !Number.isFinite(mb) || Math.abs(ma - mb) > METRIC_TOLERANCE) {
+      diffs.push(`metrics.${metric}: ${String(ma)} != ${String(mb)}`);
     }
   }
   if (a.cases.length !== b.cases.length) {

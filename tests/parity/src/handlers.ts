@@ -30,7 +30,14 @@ const ABSTAIN_REASON = "I don't have sufficient grounding in the corpus to answe
 
 export function registerParityHandlers(agent: Agent): void {
   agent.capability('parity.answer', (_ctx, input) => {
-    const question = typeof input.question === 'string' ? input.question : '';
+    // HANDLERS.md step 1: q = str(input.question or ""). Python-truthiness
+    // coercion, not a string typecheck — a numeric question (e.g. 42) must
+    // become "42" in both SDKs. Matches Python for strings, numbers,
+    // null/undefined (None), 0, and false. (Objects/arrays would stringify
+    // differently in the two languages and are not parity-safe inputs; the
+    // scalar cast records that assumption.)
+    const raw = input.question as string | number | boolean | null | undefined;
+    const question = raw ? String(raw) : '';
     if (question === '') {
       return Promise.reject(new CapabilityError(ErrorClass.NeedsInput, 'question is required'));
     }

@@ -41,6 +41,25 @@ both SDKs. The resulting failure string differs only in the validator tail
 `step failed: handler output does not conform to the declared output_schema`
 prefix.
 
+## String-formatting constraints
+
+Failure strings must be byte-identical across SDKs, and one formatting gap
+cannot be bridged from JavaScript: `JSON.parse` erases JSON's int/float
+distinction, so a whole-number confidence renders `1` in TypeScript
+(`String(1)`) but `1.0` in Python (`str(1.0)`). Therefore:
+
+- Golden `min_confidence` values and handler-produced confidences MUST NOT be
+  whole numbers (use e.g. `0.9`, never `1` or `1.0`).
+- A completed output that omits `confidence` renders `undefined` in TypeScript
+  vs `None` in Python inside the `confidence … below floor …` failure —
+  missing-confidence cases are NOT parity-safe; handlers must always emit a
+  confidence when a golden case sets `min_confidence`.
+
+Needle quoting IS bridged: the TypeScript harness replicates Python's `{s!r}`
+rule (single quotes, switching to double quotes when the needle contains an
+apostrophe and no double quote), so apostrophes in `must_contain` needles are
+fine.
+
 ## Report shape (`acp-parity-report/v1`)
 
 ```json

@@ -60,6 +60,16 @@ describe('EvalHarness', () => {
     expect(report.passed).toBe(false);
   });
 
+  it('quotes apostrophe needles the way Python repr does', async () => {
+    // Pinned against the Python SDK's {needle!r}: an apostrophe (and no
+    // double quote) switches the repr to double quotes. The matching Python
+    // test asserts the identical string.
+    const report = await new EvalHarness(makeAgent()).run([
+      goldenCase({ name: 'apostrophe needle', expect: { must_contain: ["unicorn's horn"] } }),
+    ]);
+    expect(report.results[0]?.failures).toEqual(['answer does not mention "unicorn\'s horn"']);
+  });
+
   it('citation precision counts expected docs only', async () => {
     const report = await new EvalHarness(makeAgent()).run([
       goldenCase({ expect: { must_cite_docs: ['policy/change-management'] } }),

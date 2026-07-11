@@ -9,7 +9,6 @@ import { readFileSync } from 'node:fs';
 import { trace } from '@opentelemetry/api';
 import { ApplicationFailure } from '@temporalio/common';
 import { Ajv2020, type ValidateFunction } from 'ajv/dist/2020.js';
-import addFormatsImport from 'ajv-formats';
 import type { Logger } from 'pino';
 import YAML from 'yaml';
 import { agentManifest, stepRequest, type AgentManifest, type StepRequest } from '@acp/protocol';
@@ -20,10 +19,6 @@ import { CapabilityError, ErrorClass } from './errors.js';
 import { FakeModel, type ModelClient, type ModelResponse } from './model.js';
 import type { Retriever } from './retriever.js';
 import { createAgentLogger } from './telemetry.js';
-
-// ajv-formats ships CJS; at runtime the ESM default import IS the plugin
-// function, but its types describe the module namespace. Narrow accordingly.
-const addFormats = addFormatsImport as unknown as typeof addFormatsImport.default;
 
 /** A capability handler: context + validated input → output conforming to the declared schema. */
 export type Handler = (
@@ -70,6 +65,12 @@ export class Agent {
   // The SDK's own lenient instance for capability output_schemas — authored
   // by agent teams, not protocol schemas — so their idioms don't trip Ajv
   // strict mode. Protocol documents keep using @acp/protocol's strict one.
+  //
+  // validateFormats: false for 1:1 parity with the Python SDK, whose
+  // Draft202012Validator carries no FormatChecker — there `format:` is
+  // annotation-only (jsonschema's spec-default), so it must never cause an
+  // output validation failure here either. With formats off, Ajv also
+  // compiles unknown format names without ajv-formats.
   private readonly ajv: Ajv2020;
   private readonly validators = new Map<string, ValidateFunction>();
 
@@ -78,8 +79,7 @@ export class Agent {
     this.model = options.model ?? new FakeModel();
     this.retriever = options.retriever;
     this.log = createAgentLogger(this.agentId);
-    this.ajv = new Ajv2020({ allErrors: true, strict: false });
-    addFormats(this.ajv);
+    this.ajv = new Ajv2020({ allErrors: true, strict: false, validateFormats: false });
   }
 
   /** Loads + validates a manifest.yaml; throws ProtocolValidationError on drift. */

@@ -108,6 +108,23 @@ describe('execute', () => {
     expect(result.error?.message).toContain('output_schema');
   });
 
+  it('output_schema format keywords are annotation-only, matching Python', async () => {
+    // The Python SDK validates outputs with a Draft202012Validator and no
+    // FormatChecker, so `format:` never fails a step there. Parity requires
+    // the same here: a non-uuid value against format "uuid" must complete.
+    const manifest = structuredClone(MANIFEST);
+    const schema = manifest.capabilities[0].output_schema as {
+      properties: Record<string, Record<string, unknown>>;
+    };
+    schema.properties.text = { type: 'string', format: 'uuid' };
+    const formatted = new Agent({ manifest });
+    formatted.capability('test.echo', () => Promise.resolve(goodOutput('definitely not a uuid')));
+
+    const result = await formatted.execute(stepRequest());
+    expect(result.status).toBe('completed');
+    expect((result.output as Record<string, unknown>).text).toBe('definitely not a uuid');
+  });
+
   it('needs_input is a definitive step outcome, not a thrown failure', async () => {
     agent.capability('test.echo', () =>
       Promise.reject(new CapabilityError(ErrorClass.NeedsInput, 'which policy do you mean?')),
