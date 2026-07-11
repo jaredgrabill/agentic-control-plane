@@ -260,13 +260,14 @@ describe('phase 2 tool gateway scenario', () => {
       expect(failure.details?.retry_after_s).toBeGreaterThanOrEqual(1);
     }
 
+    // The successful calls also land retrieval.served events (no details)
+    // under this task id — read outcome defensively.
+    const outcomeOf = (e: AuditEvent) => (e.details as { outcome?: string } | undefined)?.outcome;
     const events = await waitForAudit(taskId, (all) =>
-      all.some((e) => (e.details as { outcome?: string }).outcome === 'rate_limited'),
+      all.some((e) => outcomeOf(e) === 'rate_limited'),
     );
     const rateLimited = events.filter(
-      (e) =>
-        e.event_type === 'tool.called' &&
-        (e.details as { outcome?: string }).outcome === 'rate_limited',
+      (e) => e.event_type === 'tool.called' && outcomeOf(e) === 'rate_limited',
     );
     expect(rateLimited.length).toBeGreaterThan(0);
     expect(
