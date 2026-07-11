@@ -15,6 +15,7 @@ agentic-control-plane/
 ├── packages/                # shared TypeScript libraries
 │   ├── agent-sdk/           # @acp/agent-sdk
 │   ├── protocol/            # schemas: manifests, task contracts, events
+│   ├── service-kit/         # shared control-plane service runtime
 │   ├── telemetry/
 │   └── create-agent/        # TS scaffolder
 ├── python/                  # uv workspace
