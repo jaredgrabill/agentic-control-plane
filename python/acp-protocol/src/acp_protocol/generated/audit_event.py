@@ -29,6 +29,7 @@ class EventType(StrEnum):
     agent_baseline_recorded = "agent.baseline_recorded"
     corpus_mutation = "corpus.mutation"
     retrieval_served = "retrieval.served"
+    tool_called = "tool.called"
     killswitch_activated = "killswitch.activated"
     killswitch_cleared = "killswitch.cleared"
 
