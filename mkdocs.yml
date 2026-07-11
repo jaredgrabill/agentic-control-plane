@@ -1,6 +1,6 @@
 site_name: Agentic Control Plane
 site_description: Control plane for composable, governed AI agents
-repo_url: https://github.com/acp-project/agentic-control-plane
+repo_url: https://github.com/jaredgrabill/agentic-control-plane
 edit_uri: ''
 
 theme:

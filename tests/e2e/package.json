@@ -1,0 +1,19 @@
+{
+  "name": "@acp/e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phase 1 exit scenario, exercised end to end against the dev stack",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test:e2e": "vitest run"
+  },
+  "devDependencies": {
+    "@acp/protocol": "workspace:*",
+    "@types/node": "^22.15.0",
+    "vitest": "^3.2.4",
+    "yaml": "^2.8.0"
+  }
+}

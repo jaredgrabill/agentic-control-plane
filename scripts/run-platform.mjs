@@ -1,0 +1,128 @@
+/**
+ * Runs the full control plane + the knowledge agent worker against the dev
+ * stack (make dev). Used by `make platform` and the E2E suite. Requires a
+ * prior `pnpm build` (services run from dist/) and `uv sync` (agent worker).
+ *
+ * Everything here is dev-profile wiring: dev credentials come from
+ * deploy/dev/token-clients.json and the compose defaults; real deployments
+ * inject their own.
+ */
+import { spawn } from 'node:child_process';
+import console from 'node:console';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import process from 'node:process';
+import { fileURLToPath } from 'node:url';
+
+const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+const tokenClients = readFileSync(join(repoRoot, 'deploy', 'dev', 'token-clients.json'), 'utf8');
+
+const base = {
+  ...process.env,
+  ACP_TOKEN_CLIENTS: tokenClients,
+  ACP_TOKEN_ISSUER: 'https://token.acp.local',
+  ACP_JWKS_URL: 'http://localhost:7101/.well-known/jwks.json',
+  ACP_TOKEN_URL: 'http://localhost:7101',
+  ACP_REGISTRY_URL: 'http://localhost:7102',
+  ACP_POLICY_URL: 'http://localhost:7103',
+  ACP_DATABASE_URL: 'postgres://acp:acp-dev-password@localhost:5432/acp',
+  // Flush spans quickly so traces are queryable moments after a task runs.
+  OTEL_BSP_SCHEDULE_DELAY: '500',
+};
+
+const services = [
+  ['token', 'node', ['apps/token/dist/main.js'], {}],
+  ['audit', 'node', ['apps/audit/dist/main.js'], {}],
+  ['registry', 'node', ['apps/registry/dist/main.js'], {}],
+  ['policy', 'node', ['apps/policy/dist/main.js'], {}],
+  ['knowledge', 'node', ['apps/knowledge/dist/main.js'], {}],
+  ['gateway', 'node', ['apps/gateway/dist/main.js'], {}],
+  [
+    'orchestrator',
+    'node',
+    ['apps/orchestrator/dist/main.js'],
+    {
+      ACP_ORCHESTRATOR_CLIENT_ID: 'svc-orchestrator',
+      ACP_ORCHESTRATOR_CLIENT_SECRET: 'orchestrator-dev-secret',
+    },
+  ],
+  [
+    'knowledge-agent',
+    'uv',
+    ['run', '--directory', 'python', 'python', '-m', 'knowledge_agent.main'],
+    {
+      ACP_AGENT_CLIENT_ID: 'agent-knowledge-agent',
+      ACP_AGENT_CLIENT_SECRET: 'agent-knowledge-dev-secret',
+      ACP_NATS_AGENT_USER: 'agent-knowledge',
+      ACP_NATS_AGENT_PASSWORD: 'agent-knowledge-dev-password',
+    },
+  ],
+];
+
+// Pre-flight: a platform already running would produce EADDRINUSE chaos.
+try {
+  await fetch('http://localhost:7101/healthz');
+  console.error('a platform is already listening on :7101 — stop it before starting another');
+  process.exit(1);
+} catch {
+  // ports free — good
+}
+
+const children = [];
+for (const [name, cmd, args, extraEnv] of services) {
+  // No shell wrapper: node/uv are real executables, and killing a cmd.exe
+  // wrapper on Windows would orphan the actual service process.
+  const child = spawn(cmd, args, {
+    cwd: repoRoot,
+    env: { ...base, ...extraEnv },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  child.stdout.on('data', (d) => process.stdout.write(`[${name}] ${d}`));
+  child.stderr.on('data', (d) => process.stderr.write(`[${name}] ${d}`));
+  child.on('exit', (code) => {
+    console.error(`[${name}] exited with ${code}`);
+    if (code !== 0 && !shuttingDown) {
+      shutdown(1);
+    }
+  });
+  children.push([name, child]);
+}
+
+let shuttingDown = false;
+function shutdown(code) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  for (const [, child] of children) {
+    if (process.platform === 'win32') {
+      // Kill the whole tree: uv wraps python, and TerminateProcess does
+      // not cascade.
+      spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+    } else {
+      child.kill();
+    }
+  }
+  setTimeout(() => process.exit(code), 2000);
+}
+process.on('SIGINT', () => shutdown(0));
+process.on('SIGTERM', () => shutdown(0));
+
+// Readiness gate: every HTTP door answers /healthz.
+const healthPorts = [7101, 7102, 7103, 7104, 7105, 7100];
+const deadline = Date.now() + 120_000;
+for (const port of healthPorts) {
+  for (;;) {
+    try {
+      const res = await fetch(`http://localhost:${port}/healthz`);
+      if (res.ok) break;
+    } catch {
+      // not up yet
+    }
+    if (Date.now() > deadline) {
+      console.error(`service on :${port} never became healthy`);
+      shutdown(1);
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+console.log('PLATFORM_READY (temporal workers may take a few more seconds to poll)');

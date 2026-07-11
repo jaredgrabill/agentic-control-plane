@@ -1,5 +1,8 @@
 import { diag, DiagConsoleLogger, DiagLogLevel } from '@opentelemetry/api';
 import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+import { HttpInstrumentation } from '@opentelemetry/instrumentation-http';
+import { UndiciInstrumentation } from '@opentelemetry/instrumentation-undici';
+import { registerInstrumentations } from '@opentelemetry/instrumentation';
 import { resourceFromAttributes } from '@opentelemetry/resources';
 import {
   BatchSpanProcessor,
@@ -34,6 +37,14 @@ export function initTelemetry(
     spanProcessors: [options.spanProcessor ?? new BatchSpanProcessor(exporter)],
   });
   provider.register();
+  // Inbound HTTP server spans + outbound fetch/undici propagation: this is
+  // what stitches gateway → workflow → agent into one trace.
+  registerInstrumentations({
+    instrumentations: [
+      new HttpInstrumentation({ ignoreIncomingRequestHook: (req) => req.url === '/healthz' }),
+      new UndiciInstrumentation(),
+    ],
+  });
   return {
     shutdown: () => provider.shutdown(),
   };

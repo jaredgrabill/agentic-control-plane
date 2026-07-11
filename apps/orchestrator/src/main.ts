@@ -2,13 +2,23 @@ import process from 'node:process';
 import { createRequire } from 'node:module';
 import {
   AuditPublisher,
+  JwtVerifier,
   connectBus,
   createLogger,
   ensureAuditStream,
   env,
   initTelemetry,
 } from '@acp/service-kit';
-import { OpenTelemetryActivityInboundInterceptor } from '@temporalio/interceptors-opentelemetry';
+import {
+  OpenTelemetryActivityInboundInterceptor,
+  makeWorkflowExporter,
+} from '@temporalio/interceptors-opentelemetry';
+// The Temporal interceptor package is built against the OTel 1.x SDK line;
+// the workflow sink gets matching-generation exporter/resource via aliases
+// while the rest of the process runs the 2.x SDK.
+import { OTLPTraceExporter as LegacyOTLPTraceExporter } from 'otel-legacy-exporter';
+import { Resource as LegacyResource } from 'otel-legacy-resources';
+import { BatchSpanProcessor as LegacyBatchSpanProcessor } from 'otel-legacy-trace-base';
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { createControlActivities } from './activities.js';
 import { CONTROL_TASK_QUEUE } from './types.js';
@@ -30,6 +40,10 @@ const activities = createControlActivities({
   tokenUrl: env('ACP_TOKEN_URL', 'http://localhost:7101'),
   clientId: env('ACP_ORCHESTRATOR_CLIENT_ID', 'svc-orchestrator'),
   clientSecret: env('ACP_ORCHESTRATOR_CLIENT_SECRET', 'orchestrator-dev-secret'),
+  verifier: new JwtVerifier(
+    { jwksUrl: env('ACP_JWKS_URL', 'http://localhost:7101/.well-known/jwks.json') },
+    env('ACP_TOKEN_ISSUER', 'https://token.acp.local'),
+  ),
   audit: new AuditPublisher(nc, logger),
   logger,
 });
@@ -44,10 +58,26 @@ const worker = await Worker.create({
   taskQueue: CONTROL_TASK_QUEUE,
   workflowsPath: require.resolve('./workflows.js'),
   activities: { ...activities },
+  // Workflow code runs in the deterministic isolate; its spans leave via
+  // this sink. Without it the workflow-side interceptor cannot run, and
+  // the trace would fracture at every workflow→activity edge.
+  sinks: {
+    exporter: makeWorkflowExporter(
+      new LegacyBatchSpanProcessor(
+        new LegacyOTLPTraceExporter({
+          url: `${env('ACP_OTLP_ENDPOINT', 'http://localhost:4318')}/v1/traces`,
+        }),
+        { scheduledDelayMillis: 500 },
+      ),
+      new LegacyResource({ 'service.name': 'orchestrator', 'service.namespace': 'acp' }),
+    ),
+  },
   interceptors: {
     // One trace across gateway → workflow → agent activity: the OTel
     // interceptors carry W3C context through Temporal headers.
-    workflowModules: [require.resolve('@temporalio/interceptors-opentelemetry/lib/workflow')],
+    workflowModules: [
+      require.resolve('@temporalio/interceptors-opentelemetry/lib/workflow-interceptors'),
+    ],
     activity: [(ctx) => ({ inbound: new OpenTelemetryActivityInboundInterceptor(ctx) })],
   },
 });
