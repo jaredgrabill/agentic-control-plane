@@ -1,5 +1,6 @@
 import process from 'node:process';
 import {
+  ensureAuditStream,
   AuditPublisher,
   connectBus,
   createLogger,
@@ -30,6 +31,7 @@ const nc = await connectBus({
   user: env('ACP_NATS_SERVICE_USER', 'token'),
   password: env('ACP_NATS_SERVICE_PASSWORD', 'token-dev-password'),
 });
+await ensureAuditStream(nc);
 
 const app = await buildTokenApp({
   keys,

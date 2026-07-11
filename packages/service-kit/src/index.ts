@@ -11,7 +11,14 @@ export {
   type ActClaim,
   type PlatformClaims,
 } from './auth.js';
-export { AuditPublisher, connectBus, openKv, type BusOptions } from './nats.js';
+export {
+  AUDIT_STREAM,
+  AuditPublisher,
+  connectBus,
+  ensureAuditStream,
+  openKv,
+  type BusOptions,
+} from './nats.js';
 export { createHttpServer, type HttpServerOptions } from './http.js';
 export {
   CONTROL_BUCKET,

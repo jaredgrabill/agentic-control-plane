@@ -1,6 +1,13 @@
 import process from 'node:process';
 import { createRequire } from 'node:module';
-import { AuditPublisher, connectBus, createLogger, env, initTelemetry } from '@acp/service-kit';
+import {
+  AuditPublisher,
+  connectBus,
+  createLogger,
+  ensureAuditStream,
+  env,
+  initTelemetry,
+} from '@acp/service-kit';
 import { OpenTelemetryActivityInboundInterceptor } from '@temporalio/interceptors-opentelemetry';
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { createControlActivities } from './activities.js';
@@ -15,6 +22,7 @@ const nc = await connectBus({
   user: env('ACP_NATS_SERVICE_USER', 'orchestrator'),
   password: env('ACP_NATS_SERVICE_PASSWORD', 'orchestrator-dev-password'),
 });
+await ensureAuditStream(nc);
 
 const activities = createControlActivities({
   registryUrl: env('ACP_REGISTRY_URL', 'http://localhost:7102'),

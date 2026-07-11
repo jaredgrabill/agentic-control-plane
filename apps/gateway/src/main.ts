@@ -1,5 +1,6 @@
 import process from 'node:process';
 import {
+  ensureAuditStream,
   AuditPublisher,
   JwtVerifier,
   KillSwitchWatcher,
@@ -20,6 +21,7 @@ const nc = await connectBus({
   user: env('ACP_NATS_SERVICE_USER', 'gateway'),
   password: env('ACP_NATS_SERVICE_PASSWORD', 'gateway-dev-password'),
 });
+await ensureAuditStream(nc);
 
 const app = buildGatewayApp({
   verifier: new JwtVerifier(
