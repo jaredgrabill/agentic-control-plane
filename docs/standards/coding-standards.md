@@ -18,6 +18,7 @@ agentic-control-plane/
 │   ├── telemetry/
 │   └── create-agent/        # TS scaffolder
 ├── python/                  # uv workspace
+│   ├── acp-protocol/        # generated Pydantic bindings of packages/protocol
 │   ├── acp-agent-sdk/
 │   ├── acp-create-agent/
 │   └── agents/              # reference agents (knowledge, netsec, ...)

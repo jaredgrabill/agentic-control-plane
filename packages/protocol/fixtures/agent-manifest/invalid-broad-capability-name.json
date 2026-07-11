@@ -1,0 +1,16 @@
+{
+  "id": "vague-agent",
+  "name": "Vague Agent",
+  "owner": "team-examples",
+  "description": "Invalid: capability name is not namespaced domain.action.",
+  "capabilities": [
+    {
+      "name": "answer_questions_about_the_network",
+      "description": "Too broad to be a capability.",
+      "risk": "R0",
+      "input_schema": { "type": "object" },
+      "output_schema": { "type": "object" },
+      "examples": [{ "input": {} }, { "input": {} }, { "input": {} }]
+    }
+  ]
+}

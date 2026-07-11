@@ -1,0 +1,79 @@
+{
+  "description": "Expected rendered subjects for given inputs — both language bindings must produce these exact strings — plus inputs both must reject.",
+  "renders": [
+    {
+      "entity": "task",
+      "args": {
+        "tenant": "acme",
+        "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+        "verb": "submitted"
+      },
+      "subject": "acp.acme.task.0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40.submitted"
+    },
+    {
+      "entity": "agent",
+      "args": { "tenant": "acme", "agent_id": "knowledge-agent", "verb": "dispatch" },
+      "subject": "acp.acme.agent.knowledge-agent.dispatch"
+    },
+    {
+      "entity": "audit",
+      "args": { "tenant": "acme", "event_type": "policy.decision" },
+      "subject": "acp.acme.audit.policy.decision"
+    },
+    {
+      "entity": "audit_corpus",
+      "args": { "tenant": "acme", "source_id": "policy-docs" },
+      "subject": "acp.acme.audit.corpus.policy-docs"
+    },
+    {
+      "entity": "ingest",
+      "args": { "tenant": "acme", "source_id": "policy-docs" },
+      "subject": "acp.acme.ingest.policy-docs"
+    },
+    {
+      "entity": "telemetry",
+      "args": { "tenant": "acme", "signal": "spans" },
+      "subject": "acp.acme.telemetry.spans"
+    },
+    {
+      "entity": "registry",
+      "args": { "agent_id": "knowledge-agent", "verb": "updated" },
+      "subject": "acp.platform.registry.knowledge-agent.updated"
+    },
+    {
+      "entity": "control",
+      "args": { "verb": "killswitch" },
+      "subject": "acp.platform.control.killswitch"
+    }
+  ],
+  "rejects": [
+    {
+      "entity": "task",
+      "args": {
+        "tenant": "acme.>",
+        "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+        "verb": "submitted"
+      },
+      "why": "wildcard smuggling in tenant token"
+    },
+    {
+      "entity": "task",
+      "args": {
+        "tenant": "acme",
+        "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+        "verb": "exploded"
+      },
+      "why": "verb outside the closed vocabulary"
+    },
+    {
+      "entity": "registry",
+      "args": { "agent_id": "knowledge-agent", "verb": "suspended" },
+      "why": "registry verbs are registered|updated; lifecycle states ride the event payload"
+    },
+    {
+      "entity": "audit",
+      "args": { "tenant": "acme", "event_type": "singleword" },
+      "why": "audit event types are dotted vocabulary entries"
+    }
+  ]
+}

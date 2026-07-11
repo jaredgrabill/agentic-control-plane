@@ -1,0 +1,146 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp.dev/schemas/v1/audit-event.schema.json",
+  "title": "AuditEvent",
+  "description": "One record on the append-only audit stream. Carries who (delegation chain), what (action + digests), why (task, policy decision), and with-what (versioned artifacts) for every governable action.",
+  "type": "object",
+  "required": ["event_id", "occurred_at", "tenant", "event_type", "actor", "action"],
+  "additionalProperties": false,
+  "properties": {
+    "event_id": { "$ref": "#/$defs/uuid" },
+    "occurred_at": { "type": "string", "format": "date-time" },
+    "tenant": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,62}$" },
+    "event_type": { "$ref": "#/$defs/event_type" },
+    "actor": {
+      "type": "object",
+      "description": "Who acted, with the full delegation chain from token act claims.",
+      "required": ["principal"],
+      "additionalProperties": false,
+      "properties": {
+        "principal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Immediate actor (JWT sub): user, service, or agent-version principal."
+        },
+        "delegation_chain": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/delegation_link" },
+          "description": "Outermost first: user → orchestrator → agent → tool, from nested act claims."
+        }
+      }
+    },
+    "action": {
+      "type": "object",
+      "description": "What happened.",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Action identifier, e.g. capability or tool action name."
+        },
+        "inputs_digest": { "$ref": "#/$defs/digest" },
+        "outputs_digest": { "$ref": "#/$defs/digest" },
+        "side_effects": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "reason": {
+      "type": "object",
+      "description": "Why it was allowed to happen.",
+      "additionalProperties": false,
+      "properties": {
+        "task_id": { "$ref": "#/$defs/uuid" },
+        "step_id": { "$ref": "#/$defs/uuid" },
+        "plan_step": { "type": "string" },
+        "policy": { "$ref": "#/$defs/policy_decision" }
+      }
+    },
+    "artifacts": {
+      "type": "object",
+      "description": "With what: every versioned artifact in force at the time, for replay.",
+      "additionalProperties": false,
+      "properties": {
+        "agent_id": { "type": "string" },
+        "agent_version": { "type": "string" },
+        "model": { "type": "string" },
+        "prompt_template_version": { "type": "string" },
+        "lineage_ids": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/uuid" },
+          "description": "For retrieval events: the exact chunk versions served."
+        },
+        "workflow_run_id": { "type": "string" },
+        "trace_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" }
+      }
+    },
+    "details": {
+      "type": "object",
+      "description": "Event-type-specific payload (e.g. corpus mutation metadata, lifecycle transition)."
+    }
+  },
+  "$defs": {
+    "event_type": {
+      "type": "string",
+      "description": "Closed vocabulary; extending it is a protocol change.",
+      "enum": [
+        "task.submitted",
+        "task.completed",
+        "step.dispatched",
+        "step.completed",
+        "policy.decision",
+        "token.issued",
+        "token.exchanged",
+        "agent.registered",
+        "agent.lifecycle_changed",
+        "corpus.mutation",
+        "retrieval.served",
+        "killswitch.activated",
+        "killswitch.cleared"
+      ]
+    },
+    "delegation_link": {
+      "type": "object",
+      "title": "DelegationLink",
+      "required": ["sub"],
+      "additionalProperties": false,
+      "properties": {
+        "sub": { "type": "string", "minLength": 1 },
+        "role": { "type": "string" },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "policy_decision": {
+      "type": "object",
+      "title": "PolicyDecisionRef",
+      "required": ["decision", "bundle_version"],
+      "additionalProperties": false,
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": ["allow", "deny", "require-approval"]
+        },
+        "bundle_version": { "type": "string", "minLength": 1 },
+        "determining_policies": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "IDs of the policies that matched."
+        }
+      }
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    }
+  }
+}

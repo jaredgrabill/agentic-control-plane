@@ -1,0 +1,13 @@
+{
+  "kind": "step_result",
+  "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44",
+  "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+  "tenant": "acme",
+  "status": "failed",
+  "error": {
+    "class": "policy_denied",
+    "message": "Cedar decision: deny for tool knowledge-store scope knowledge:search:read (bundle 2026.07.01); caller scopes did not include the capability",
+    "details": { "bundle_version": "2026.07.01" }
+  },
+  "usage": { "input_tokens": 0, "output_tokens": 0, "llm_calls": 0, "tool_calls": 0 }
+}

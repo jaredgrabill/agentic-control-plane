@@ -1,0 +1,15 @@
+{
+  "kind": "step_request",
+  "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44",
+  "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+  "tenant": "acme",
+  "agent_id": "knowledge-agent",
+  "agent_version": "0.1.0",
+  "capability": "knowledge.answer_with_citations",
+  "input": { "question": "What does our policy say about change freezes?" },
+  "delegated_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRldi0xIn0.e30.c2lnbmF0dXJl",
+  "budget": { "max_tokens": 8000, "max_steps": 1 },
+  "trace_context": {
+    "traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+  }
+}

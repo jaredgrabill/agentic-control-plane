@@ -1,0 +1,16 @@
+{
+  "id": "sparse-agent",
+  "name": "Sparse Agent",
+  "owner": "team-examples",
+  "description": "Invalid: capabilities need at least 3 examples (semantic discovery and eval seeds).",
+  "capabilities": [
+    {
+      "name": "echo.reply",
+      "description": "Returns its input.",
+      "risk": "R0",
+      "input_schema": { "type": "object" },
+      "output_schema": { "type": "object" },
+      "examples": [{ "input": {} }, { "input": {} }]
+    }
+  ]
+}

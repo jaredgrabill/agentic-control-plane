@@ -1,0 +1,13 @@
+{
+  "kind": "task_request",
+  "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+  "tenant": "acme",
+  "principal": "user:jane.doe",
+  "session_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f41",
+  "input": {
+    "text": "What does our policy say about change freezes?",
+    "capability": "knowledge.answer_with_citations"
+  },
+  "budget": { "max_tokens": 20000, "max_steps": 4 },
+  "submitted_at": "2026-07-10T09:00:00Z"
+}

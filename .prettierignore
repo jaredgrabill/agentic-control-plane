@@ -1,0 +1,16 @@
+dist/
+node_modules/
+coverage/
+.turbo/
+python/
+site/
+pnpm-lock.yaml
+**/src/generated/
+CHANGELOG.md
+docs/
+README.md
+ROADMAP.md
+CONTRIBUTING.md
+GOVERNANCE.md
+SECURITY.md
+CODE_OF_CONDUCT.md

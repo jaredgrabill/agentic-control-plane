@@ -1,0 +1,20 @@
+{
+  "id": "echo-agent",
+  "name": "Echo Agent",
+  "owner": "team-examples",
+  "description": "Smallest manifest the schema accepts: one R0 capability, no tools, no model access.",
+  "capabilities": [
+    {
+      "name": "echo.reply",
+      "description": "Returns its input.",
+      "risk": "R0",
+      "input_schema": { "type": "object" },
+      "output_schema": { "type": "object" },
+      "examples": [
+        { "input": { "text": "hello" } },
+        { "input": { "text": "world" } },
+        { "input": { "text": "ping" } }
+      ]
+    }
+  ]
+}

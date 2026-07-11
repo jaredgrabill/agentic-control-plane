@@ -1,0 +1,13 @@
+{
+  "kind": "task_result",
+  "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f43",
+  "tenant": "acme",
+  "status": "completed",
+  "answer": {
+    "text": "I don't have sufficient grounding to answer this reliably. The corpus has no document covering interplanetary export controls.",
+    "citations": [],
+    "confidence": 0.15,
+    "abstained": true
+  },
+  "completed_at": "2026-07-10T09:02:00Z"
+}

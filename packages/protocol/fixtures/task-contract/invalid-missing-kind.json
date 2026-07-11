@@ -1,0 +1,6 @@
+{
+  "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+  "tenant": "acme",
+  "principal": "user:jane.doe",
+  "input": { "text": "What does our policy say about change freezes?" }
+}
