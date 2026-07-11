@@ -51,9 +51,19 @@ Each entry names an agent, its repo-relative directory, and the argv array
 }
 ```
 
+The command is spawned as that argv array — never through a shell — so
+paths with spaces stay single arguments and nothing is subject to shell
+interpretation, on every platform. Windows users: make sure `uv.exe` is on
+`PATH` (the standard uv installer does this); `.cmd`/`.bat` shims will not
+spawn without a shell.
+
 Conventions per agent directory: golden suite at `<dir>/evals/golden/`,
 committed baseline at `<dir>/evals/baseline.json` (required — no baseline,
-no gate), optional per-metric tolerances at `<dir>/evals/gate.json`.
+no gate), optional per-metric tolerances at `<dir>/evals/gate.json`
+(`acp-eval-gate/v1`: `tolerances` maps metric names to finite numbers in
+[0, 1], `default_tolerance` likewise; unknown keys are rejected, and a
+present-but-invalid gate.json fails the run instead of silently falling
+back to builtin tolerances).
 New agents (Phase 2 Item 3) plug in by adding a roster entry plus those
 files.
 

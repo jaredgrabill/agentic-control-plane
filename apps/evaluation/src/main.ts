@@ -16,7 +16,7 @@ import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { evalBaseline, evalReport } from '@acp/protocol';
 import { baselineFromReport } from './baseline.js';
-import { applyGate, type GateConfig } from './gate.js';
+import { applyGate, loadGateConfig } from './gate.js';
 import { recordBaseline } from './registry-client.js';
 import { runAll, type Exec } from './runner.js';
 
@@ -33,9 +33,11 @@ const exec: Exec = (argv, cwd) =>
     execFile(
       command ?? '',
       args,
-      // Same rationale as packages/protocol/scripts/generate.mjs: `uv` and
-      // friends resolve through the shell on Windows dev machines.
-      { cwd, shell: process.platform === 'win32' },
+      // Deliberately no shell (the agents.json contract is an argv array):
+      // paths with spaces stay single arguments and nothing is subject to
+      // cmd.exe interpretation. Windows is fine with this — `uv` ships as
+      // uv.exe, which execFile resolves from PATH without a shell.
+      { cwd },
       (err, _stdout, stderr) => {
         const code = err === null ? 0 : typeof err.code === 'number' ? err.code : 1;
         resolvePromise({ code, stderr });
@@ -84,7 +86,7 @@ async function main(argv: string[]): Promise<number> {
     const config =
       values.gates === undefined
         ? undefined
-        : (JSON.parse(readFileSync(values.gates, 'utf-8')) as GateConfig);
+        : loadGateConfig(readFileSync(values.gates, 'utf-8'), values.gates);
     const result = applyGate(baseline, report, config);
     if (!result.ok) {
       for (const violation of result.violations) process.stderr.write(`${violation}\n`);

@@ -120,11 +120,25 @@ jobs:
       - name: golden suites within tolerance of baselines
         run: node apps/evaluation/dist/main.js run --manifest apps/evaluation/agents.json
       # Regression proof: the gate itself is gated. A report regressed below
-      # baseline − tolerance MUST fail, or this job fails.
+      # baseline − tolerance MUST be rejected with exactly exit 1 AND the
+      # expected violation on stderr — exit 0 means the gate accepted a
+      # regression, exit 2 means it crashed (usage error, bad path) without
+      # ever gating anything. Either way this job fails.
       - name: the gate rejects a regressed report
         run: |
-          if node apps/evaluation/dist/main.js gate --report apps/evaluation/fixtures/regressed/report.json --baseline apps/evaluation/fixtures/regressed/baseline.json; then
-            echo '::error::the eval gate accepted a report regressed below baseline - tolerance'
+          set +e
+          output="$(node apps/evaluation/dist/main.js gate --report apps/evaluation/fixtures/regressed/report.json --baseline apps/evaluation/fixtures/regressed/baseline.json 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 1 ]; then
+            echo "::error::expected the gate to reject the regressed report with exit 1, got exit $status"
+            exit 1
+          fi
+          # Match a stable ASCII prefix of the violation line (its full text
+          # separates baseline and tolerance with U+2212, awkward for grep).
+          if ! printf '%s\n' "$output" | grep -F 'pass_rate 0.7143 < baseline 1.0000' >/dev/null; then
+            echo '::error::the gate exited 1 without reporting the expected pass_rate violation'
             exit 1
           fi
 

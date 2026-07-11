@@ -36,6 +36,71 @@ export const BUILTIN_TOLERANCES: Record<string, number> = {
 /** Applied to extra domain metrics with no builtin and no config entry. */
 export const FALLBACK_TOLERANCE = 0.05;
 
+/** The complete acp-eval-gate/v1 key set; anything else is a typo. */
+const GATE_CONFIG_KEYS = new Set(['schema', 'description', 'tolerances', 'default_tolerance']);
+
+function isUnitInterval(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
+function invalid(file: string, detail: string): never {
+  throw new Error(`invalid gate config ${file}: ${detail}`);
+}
+
+/**
+ * Parses and shape-checks a gate.json document. Both load sites (the
+ * runner's `<dir>/evals/gate.json` and the `gate --gates` flag) go through
+ * here: a config that widens or zeroes an agent's tolerances must never be
+ * half-read. Unknown keys are REJECTED, not ignored — a typo like
+ * `"tolerence"` would otherwise silently hand the agent builtin tolerances.
+ * Tolerances must be finite numbers in [0, 1]. Every error names the file.
+ */
+export function loadGateConfig(text: string, file: string): GateConfig {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch (err) {
+    invalid(file, `not valid JSON (${err instanceof Error ? err.message : String(err)})`);
+  }
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    invalid(file, 'expected a JSON object');
+  }
+  const config = raw as Record<string, unknown>;
+  for (const key of Object.keys(config)) {
+    if (!GATE_CONFIG_KEYS.has(key)) invalid(file, `unknown key "${key}"`);
+  }
+  if (config.schema !== undefined && config.schema !== 'acp-eval-gate/v1') {
+    invalid(file, `schema must be "acp-eval-gate/v1", got ${JSON.stringify(config.schema)}`);
+  }
+  if (config.description !== undefined && typeof config.description !== 'string') {
+    invalid(file, 'description must be a string');
+  }
+  if (config.default_tolerance !== undefined && !isUnitInterval(config.default_tolerance)) {
+    invalid(
+      file,
+      `default_tolerance must be a finite number in [0, 1], got ${JSON.stringify(config.default_tolerance)}`,
+    );
+  }
+  if (config.tolerances !== undefined) {
+    if (
+      typeof config.tolerances !== 'object' ||
+      config.tolerances === null ||
+      Array.isArray(config.tolerances)
+    ) {
+      invalid(file, 'tolerances must be an object mapping metric names to numbers');
+    }
+    for (const [metric, value] of Object.entries(config.tolerances)) {
+      if (!isUnitInterval(value)) {
+        invalid(
+          file,
+          `tolerances.${metric} must be a finite number in [0, 1], got ${JSON.stringify(value)}`,
+        );
+      }
+    }
+  }
+  return config;
+}
+
 /** Precedence: config.tolerances[metric] → config.default_tolerance → builtin → fallback. */
 export function resolveTolerance(metric: string, config?: GateConfig): number {
   return (

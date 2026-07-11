@@ -6,6 +6,7 @@ import {
   applyGate,
   BUILTIN_TOLERANCES,
   FALLBACK_TOLERANCE,
+  loadGateConfig,
   resolveTolerance,
   type GateConfig,
 } from '../src/gate.js';
@@ -48,6 +49,80 @@ describe('resolveTolerance', () => {
     expect(resolveTolerance('abstention_accuracy')).toBe(0);
     expect(resolveTolerance('conflict_recall')).toBe(FALLBACK_TOLERANCE);
     expect(resolveTolerance('conflict_recall', { default_tolerance: 0 })).toBe(0);
+  });
+});
+
+describe('loadGateConfig', () => {
+  const FILE = 'python/agents/knowledge/evals/gate.json';
+
+  it('accepts the documented shape (the committed knowledge-agent config)', () => {
+    const text = readFileSync(
+      join(
+        import.meta.dirname,
+        '..',
+        '..',
+        '..',
+        'python',
+        'agents',
+        'knowledge',
+        'evals',
+        'gate.json',
+      ),
+      'utf-8',
+    );
+    const config = loadGateConfig(text, FILE);
+    expect(config.tolerances).toEqual({
+      pass_rate: 0,
+      citation_precision: 0,
+      abstention_accuracy: 0,
+    });
+    expect(config.default_tolerance).toBe(0);
+  });
+
+  it('names the file when the JSON does not parse', () => {
+    expect(() => loadGateConfig('{ "default_tolerance": 0,', FILE)).toThrow(
+      /invalid gate config python\/agents\/knowledge\/evals\/gate\.json: not valid JSON/,
+    );
+  });
+
+  it('rejects a non-object document', () => {
+    expect(() => loadGateConfig('[]', FILE)).toThrow(/expected a JSON object/);
+    expect(() => loadGateConfig('null', FILE)).toThrow(/expected a JSON object/);
+  });
+
+  it('rejects a string tolerance', () => {
+    expect(() =>
+      loadGateConfig(JSON.stringify({ tolerances: { pass_rate: '0.05' } }), FILE),
+    ).toThrow(
+      /invalid gate config .*gate\.json: tolerances\.pass_rate must be a finite number in \[0, 1\], got "0\.05"/,
+    );
+    expect(() => loadGateConfig(JSON.stringify({ default_tolerance: '0' }), FILE)).toThrow(
+      /default_tolerance must be a finite number in \[0, 1\], got "0"/,
+    );
+  });
+
+  it('rejects a negative tolerance and one above 1', () => {
+    expect(() =>
+      loadGateConfig(JSON.stringify({ tolerances: { pass_rate: -0.05 } }), FILE),
+    ).toThrow(/tolerances\.pass_rate must be a finite number in \[0, 1\], got -0\.05/);
+    expect(() => loadGateConfig(JSON.stringify({ default_tolerance: 1.5 }), FILE)).toThrow(
+      /default_tolerance must be a finite number in \[0, 1\], got 1\.5/,
+    );
+  });
+
+  it('rejects unknown keys — a typo must not silently fall back to builtin tolerances', () => {
+    expect(() => loadGateConfig(JSON.stringify({ tolerence: { pass_rate: 0 } }), FILE)).toThrow(
+      /invalid gate config .*gate\.json: unknown key "tolerence"/,
+    );
+  });
+
+  it('rejects a wrong schema const and a non-record tolerances', () => {
+    expect(() => loadGateConfig(JSON.stringify({ schema: 'acp-eval-gate/v2' }), FILE)).toThrow(
+      /schema must be "acp-eval-gate\/v1"/,
+    );
+    expect(() => loadGateConfig(JSON.stringify({ tolerances: [0.05] }), FILE)).toThrow(
+      /tolerances must be an object mapping metric names to numbers/,
+    );
   });
 });
 

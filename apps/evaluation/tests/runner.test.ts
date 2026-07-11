@@ -67,7 +67,13 @@ function makeDeps(options: {
     readFile: (path: string) => {
       const normalized = path.replaceAll('\\', '/');
       const content = files.get(normalized);
-      if (content === undefined) throw new Error(`ENOENT: ${normalized}`);
+      if (content === undefined) {
+        // Mirror fs.readFileSync: missing files carry code ENOENT — the
+        // runner treats ONLY that as "optional file absent".
+        const err = new Error(`ENOENT: no such file, open '${normalized}'`);
+        (err as NodeJS.ErrnoException).code = 'ENOENT';
+        throw err;
+      }
       return content;
     },
   };
@@ -131,6 +137,33 @@ describe('runAgent', () => {
     const result = await runAgent(ENTRY, deps);
     expect(result.ok).toBe(false);
     expect(result.violations).toEqual(['pass_rate 0.9999 < baseline 1.0000 − tolerance 0']);
+  });
+
+  it('fails loudly on a malformed gate.json instead of silently using builtin tolerances', async () => {
+    const deps = makeDeps({
+      files: {
+        [BASELINE_PATH]: JSON.stringify(baseline()),
+        [GATE_PATH]: '{ "default_tolerance": 0,', // truncated JSON
+      },
+      // A run that a zero-tolerance gate.json would reject but the builtin
+      // 0.05 pass_rate tolerance would wave through — the exact silent
+      // downgrade a swallowed parse error used to cause.
+      emitted: report({
+        metrics: { pass_rate: 0.9999, citation_precision: 1, abstention_accuracy: 1 },
+      }),
+    });
+    await expect(runAgent(ENTRY, deps)).rejects.toThrow(/invalid gate config .*gate\.json/);
+  });
+
+  it('fails loudly on a shape-invalid gate.json', async () => {
+    const deps = makeDeps({
+      files: {
+        [BASELINE_PATH]: JSON.stringify(baseline()),
+        [GATE_PATH]: JSON.stringify({ tolerances: { pass_rate: '0.05' } }),
+      },
+      emitted: report(),
+    });
+    await expect(runAgent(ENTRY, deps)).rejects.toThrow(/invalid gate config .*gate\.json/);
   });
 
   it('reports a failing emitter with its exit code and stderr', async () => {

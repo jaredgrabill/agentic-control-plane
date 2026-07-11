@@ -7,7 +7,7 @@
 
 import { join } from 'node:path';
 import { evalBaseline, evalReport } from '@acp/protocol';
-import { applyGate, type GateConfig, type GateResult } from './gate.js';
+import { applyGate, loadGateConfig, type GateResult } from './gate.js';
 import { loadManifest, type AgentEvalEntry } from './manifest.js';
 
 export type Exec = (argv: string[], cwd: string) => Promise<{ code: number; stderr: string }>;
@@ -43,12 +43,16 @@ export async function runAgent(entry: AgentEvalEntry, deps: RunDeps): Promise<Ga
   const report = evalReport.parse(JSON.parse(deps.readFile(outPath)));
 
   const gatePath = join(deps.repoRoot, entry.dir, 'evals', 'gate.json');
-  let config: GateConfig | undefined;
+  let gateText: string | undefined;
   try {
-    config = JSON.parse(deps.readFile(gatePath)) as GateConfig;
-  } catch {
-    // gate.json is optional; builtin tolerances apply.
+    gateText = deps.readFile(gatePath);
+  } catch (err) {
+    // ONLY a missing file means "no config, builtin tolerances". Any other
+    // failure (unreadable, unparseable, bad shape) must fail the run loudly:
+    // swallowing it would silently downgrade a zero-tolerance agent.
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
   }
+  const config = gateText === undefined ? undefined : loadGateConfig(gateText, gatePath);
   return applyGate(baseline, report, config);
 }
 
