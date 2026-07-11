@@ -1,0 +1,147 @@
+from typing import Any
+
+import pytest
+from acp_agent_sdk import Agent, CapabilityContext, CapabilityError, ErrorClass, FakeModel
+from temporalio.exceptions import ApplicationError
+
+from .conftest import MANIFEST, step_request
+
+
+def good_output(text: str = "hello [1]") -> dict[str, Any]:
+    return {"text": text, "citations": [], "confidence": 0.9}
+
+
+class TestRegistration:
+    def test_rejects_undeclared_capability(self, agent: Agent) -> None:
+        with pytest.raises(ValueError, match="not declared in the manifest"):
+
+            @agent.capability("test.undeclared")
+            async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+                return good_output()
+
+    def test_rejects_duplicate_handlers(self, agent: Agent) -> None:
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            return good_output()
+
+        with pytest.raises(ValueError, match="already has a handler"):
+            agent.capability("test.echo")(handler)
+
+    def test_assert_complete_names_missing_handlers(self, agent: Agent) -> None:
+        with pytest.raises(RuntimeError, match="test.echo"):
+            agent.assert_complete()
+
+    def test_manifest_validation_fails_loudly(self) -> None:
+        from acp_protocol import ProtocolValidationError
+
+        bad = dict(MANIFEST)
+        del bad["owner"]
+        import tempfile
+        from pathlib import Path
+
+        import yaml
+
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "manifest.yaml"
+            path.write_text(yaml.safe_dump(bad), encoding="utf-8")
+            with pytest.raises(ProtocolValidationError):
+                Agent.from_manifest(path)
+
+
+class TestExecute:
+    async def test_happy_path_returns_completed_step_result(self, agent: Agent) -> None:
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            assert ctx.tenant == "acme"
+            assert ctx.capability == "test.echo"
+            return good_output(f"echo: {input['text']}")
+
+        result = await agent.execute(step_request())
+        assert result["status"] == "completed"
+        assert result["output"]["text"] == "echo: hello"
+        assert result["kind"] == "step_result"
+        assert result["usage"] == {"llm_calls": 0, "input_tokens": 0, "output_tokens": 0}
+
+    async def test_malformed_step_request_is_non_retryable(self, agent: Agent) -> None:
+        with pytest.raises(ApplicationError) as err:
+            await agent.execute({"kind": "step_request"})
+        assert err.value.non_retryable
+
+    async def test_missing_handler_fails_typed(self, agent: Agent) -> None:
+        result = await agent.execute(step_request())
+        assert result["status"] == "failed"
+        assert result["error"]["class"] == "permanent"
+        assert "no handler" in result["error"]["message"]
+
+    async def test_output_schema_repair_retry_then_success(self, agent: Agent) -> None:
+        calls = {"n": 0}
+
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {"wrong": "shape"}
+            return good_output()
+
+        result = await agent.execute(step_request())
+        assert result["status"] == "completed"
+        assert calls["n"] == 2
+
+    async def test_output_schema_failure_after_repair_is_typed_permanent(
+        self, agent: Agent
+    ) -> None:
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            return {"wrong": "shape"}
+
+        result = await agent.execute(step_request())
+        assert result["status"] == "failed"
+        assert result["error"]["class"] == "permanent"
+        assert "output_schema" in result["error"]["message"]
+
+    async def test_needs_input_is_a_definitive_step_outcome(self, agent: Agent) -> None:
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            raise CapabilityError(ErrorClass.NEEDS_INPUT, "which policy do you mean?")
+
+        result = await agent.execute(step_request())
+        assert result["status"] == "failed"
+        assert result["error"]["class"] == "needs_input"
+
+    async def test_retryable_errors_surface_as_retryable_activity_failures(
+        self, agent: Agent
+    ) -> None:
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            raise CapabilityError(ErrorClass.RETRYABLE, "provider 429")
+
+        with pytest.raises(ApplicationError) as err:
+            await agent.execute(step_request())
+        assert not err.value.non_retryable
+
+    async def test_usage_counts_model_calls(self) -> None:
+        agent = Agent(manifest=MANIFEST, model=FakeModel(script=["one", "two"]))
+
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            await ctx.model.complete("first")
+            await ctx.model.complete("second")
+            return good_output()
+
+        result = await agent.execute(step_request())
+        assert result["usage"]["llm_calls"] == 2
+        assert result["usage"]["output_tokens"] > 0
+
+    async def test_retrieval_requires_configuration_and_token(self, agent: Agent) -> None:
+        captured: dict[str, Any] = {}
+
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            try:
+                await ctx.retrieve("q")
+            except RuntimeError as err:
+                captured["error"] = str(err)
+            return good_output()
+
+        await agent.execute(step_request())
+        assert "no retriever configured" in captured["error"]
