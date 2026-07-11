@@ -8,6 +8,7 @@ from typing import Any
 
 import pytest
 from acp_protocol import ProtocolValidationError, validate, validation_errors
+from acp_protocol.generated.agent_card import AgentCard
 from acp_protocol.generated.agent_manifest import AgentManifest
 from acp_protocol.generated.audit_event import AuditEvent
 from acp_protocol.generated.task_contract import TaskMessage
@@ -17,6 +18,7 @@ FIXTURES = Path(__file__).resolve().parents[3] / "packages" / "protocol" / "fixt
 
 MODELS: dict[str, type[BaseModel]] = {
     "agent-manifest": AgentManifest,
+    "agent-card": AgentCard,
     "task-contract": TaskMessage,
     "audit-event": AuditEvent,
 }
