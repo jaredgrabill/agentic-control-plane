@@ -66,6 +66,33 @@ export class JwtVerifier {
     }
     return assertPlatformClaims(payload);
   }
+
+  /**
+   * Like verify(), but the audience is checked against a caller-supplied
+   * predicate instead of a single expected value — for PEPs that accept a
+   * family of audiences (the tool gateway takes `acp:tools` or any
+   * `acp:agent:{id}`). The token must carry exactly one string audience;
+   * multi-audience tokens are refused because a predicate over an array
+   * would silently widen what the token is good for.
+   */
+  async verifyWithAudience(
+    token: string,
+    accept: (aud: string) => boolean,
+    description: string,
+  ): Promise<PlatformClaims> {
+    let payload: JWTPayload;
+    try {
+      ({ payload } = await jwtVerify(token, this.keySet, { issuer: this.issuer }));
+    } catch (err) {
+      throw new AuthError(
+        `token verification failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    if (typeof payload.aud !== 'string' || !accept(payload.aud)) {
+      throw new AuthError(`token audience not accepted: ${description}`, 401);
+    }
+    return assertPlatformClaims(payload);
+  }
 }
 
 export function assertPlatformClaims(payload: JWTPayload): PlatformClaims {
