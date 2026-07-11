@@ -101,6 +101,48 @@
       }
     },
     {
+      "name": "tenant user delegates R0 cloud capabilities to the cloud agent",
+      "expect": "allow",
+      "determined_by": "allow-r0-delegation",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "cloud-agent", "attrs": { "tenant": "acme" } },
+        "context": {
+          "risk": "R0",
+          "scopes": ["task:submit", "cloud:inventory:read", "cloud:cost:read"]
+        }
+      }
+    },
+    {
+      "name": "tenant user delegates R0 code capabilities to the code agent",
+      "expect": "allow",
+      "determined_by": "allow-r0-delegation",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "code-agent", "attrs": { "tenant": "acme" } },
+        "context": {
+          "risk": "R0",
+          "scopes": ["task:submit", "code:repo:read", "code:ci:read"]
+        }
+      }
+    },
+    {
+      "name": "agent-to-tool calls have no permit yet — Item 5's gateway flips this consciously",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "cloud.inventory_query",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": { "tenant": "acme" } },
+        "context": { "scopes": ["cloud:inventory:read"] }
+      }
+    },
+    {
       "name": "an unmodeled action falls to default deny",
       "expect": "deny",
       "request": {
