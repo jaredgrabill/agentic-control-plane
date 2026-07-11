@@ -34,6 +34,8 @@ function render(c: RenderCase): string {
       return subjects.registry(a.agent_id!, a.verb! as never);
     case 'control':
       return subjects.control(a.verb! as never);
+    case 'svc':
+      return subjects.svc(a.service! as never, a.method!);
     default:
       throw new Error(`fixture names unknown entity ${c.entity}`);
   }

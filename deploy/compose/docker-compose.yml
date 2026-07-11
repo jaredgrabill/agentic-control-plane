@@ -1,0 +1,99 @@
+name: acp-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: ${ACP_PG_USER:-acp}
+      POSTGRES_PASSWORD: ${ACP_PG_PASSWORD:-acp-dev-password}
+      POSTGRES_DB: acp
+    command: ['postgres', '-c', 'max_connections=200']
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d acp']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  nats:
+    image: nats:2.11-alpine
+    command: ['-c', '/etc/nats/nats-server.conf']
+    environment:
+      ACP_NATS_SYS_PASSWORD: ${ACP_NATS_SYS_PASSWORD:-sys-dev-password}
+      ACP_NATS_GATEWAY_PASSWORD: ${ACP_NATS_GATEWAY_PASSWORD:-gateway-dev-password}
+      ACP_NATS_ORCHESTRATOR_PASSWORD: ${ACP_NATS_ORCHESTRATOR_PASSWORD:-orchestrator-dev-password}
+      ACP_NATS_REGISTRY_PASSWORD: ${ACP_NATS_REGISTRY_PASSWORD:-registry-dev-password}
+      ACP_NATS_POLICY_PASSWORD: ${ACP_NATS_POLICY_PASSWORD:-policy-dev-password}
+      ACP_NATS_AUDIT_PASSWORD: ${ACP_NATS_AUDIT_PASSWORD:-audit-dev-password}
+      ACP_NATS_KNOWLEDGE_PASSWORD: ${ACP_NATS_KNOWLEDGE_PASSWORD:-knowledge-dev-password}
+      ACP_NATS_TOKEN_PASSWORD: ${ACP_NATS_TOKEN_PASSWORD:-token-dev-password}
+      ACP_NATS_AGENT_KNOWLEDGE_PASSWORD: ${ACP_NATS_AGENT_KNOWLEDGE_PASSWORD:-agent-knowledge-dev-password}
+    ports:
+      - '4222:4222'
+      - '8222:8222'
+    volumes:
+      - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+      - natsdata:/data/jetstream
+    healthcheck:
+      test: ['CMD', 'wget', '-q', '-O-', 'http://localhost:8222/healthz']
+      interval: 3s
+      timeout: 3s
+      retries: 30
+
+  temporal:
+    image: temporalio/auto-setup:1.27
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: '5432'
+      POSTGRES_USER: ${ACP_PG_USER:-acp}
+      POSTGRES_PWD: ${ACP_PG_PASSWORD:-acp-dev-password}
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    ports:
+      - '7233:7233'
+    volumes:
+      - ./temporal/dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+    # No container healthcheck: the auto-setup image has no reliable probe
+    # binary. deploy/compose/wait-for-stack.sh gates readiness from the host.
+
+  temporal-ui:
+    image: temporalio/ui:2.34.0
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - '8233:8080'
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: 'true'
+    ports:
+      - '16686:16686'
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.116.1
+    command: ['--config=/etc/otelcol/config.yaml']
+    depends_on:
+      - jaeger
+    volumes:
+      - ./otel/collector-config.yaml:/etc/otelcol/config.yaml:ro
+    ports:
+      - '4317:4317'
+      - '4318:4318'
+      - '13133:13133'
+    # Distroless image — no shell for a container healthcheck; the health
+    # extension on :13133 is probed from the host by wait-for-stack.sh.
+
+volumes:
+  pgdata:
+  natsdata:

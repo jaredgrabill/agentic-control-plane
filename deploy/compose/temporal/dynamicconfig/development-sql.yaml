@@ -1,0 +1,5 @@
+# Temporal dynamic config for the dev stack. Deliberately near-empty: the
+# auto-setup defaults are correct for local development.
+limit.maxIDLength:
+  - value: 255
+    constraints: {}

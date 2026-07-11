@@ -27,6 +27,7 @@ _RENDERERS: dict[str, Callable[..., str]] = {
     "telemetry": subjects.telemetry,
     "registry": subjects.registry,
     "control": subjects.control,
+    "svc": subjects.svc,
 }
 
 

@@ -1,0 +1,101 @@
+{
+  "tenant": "acme",
+  "sources": [
+    {
+      "source_id": "policy-docs",
+      "name": "Acme Policy Library",
+      "owner": "team-grc",
+      "trust": "high",
+      "documents": [
+        {
+          "doc_id": "policy/change-management",
+          "title": "Change Management Policy",
+          "path": "docs/policies/change-management.md",
+          "version": "3.2.0",
+          "effective_date": "2026-01-15",
+          "classification": "internal",
+          "url": "https://docs.acme.example/policy/change-management"
+        },
+        {
+          "doc_id": "policy/information-security",
+          "title": "Information Security Policy",
+          "path": "docs/policies/information-security.md",
+          "version": "5.0.1",
+          "effective_date": "2025-11-01",
+          "classification": "internal",
+          "url": "https://docs.acme.example/policy/information-security"
+        },
+        {
+          "doc_id": "policy/data-retention",
+          "title": "Data Retention and Disposal Policy",
+          "path": "docs/policies/data-retention.md",
+          "version": "2.4.0",
+          "effective_date": "2026-03-01",
+          "classification": "internal",
+          "url": "https://docs.acme.example/policy/data-retention"
+        },
+        {
+          "doc_id": "policy/access-control",
+          "title": "Access Control Policy",
+          "path": "docs/policies/access-control.md",
+          "version": "4.1.0",
+          "effective_date": "2026-02-10",
+          "classification": "confidential",
+          "url": "https://docs.acme.example/policy/access-control"
+        }
+      ]
+    },
+    {
+      "source_id": "eng-standards",
+      "name": "Engineering Standards",
+      "owner": "team-platform-eng",
+      "trust": "high",
+      "documents": [
+        {
+          "doc_id": "standard/tls-configuration",
+          "title": "TLS Configuration Standard",
+          "path": "docs/standards/tls-configuration.md",
+          "version": "1.6.0",
+          "effective_date": "2026-04-20",
+          "classification": "internal",
+          "url": "https://docs.acme.example/standard/tls-configuration"
+        },
+        {
+          "doc_id": "standard/deployment-helm",
+          "title": "Helm Deployment Standard",
+          "path": "docs/standards/deployment-helm.md",
+          "version": "2.1.0",
+          "effective_date": "2026-05-02",
+          "classification": "internal",
+          "url": "https://docs.acme.example/standard/deployment-helm"
+        }
+      ]
+    },
+    {
+      "source_id": "runbooks",
+      "name": "Operations Runbooks",
+      "owner": "team-sre",
+      "trust": "high",
+      "documents": [
+        {
+          "doc_id": "runbook/payments-incident",
+          "title": "Payments Service Incident Runbook",
+          "path": "docs/runbooks/payments-incident.md",
+          "version": "1.9.0",
+          "effective_date": "2026-06-11",
+          "classification": "internal",
+          "url": "https://docs.acme.example/runbook/payments-incident"
+        },
+        {
+          "doc_id": "runbook/oncall-escalation",
+          "title": "On-Call Escalation Runbook",
+          "path": "docs/runbooks/oncall-escalation.md",
+          "version": "3.0.0",
+          "effective_date": "2026-01-05",
+          "classification": "internal",
+          "url": "https://docs.acme.example/runbook/oncall-escalation"
+        }
+      ]
+    }
+  ]
+}
