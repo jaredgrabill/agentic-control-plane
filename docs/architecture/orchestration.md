@@ -38,6 +38,14 @@ Known task shapes (the acceptance scenarios in [domains.md](../domains.md))
 skip LLM planning entirely: they are code-defined workflows with LLM decision
 points only inside bounded nodes.
 
+> **Status:** v1 implemented with a deterministic rule planner
+> (`rule-planner@1`): typed `Plan` artifact recorded as `task.planned`,
+> dependency-wave fan-out with per-step dispatch-time discovery and brokered
+> tokens (ADR-0007), budget ledger (`max_steps`/`max_tokens` gate dispatch),
+> honest partial results with gaps. Flat plans only — no nesting, no
+> mid-course replanning. The LLM planner swaps in behind the same schema
+> validation once the LLM gateway lands.
+
 **Agent loop as workflow.** An agent turn = LLM activity + tool activities in
 a loop, with the workflow owning the loop counter, token budget, and
 step cap. Completed activity results persist in workflow history, so a
