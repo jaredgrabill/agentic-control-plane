@@ -13,3 +13,10 @@ export {
 } from './auth.js';
 export { AuditPublisher, connectBus, openKv, type BusOptions } from './nats.js';
 export { createHttpServer, type HttpServerOptions } from './http.js';
+export {
+  CONTROL_BUCKET,
+  KillSwitchControl,
+  KillSwitchWatcher,
+  type KillSwitchState,
+} from './killswitch.js';
+export { sha256Digest } from './digest.js';
