@@ -73,6 +73,37 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)
 
+  apps/policy:
+    dependencies:
+      '@acp/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@acp/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      '@cedar-policy/cedar-wasm':
+        specifier: ^4.11.2
+        version: 4.11.2
+      fastify:
+        specifier: ^5.4.0
+        version: 5.10.0
+      nats:
+        specifier: ^2.29.3
+        version: 2.29.3
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1))
+      jose:
+        specifier: ^6.0.11
+        version: 6.2.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)
+
   apps/registry:
     dependencies:
       '@acp/protocol':
@@ -231,6 +262,9 @@ packages:
   '@bcoe/v8-coverage@1.0.2':
     resolution: {integrity: sha512-6zABk/ECA/QYSCQ1NGiVwwbQerUCZ+TQbp64Q3AgmfNvurHH0j8TtXa1qbShXA6qqkpAj4V5W8pP6mLe1mcMqA==}
     engines: {node: '>=18'}
+
+  '@cedar-policy/cedar-wasm@4.11.2':
+    resolution: {integrity: sha512-WirTj7pAQnP2fRAuJ5OLIl4VmQiUiyGgHku+eNTSXm9LJHMU/v14vHz6nEcxAQjR6oXtm21zRsHEBIbWP9TJ5A==}
 
   '@commitlint/cli@19.8.1':
     resolution: {integrity: sha512-LXUdNIkspyxrlV6VDHWBmCZRtkEVRpBKxi2Gtw3J54cGWhLCTouVD/Q6ZSaSvd2YaDObWK8mDjrz3TIKtaQMAA==}
@@ -2152,6 +2186,8 @@ snapshots:
       '@babel/helper-validator-identifier': 7.29.7
 
   '@bcoe/v8-coverage@1.0.2': {}
+
+  '@cedar-policy/cedar-wasm@4.11.2': {}
 
   '@commitlint/cli@19.8.1(@types/node@22.20.1)(typescript@5.9.3)':
     dependencies:
