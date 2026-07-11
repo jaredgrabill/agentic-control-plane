@@ -6,6 +6,7 @@ import {
   type Logger,
 } from '@acp/service-kit';
 import type { FastifyInstance } from 'fastify';
+import { registerMcpDoor } from './mcp.js';
 import { KNOWLEDGE_AUDIENCE, type SearchRequest, type SearchService } from './search.js';
 
 export interface IngestStarter {
@@ -49,6 +50,11 @@ export function buildKnowledgeApp(deps: KnowledgeAppDeps): FastifyInstance {
     }
     return deps.ingest.ingestSource(body.source_id);
   });
+
+  // The MCP door (third transport): knowledge_search over the same
+  // SearchService — the Tool Gateway forwards IDE-shaped and agent calls
+  // here with a brokered acp:knowledge token.
+  registerMcpDoor(app, { search: deps.search, logger: deps.logger });
 
   return app;
 }

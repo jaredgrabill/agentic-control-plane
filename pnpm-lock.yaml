@@ -190,6 +190,12 @@ importers:
       '@acp/service-kit':
         specifier: workspace:*
         version: link:../../packages/service-kit
+      '@acp/tool-client':
+        specifier: workspace:*
+        version: link:../../packages/tool-client
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@3.25.76)
       '@opentelemetry/api':
         specifier: ^1.9.1
         version: 1.9.1
