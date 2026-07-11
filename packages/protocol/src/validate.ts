@@ -4,7 +4,13 @@ import addFormatsImport from 'ajv-formats';
 // ajv-formats ships CJS; at runtime the ESM default import IS the plugin
 // function, but its types describe the module namespace. Narrow accordingly.
 const addFormats = addFormatsImport as unknown as typeof addFormatsImport.default;
-import { agentManifestSchema, auditEventSchema, taskContractSchema } from './generated/schemas.js';
+import {
+  agentCardSchema,
+  agentManifestSchema,
+  auditEventSchema,
+  taskContractSchema,
+} from './generated/schemas.js';
+import type { AgentCard } from './generated/agent-card.js';
 import type { AgentManifest } from './generated/agent-manifest.js';
 import type { AuditEvent } from './generated/audit-event.js';
 import type {
@@ -18,6 +24,7 @@ import type {
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 addFormats(ajv);
 ajv.addSchema(agentManifestSchema);
+ajv.addSchema(agentCardSchema);
 ajv.addSchema(taskContractSchema);
 ajv.addSchema(auditEventSchema);
 
@@ -63,6 +70,7 @@ function makeParser<T>(ref: string): {
 const BASE = 'https://acp.dev/schemas/v1';
 
 export const agentManifest = makeParser<AgentManifest>(`${BASE}/agent-manifest.schema.json`);
+export const agentCard = makeParser<AgentCard>(`${BASE}/agent-card.schema.json`);
 export const auditEvent = makeParser<AuditEvent>(`${BASE}/audit-event.schema.json`);
 export const taskMessage = makeParser<TaskMessage>(`${BASE}/task-contract.schema.json`);
 export const taskRequest = makeParser<TaskRequest>(

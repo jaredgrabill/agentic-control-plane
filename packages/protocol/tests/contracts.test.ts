@@ -1,13 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { agentManifest, auditEvent, taskMessage, ProtocolValidationError } from '../src/index.js';
+import {
+  agentCard,
+  agentManifest,
+  auditEvent,
+  taskMessage,
+  ProtocolValidationError,
+} from '../src/index.js';
 
 const fixturesDir = join(import.meta.dirname, '..', 'fixtures');
 
 interface Case {
   file: string;
-  schema: 'agent-manifest' | 'task-contract' | 'audit-event';
+  schema: 'agent-manifest' | 'agent-card' | 'task-contract' | 'audit-event';
   valid: boolean;
 }
 const { cases } = JSON.parse(readFileSync(join(fixturesDir, 'expectations.json'), 'utf8')) as {
@@ -16,6 +22,7 @@ const { cases } = JSON.parse(readFileSync(join(fixturesDir, 'expectations.json')
 
 const parsers = {
   'agent-manifest': agentManifest,
+  'agent-card': agentCard,
   'task-contract': taskMessage,
   'audit-event': auditEvent,
 } as const;

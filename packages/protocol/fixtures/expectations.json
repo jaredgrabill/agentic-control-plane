@@ -27,6 +27,9 @@
       "schema": "agent-manifest",
       "valid": false
     },
+    { "file": "agent-card/valid-registered.json", "schema": "agent-card", "valid": true },
+    { "file": "agent-card/invalid-unknown-state.json", "schema": "agent-card", "valid": false },
+    { "file": "agent-card/invalid-unsigned.json", "schema": "agent-card", "valid": false },
     { "file": "task-contract/valid-task-request.json", "schema": "task-contract", "valid": true },
     {
       "file": "task-contract/valid-task-result-partial.json",

@@ -3,6 +3,7 @@ export { subjects } from './subjects.js';
 export type { TaskVerb, AgentVerb, RegistryVerb, ControlVerb, SvcName } from './subjects.js';
 export {
   ProtocolValidationError,
+  agentCard,
   agentManifest,
   auditEvent,
   taskMessage,
