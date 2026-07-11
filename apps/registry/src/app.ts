@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto';
 import {
   agentCard,
   agentManifest,
+  evalBaseline,
   ProtocolValidationError,
   type AgentCard,
   type AgentManifest,
   type AuditEvent,
+  type EvalBaseline,
   type LifecycleState,
 } from '@acp/protocol';
 import {
@@ -179,6 +181,55 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
         { tier: 'agent', agent_id, reason: body.reason ?? null },
       );
     }
+    return reply.send(updated);
+  });
+
+  app.put('/v1/agents/:agent_id/baseline', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:write');
+    const { agent_id } = request.params as { agent_id: string };
+
+    const card = await deps.store.get(agent_id);
+    if (card === undefined) {
+      return reply
+        .status(404)
+        .send({ error: { message: `no agent registered with id ${agent_id}`, status: 404 } });
+    }
+
+    let baseline: EvalBaseline;
+    try {
+      baseline = evalBaseline.parse(request.body);
+    } catch (err) {
+      if (err instanceof ProtocolValidationError) throw new AuthError(err.message, 400);
+      throw err;
+    }
+    if (baseline.agent_id !== agent_id) {
+      throw new AuthError(`baseline agent_id ${baseline.agent_id} does not match ${agent_id}`, 400);
+    }
+    if (baseline.agent_version !== card.version) {
+      throw new AuthError(
+        `baseline is for version ${baseline.agent_version} but the registered card is ` +
+          `${card.version} — re-run the suite against the registered contract`,
+        409,
+      );
+    }
+
+    // Merge in the app layer: the store replaces whole cards, and the
+    // signature covers {manifest, version, registered_at} only, so the
+    // baseline never invalidates it. Last-writer-wins is acceptable in v0 —
+    // CI is the sole writer.
+    const updated: AgentCard = {
+      ...card,
+      eval_baseline: baseline,
+      updated_at: now().toISOString(),
+    };
+    await deps.store.put(updated);
+    await deps.announcer.announce('updated', updated);
+    await emitAudit(deps, claims, 'agent.baseline_recorded', updated, {
+      agent_version: baseline.agent_version,
+      suite_digest: baseline.suite.digest,
+      metrics: baseline.metrics,
+    });
     return reply.send(updated);
   });
 

@@ -3,6 +3,7 @@ import type {
   AgentManifest,
   AuditEvent,
   Capability,
+  EvalBaseline,
   LifecycleState,
 } from '@acp/protocol';
 import { JwtVerifier, createLogger } from '@acp/service-kit';
@@ -321,6 +322,108 @@ describe('lifecycle transitions', () => {
   it('404s on unknown agents', async () => {
     const res = await transition('ghost-agent', 'active');
     expect(res.statusCode).toBe(404);
+  });
+});
+
+describe('baseline recording', () => {
+  function baseline(overrides: Partial<EvalBaseline> = {}): EvalBaseline {
+    return {
+      schema: 'acp-eval-baseline/v1',
+      agent_id: 'knowledge-agent',
+      agent_version: '0.1.0',
+      metrics: { pass_rate: 1, citation_precision: 1, abstention_accuracy: 1 },
+      suite: {
+        digest: `sha256:${'0'.repeat(64)}`,
+        case_count: 7,
+      },
+      harness: 'acp-agent-sdk-py@0.1.0',
+      recorded_at: '2026-07-11T09:00:00Z',
+      ...overrides,
+    };
+  }
+
+  async function putBaseline(agentId: string, body: unknown, scope = 'registry:write') {
+    return app.inject({
+      method: 'PUT',
+      url: `/v1/agents/${agentId}/baseline`,
+      headers: { authorization: `Bearer ${await makeToken(scope)}` },
+      payload: body as Record<string, unknown>,
+    });
+  }
+
+  beforeEach(async () => {
+    await register({ manifest: manifest(), version: '0.1.0' });
+    announcements.length = 0;
+    auditEvents.length = 0;
+  });
+
+  it('records the baseline on the card, announces, and audits', async () => {
+    const before = store.cards.get('knowledge-agent')!;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    const res = await putBaseline('knowledge-agent', baseline());
+    expect(res.statusCode).toBe(200);
+    const card = res.json<AgentCard>();
+    expect(card.eval_baseline).toEqual(baseline());
+    expect(card.lifecycle_state).toBe(before.lifecycle_state);
+    expect(card.card_signature).toBe(before.card_signature);
+    expect(Date.parse(card.updated_at)).toBeGreaterThan(Date.parse(before.updated_at));
+    expect(store.cards.get('knowledge-agent')?.eval_baseline).toEqual(baseline());
+
+    expect(announcements.map((a) => a.verb)).toEqual(['updated']);
+    expect(auditEvents.map((e) => e.event_type)).toEqual(['agent.baseline_recorded']);
+    const details = auditEvents[0]!.details as {
+      agent_version: string;
+      suite_digest: string;
+      metrics: Record<string, number>;
+    };
+    expect(details.agent_version).toBe('0.1.0');
+    expect(details.suite_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(details.metrics.pass_rate).toBe(1);
+  });
+
+  it('overwrites idempotently: the last recorded baseline wins', async () => {
+    await putBaseline('knowledge-agent', baseline());
+    const res = await putBaseline(
+      'knowledge-agent',
+      baseline({ metrics: { pass_rate: 0.9, citation_precision: 1, abstention_accuracy: 1 } }),
+    );
+    expect(res.statusCode).toBe(200);
+    expect(store.cards.get('knowledge-agent')?.eval_baseline?.metrics.pass_rate).toBe(0.9);
+  });
+
+  it('404s on unknown agents', async () => {
+    const res = await putBaseline('ghost-agent', baseline({ agent_id: 'ghost-agent' }));
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('rejects schema-invalid baselines with the violation named', async () => {
+    const { suite: _suite, ...missingSuite } = baseline();
+    const res = await putBaseline('knowledge-agent', missingSuite);
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: { message: string } }>().error.message).toContain('eval_baseline');
+  });
+
+  it('rejects a baseline recorded for a different agent', async () => {
+    const res = await putBaseline('knowledge-agent', baseline({ agent_id: 'other-agent' }));
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: { message: string } }>().error.message).toBe(
+      'baseline agent_id other-agent does not match knowledge-agent',
+    );
+  });
+
+  it('409s when the baseline version does not match the registered card', async () => {
+    const res = await putBaseline('knowledge-agent', baseline({ agent_version: '0.2.0' }));
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ error: { message: string } }>().error.message).toBe(
+      'baseline is for version 0.2.0 but the registered card is 0.1.0 — re-run the suite ' +
+        'against the registered contract',
+    );
+  });
+
+  it('requires the registry:write scope', async () => {
+    const res = await putBaseline('knowledge-agent', baseline(), 'registry:read');
+    expect(res.statusCode).toBe(403);
   });
 });
 
