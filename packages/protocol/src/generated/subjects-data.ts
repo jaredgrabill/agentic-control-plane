@@ -45,6 +45,17 @@ export const subjectsData = {
         "updated"
       ]
     },
+    "svc": {
+      "template": "acp.platform.svc.{service}.{method}",
+      "verbs": [],
+      "services": [
+        "token",
+        "registry",
+        "policy",
+        "knowledge",
+        "audit"
+      ]
+    },
     "control": {
       "template": "acp.platform.control.{verb}",
       "verbs": [
