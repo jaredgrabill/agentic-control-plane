@@ -129,13 +129,29 @@ describe('cloud.inventory_query', () => {
     expect(output.confidence).toBe(0.9);
     expect(output.abstained).toBeUndefined();
     expect(step.usage?.llm_calls).toBe(0);
-    expect(tools.calls).toEqual([
-      {
-        server: 'cloud-estate',
-        tool: 'inventory_search',
-        args: { service: 'payments-api', env: 'prod' },
-      },
-    ]);
+    expect(tools.calls).toHaveLength(1);
+    expect(tools.calls[0]).toMatchObject({
+      server: 'cloud-estate',
+      tool: 'inventory_search',
+      args: { service: 'payments-api', env: 'prod' },
+    });
+  });
+
+  it('forwards the delegated token and correlation ids on every tool call', async () => {
+    const tools = new FakeToolClient({
+      'cloud-estate.inventory_search': () => inventoryResponse(),
+    });
+    const request = {
+      ...stepRequest('cloud.inventory_query', { env: 'prod' }),
+      delegated_token: 'delegated-jwt-123',
+    };
+    const step = await buildAgent(tools).execute(request);
+    expect(step.status).toBe('completed');
+    expect(tools.calls[0]!.options).toEqual({
+      delegatedToken: 'delegated-jwt-123',
+      taskId: request.task_id,
+      stepId: request.step_id,
+    });
   });
 
   it('states an empty result confidently with the citation', async () => {
@@ -253,6 +269,8 @@ describe('cloud.cost_analysis', () => {
     expect(output.citations).toEqual([COST_PROV, INVENTORY_PROV]);
     expect(tools.calls.map((c) => c.tool)).toEqual(['cost_report', 'inventory_search']);
     expect(tools.calls[1]!.args).toEqual({ service: 'payments-api', env: 'prod' });
+    // The second, follow-up call carries the same delegated identity.
+    expect(tools.calls[1]!.options).toEqual(tools.calls[0]!.options);
     expect(output.confidence).toBe(0.9);
   });
 

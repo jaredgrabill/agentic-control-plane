@@ -6,7 +6,7 @@
 
 import { CapabilityError, ErrorClass, type Agent } from '@acp/agent-sdk';
 import type { ToolClient } from '@acp/tool-client';
-import { CODE_FORGE, primaryProvenance } from '../tools.js';
+import { callOptions, CODE_FORGE, primaryProvenance } from '../tools.js';
 import { requireRepo } from './dependency-query.js';
 
 const DEFAULT_WINDOW_DAYS = 14;
@@ -56,7 +56,7 @@ export function ciStats(runs: CiRun[]): {
 }
 
 export function registerCiHealth(agent: Agent, tools: ToolClient): void {
-  agent.capability('code.ci_health', async (_ctx, rawInput) => {
+  agent.capability('code.ci_health', async (ctx, rawInput) => {
     const input = rawInput as CiHealthInput;
     const repo = requireRepo(input);
     const windowDays = input.window_days ?? DEFAULT_WINDOW_DAYS;
@@ -67,7 +67,7 @@ export function registerCiHealth(agent: Agent, tools: ToolClient): void {
       );
     }
 
-    const response = await tools.call(CODE_FORGE, 'ci_runs', { repo });
+    const response = await tools.call(CODE_FORGE, 'ci_runs', { repo }, callOptions(ctx));
     const data = response.data as { repo: string; as_of: string; runs: CiRun[] };
     const since = windowStart(data.as_of, windowDays);
     const windowed = data.runs.filter((r) => r.finished_at.slice(0, 10) >= since);

@@ -14,8 +14,8 @@
  */
 
 import { CapabilityError, ErrorClass, type Agent } from '@acp/agent-sdk';
-import type { ToolClient, ToolResponse } from '@acp/tool-client';
-import { CLOUD_ESTATE, primaryProvenance } from '../tools.js';
+import type { CallOptions, ToolClient, ToolResponse } from '@acp/tool-client';
+import { callOptions, CLOUD_ESTATE, primaryProvenance } from '../tools.js';
 import { formatMoney } from './inventory-query.js';
 
 const DEFAULT_THRESHOLD_PCT = 20;
@@ -86,7 +86,7 @@ function signedPct(value: number): string {
 }
 
 export function registerCostAnalysis(agent: Agent, tools: ToolClient): void {
-  agent.capability('cloud.cost_analysis', async (_ctx, rawInput) => {
+  agent.capability('cloud.cost_analysis', async (ctx, rawInput) => {
     const input = rawInput as CostAnalysisInput;
     if (input.period !== undefined) {
       if (typeof input.period.start !== 'string' || typeof input.period.end !== 'string') {
@@ -110,10 +110,15 @@ export function registerCostAnalysis(agent: Agent, tools: ToolClient): void {
       );
     }
 
-    const report = await tools.call(CLOUD_ESTATE, 'cost_report', {
-      ...(input.service !== undefined ? { service: input.service } : {}),
-      ...(input.period !== undefined ? { start: input.period.start, end: input.period.end } : {}),
-    });
+    const report = await tools.call(
+      CLOUD_ESTATE,
+      'cost_report',
+      {
+        ...(input.service !== undefined ? { service: input.service } : {}),
+        ...(input.period !== undefined ? { start: input.period.start, end: input.period.end } : {}),
+      },
+      callOptions(ctx),
+    );
     const data = report.data as {
       currency: string;
       complete_through: string;
@@ -132,7 +137,7 @@ export function registerCostAnalysis(agent: Agent, tools: ToolClient): void {
 
     const service = input.service;
     if (service === undefined) {
-      await analyseTotals(builder, costMarker, data.weeks, threshold, tools);
+      await analyseTotals(builder, costMarker, data.weeks, threshold, tools, callOptions(ctx));
     } else {
       const delta = weekDelta(data.weeks, (w) => w.by_service[service] ?? 0);
       if (Math.abs(delta.deltaPct) >= threshold) {
@@ -165,6 +170,7 @@ export function registerCostAnalysis(agent: Agent, tools: ToolClient): void {
     weeks: CostWeek[],
     threshold: number,
     tools: ToolClient,
+    options: CallOptions,
   ): Promise<void> {
     const total = weekDelta(weeks, (w) => w.total);
     if (Math.abs(total.deltaPct) < threshold) {
@@ -183,10 +189,12 @@ export function registerCostAnalysis(agent: Agent, tools: ToolClient): void {
     );
 
     const top = topContributor(weeks);
-    const inventory = await tools.call(CLOUD_ESTATE, 'inventory_search', {
-      service: top.service,
-      env: 'prod',
-    });
+    const inventory = await tools.call(
+      CLOUD_ESTATE,
+      'inventory_search',
+      { service: top.service, env: 'prod' },
+      options,
+    );
     const contribution =
       `${top.service} (${top.deltaUsd >= 0 ? '+' : '-'}$${formatMoney(Math.abs(top.deltaUsd))}, ` +
       `${signedPct(top.deltaPct)}) is the dominant contributor`;

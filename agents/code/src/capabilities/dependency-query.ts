@@ -6,7 +6,7 @@
 
 import { CapabilityError, ErrorClass, type Agent } from '@acp/agent-sdk';
 import type { ToolClient } from '@acp/tool-client';
-import { CODE_FORGE, primaryProvenance, REPO_PATTERN } from '../tools.js';
+import { callOptions, CODE_FORGE, primaryProvenance, REPO_PATTERN } from '../tools.js';
 
 interface DependencyInput {
   repo?: string | undefined;
@@ -38,7 +38,7 @@ export function formatPackage(pkg: PackageRef): string {
 }
 
 export function registerDependencyQuery(agent: Agent, tools: ToolClient): void {
-  agent.capability('code.dependency_query', async (_ctx, rawInput) => {
+  agent.capability('code.dependency_query', async (ctx, rawInput) => {
     const input = rawInput as DependencyInput;
     const repo = requireRepo(input);
     const direction = input.direction ?? 'dependencies';
@@ -50,11 +50,12 @@ export function registerDependencyQuery(agent: Agent, tools: ToolClient): void {
     }
     const transitive = input.transitive ?? false;
 
-    const response = await tools.call(CODE_FORGE, 'repo_dependencies', {
-      repo,
-      direction,
-      transitive,
-    });
+    const response = await tools.call(
+      CODE_FORGE,
+      'repo_dependencies',
+      { repo, direction, transitive },
+      callOptions(ctx),
+    );
     const packages = (response.data.packages ?? []) as PackageRef[];
 
     const builder = agent.answerBuilder();

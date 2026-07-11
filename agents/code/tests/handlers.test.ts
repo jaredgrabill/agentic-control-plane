@@ -119,13 +119,29 @@ describe('code.dependency_query', () => {
     expect(output.citations).toEqual([DEPS_PROV]);
     expect(output.confidence).toBe(0.9);
     expect(step.usage?.llm_calls).toBe(0);
-    expect(tools.calls).toEqual([
-      {
-        server: 'code-forge',
-        tool: 'repo_dependencies',
-        args: { repo: 'acme/payments-service', direction: 'dependencies', transitive: false },
-      },
-    ]);
+    expect(tools.calls).toHaveLength(1);
+    expect(tools.calls[0]).toMatchObject({
+      server: 'code-forge',
+      tool: 'repo_dependencies',
+      args: { repo: 'acme/payments-service', direction: 'dependencies', transitive: false },
+    });
+  });
+
+  it('forwards the delegated token and correlation ids to the gateway', async () => {
+    const tools = new FakeToolClient({
+      'code-forge.repo_dependencies': () => depsResponse(DIRECT_PACKAGES),
+    });
+    const request = {
+      ...stepRequest('code.dependency_query', { repo: 'acme/payments-service' }),
+      delegated_token: 'delegated-jwt-456',
+    };
+    const step = await buildAgent(tools).execute(request);
+    expect(step.status).toBe('completed');
+    expect(tools.calls[0]!.options).toEqual({
+      delegatedToken: 'delegated-jwt-456',
+      taskId: request.task_id,
+      stepId: request.step_id,
+    });
   });
 
   it('renders dependents with the reversed phrasing', async () => {
@@ -236,9 +252,12 @@ describe('code.ci_health', () => {
     );
     expect(output.citations).toEqual([CI_PROV]);
     expect(step.usage?.llm_calls).toBe(0);
-    expect(tools.calls).toEqual([
-      { server: 'code-forge', tool: 'ci_runs', args: { repo: 'acme/payments-service' } },
-    ]);
+    expect(tools.calls).toHaveLength(1);
+    expect(tools.calls[0]).toMatchObject({
+      server: 'code-forge',
+      tool: 'ci_runs',
+      args: { repo: 'acme/payments-service' },
+    });
   });
 
   it('narrows the window from the tool as_of, never the wall clock', async () => {
