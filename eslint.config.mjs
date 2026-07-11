@@ -39,6 +39,8 @@ export default tseslint.config(
     files: ['**/*.test.ts', '**/tests/**/*.ts'],
     rules: {
       '@typescript-eslint/no-non-null-assertion': 'off',
+      // vi.mocked(obj.method) is the vitest idiom; `this` never escapes.
+      '@typescript-eslint/unbound-method': 'off',
     },
   },
   {

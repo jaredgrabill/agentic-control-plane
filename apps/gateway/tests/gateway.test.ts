@@ -94,6 +94,8 @@ describe('POST /v1/tasks', () => {
     expect(task.tenant).toBe('acme');
     expect(task.principal).toBe('user:jane.doe');
     expect(task.input.capability).toBe('knowledge.answer_with_citations');
+    // The caller's token rides along for RFC 8693 exchange at delegation.
+    expect(task.subject_token).toBeTruthy();
   });
 
   it('carries session, context, and budget through to the task contract', async () => {

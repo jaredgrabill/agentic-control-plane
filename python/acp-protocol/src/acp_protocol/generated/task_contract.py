@@ -124,6 +124,10 @@ class TaskRequest(BaseModel):
     session_id: Uuid | None = None
     input: Input
     budget: Budget | None = None
+    subject_token: str | None = Field(
+        None,
+        description="The caller's platform JWT, forwarded so the orchestrator can perform RFC 8693 exchange per delegation (scopes intersect, act chain grows). TTL ≤ 15 min bounds its life in workflow state; v0 supports single-step tasks that complete within it — durable re-delegation is a Phase 2 concern.",
+    )
     submitted_at: Timestamp | None = None
 
 

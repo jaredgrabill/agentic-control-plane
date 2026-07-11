@@ -9,5 +9,6 @@
     "capability": "knowledge.answer_with_citations"
   },
   "budget": { "max_tokens": 20000, "max_steps": 4 },
+  "subject_token": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRldi0xIn0.e30.c2lnbmF0dXJl",
   "submitted_at": "2026-07-10T09:00:00Z"
 }
