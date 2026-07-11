@@ -48,8 +48,12 @@ export interface DelegateRequest {
   /** Asserted principal snapshot, verified by the broker at task intake. */
   subject: { sub: string; tenant: string; roles: string[]; scopes: string[] };
   audience: string;
-  /** Result scopes = intersectScopes(requested, subject.scopes) — never widens. */
-  scopes?: string[] | undefined;
+  /**
+   * Required — the broker must say exactly what it wants (the target's
+   * manifest tool bindings). Result scopes = intersectScopes(requested,
+   * subject.scopes) — never widens, and an empty request grants nothing.
+   */
+  scopes: string[];
   /** Acting party for the new token, e.g. agent:cloud-agent@0.1.0. */
   actor?: string | undefined;
   grounds: { task_id: string; subject_jti?: string | undefined; verified_at: string };
@@ -185,10 +189,10 @@ export class TokenIssuer {
     }
     this.assertFreshGrounds(request.grounds);
 
-    const scopes =
-      request.scopes === undefined
-        ? subject.scopes
-        : intersectScopes(request.scopes, subject.scopes);
+    // Explicit-or-nothing: no "default to the snapshot" branch. A toolless
+    // agent (requested = []) mints a token with zero scopes, keeping the
+    // ADR-0007 narrowing chain intact: brokered ⊆ requested ⊆ snapshot.
+    const scopes = intersectScopes(request.scopes, subject.scopes);
 
     // Same two-hop chain the exchange path produced: user → broker when the
     // broker takes custody, user → actor → broker when it delegates onward —

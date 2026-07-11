@@ -372,6 +372,37 @@ describe('brokerToken', () => {
     });
   });
 
+  it('sends scope: "" (present, never omitted) for a toolless agent — empty means empty, not the snapshot', async () => {
+    // A manifest with no `tools` is schema-valid; the workflow computes
+    // requestedScopes = [] for it. The broker request must carry an explicit
+    // empty scope so the token service grants NOTHING — omitting the field
+    // would be rejected (and must never default to the whole snapshot).
+    const toollessCard: AgentCard = {
+      ...card,
+      manifest: { ...card.manifest, id: 'toolless-agent' },
+    };
+    delete (toollessCard.manifest as { tools?: unknown }).tools;
+    // Mirrors workflows.ts: requestedScopes from the manifest tool bindings.
+    const requestedScopes = (toollessCard.manifest.tools ?? []).flatMap((t) => t.scopes);
+    expect(requestedScopes).toEqual([]);
+
+    let body: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn((_u: string | URL, init?: RequestInit) => {
+      body = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return jsonResponse({ access_token: 'brokered.jwt' });
+    }) as unknown as typeof fetch;
+
+    await makeActivities(fetchImpl).brokerToken({
+      snapshot,
+      agent: toollessCard,
+      scopes: requestedScopes,
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    });
+    expect(body).toBeDefined();
+    expect(Object.hasOwn(body!, 'scope')).toBe(true);
+    expect(body!.scope).toBe('');
+  });
+
   it('surfaces broker refusals with the upstream status', async () => {
     const fetchImpl = vi.fn(() =>
       Promise.resolve(jsonResponse({ error: 'stale grounds' }, 403)),

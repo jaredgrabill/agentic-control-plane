@@ -41,9 +41,11 @@ We will make the orchestrator an **identity broker** — option (a):
 2. **Broker grant.** The token service gains
    `POST /v1/token/delegate`: a client holding the new `broker` role asserts
    a subject claim set (the snapshot) instead of presenting a live subject
-   token, plus audience, actor, and requested scopes. The minted token has
-   `sub` = the snapshot subject, scopes = intersection(requested, snapshot
-   scopes), `act` = the actor→broker chain, TTL ≤ 15 minutes.
+   token, plus audience, actor, and an explicit scope request (required —
+   an empty request grants nothing; scopes never default to the snapshot).
+   The minted token has `sub` = the snapshot subject, scopes =
+   intersection(requested, snapshot scopes), `act` = the actor→broker
+   chain, TTL ≤ 15 minutes.
 3. **Per-step minting at dispatch.** Each step's token is minted when the
    step dispatches, not when the task starts — a step running at t+3h
    carries a token as fresh as one minted at t+3s.

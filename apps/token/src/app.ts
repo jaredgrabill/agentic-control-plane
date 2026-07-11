@@ -118,6 +118,13 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     if (body.audience === undefined || body.audience === '') {
       throw new AuthError('audience is required — brokered tokens are always audience-bound', 400);
     }
+    if (body.scope === undefined) {
+      throw new AuthError(
+        'scope is required for the broker grant — send the target manifest tool bindings, ' +
+          'or an empty string to request no scopes; the grant never defaults to the snapshot (ADR-0007)',
+        400,
+      );
+    }
     if (body.subject === undefined || typeof body.subject !== 'object') {
       throw new AuthError('subject is required — the claim set verified at task intake', 400);
     }
@@ -134,7 +141,9 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
       client,
       subject: body.subject as { sub: string; tenant: string; roles: string[]; scopes: string[] },
       audience: body.audience,
-      scopes: splitScope(body.scope),
+      // Explicit-or-nothing: an empty scope string means an empty grant,
+      // never "everything the snapshot holds" (a toolless agent gets zero).
+      scopes: splitScope(body.scope) ?? [],
       actor: body.actor,
       grounds: {
         task_id: body.grounds.task_id,

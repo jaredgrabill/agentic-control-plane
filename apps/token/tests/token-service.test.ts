@@ -339,15 +339,29 @@ describe('ADR-0007 broker delegation', () => {
     expect(claims.exp! - claims.iat!).toBeLessThanOrEqual(MAX_TTL_SECONDS);
   });
 
-  it('defaults scopes to the snapshot and the actor to the broker itself', async () => {
+  it('refuses a request without scope with 400 — the grant never defaults to the snapshot', async () => {
     const res = await delegate({
       subject: SNAPSHOT,
       audience: 'acp:orchestrator',
       grounds: grounds(),
     });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.body)).toContain('scope is required');
+  });
+
+  it('empty scope means an empty grant: a toolless agent gets NOTHING, not the whole snapshot', async () => {
+    // Simulates a schema-valid manifest with no `tools`: the orchestrator
+    // requests [] (serialized as ''), while the snapshot holds many scopes.
+    const res = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:orchestrator',
+      scope: '',
+      grounds: grounds(),
+    });
     expect(res.statusCode).toBe(200);
     const claims = decodeJwt(res.body.access_token);
-    expect(claims.scope).toBe(SNAPSHOT.scopes.join(' '));
+    expect(claims.scope).toBe('');
+    // The actor still defaults to the broker itself.
     expect((claims.act as { sub: string }).sub).toBe('svc:orchestrator');
   });
 
@@ -355,6 +369,7 @@ describe('ADR-0007 broker delegation', () => {
     const res = await delegate({
       subject: SNAPSHOT,
       audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
       grounds: grounds(),
       requested_ttl: '86400',
     });
@@ -369,7 +384,12 @@ describe('ADR-0007 broker delegation', () => {
       basic('svc-platform-only', 'platform-secret'),
     ]) {
       const res = await delegate(
-        { subject: SNAPSHOT, audience: 'acp:agent:cloud-agent', grounds: grounds() },
+        {
+          subject: SNAPSHOT,
+          audience: 'acp:agent:cloud-agent',
+          scope: 'cloud:cost:read',
+          grounds: grounds(),
+        },
         auth,
       );
       expect(res.statusCode).toBe(403);
@@ -381,6 +401,7 @@ describe('ADR-0007 broker delegation', () => {
     const stale = await delegate({
       subject: SNAPSHOT,
       audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
       grounds: grounds(new Date(Date.now() - 25 * 3600 * 1000).toISOString()),
     });
     expect(stale.statusCode).toBe(403);
@@ -389,6 +410,7 @@ describe('ADR-0007 broker delegation', () => {
     const garbled = await delegate({
       subject: SNAPSHOT,
       audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
       grounds: grounds('not-a-timestamp'),
     });
     expect(garbled.statusCode).toBe(403);
@@ -396,6 +418,7 @@ describe('ADR-0007 broker delegation', () => {
     const future = await delegate({
       subject: SNAPSHOT,
       audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
       grounds: grounds(new Date(Date.now() + 3600 * 1000).toISOString()),
     });
     expect(future.statusCode).toBe(403);
@@ -403,23 +426,26 @@ describe('ADR-0007 broker delegation', () => {
 
   it('rejects missing audience, subject, grounds fields, and wrong grant_type with 400', async () => {
     for (const payload of [
-      { subject: SNAPSHOT, grounds: grounds() },
-      { audience: 'acp:agent:cloud-agent', grounds: grounds() },
-      { subject: SNAPSHOT, audience: 'acp:agent:cloud-agent' },
+      { subject: SNAPSHOT, scope: 'cloud:cost:read', grounds: grounds() },
+      { audience: 'acp:agent:cloud-agent', scope: 'cloud:cost:read', grounds: grounds() },
+      { subject: SNAPSHOT, audience: 'acp:agent:cloud-agent', scope: 'cloud:cost:read' },
       {
         subject: SNAPSHOT,
         audience: 'acp:agent:cloud-agent',
+        scope: 'cloud:cost:read',
         grounds: { task_id: grounds().task_id },
       },
       {
         subject: { sub: 'user:jane.doe' },
         audience: 'acp:agent:cloud-agent',
+        scope: 'cloud:cost:read',
         grounds: grounds(),
       },
       {
         grant_type: 'client_credentials',
         subject: SNAPSHOT,
         audience: 'acp:agent:cloud-agent',
+        scope: 'cloud:cost:read',
         grounds: grounds(),
       },
     ]) {
@@ -433,6 +459,7 @@ describe('ADR-0007 broker delegation', () => {
     await delegate({
       subject: SNAPSHOT,
       audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
       actor: 'agent:cloud-agent@0.1.0',
       grounds: grounds(),
     });
@@ -473,6 +500,7 @@ describe('ADR-0007 broker delegation', () => {
         grant_type: BROKER_DELEGATION_GRANT,
         subject: SNAPSHOT,
         audience: 'acp:agent:cloud-agent',
+        scope: 'cloud:cost:read',
         grounds: grounds(),
       },
     });
