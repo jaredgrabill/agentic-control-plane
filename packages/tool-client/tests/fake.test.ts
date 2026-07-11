@@ -17,6 +17,17 @@ describe('FakeToolClient', () => {
     expect(fake.calls).toEqual([
       { server: 'cloud-estate', tool: 'inventory_search', args: { env: 'prod' } },
     ]);
+    expect('options' in fake.calls[0]!).toBe(false);
+  });
+
+  it('records CallOptions verbatim when provided', async () => {
+    const fake = new FakeToolClient({
+      'cloud-estate.inventory_search': () => RESPONSE,
+    });
+    const options = { delegatedToken: 'tok-1', taskId: 'task-1', stepId: 'step-1' };
+    await fake.call('cloud-estate', 'inventory_search', { env: 'prod' }, options);
+    expect(fake.calls[0]!.options).toEqual(options);
+    expect(fake.calls[0]!.options).toBe(options);
   });
 
   it('throws loudly on a missing handler', async () => {

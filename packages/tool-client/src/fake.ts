@@ -4,15 +4,20 @@
  * typed-failure paths.
  */
 
-import type { ToolClient, ToolResponse } from './types.js';
+import type { CallOptions, ToolClient, ToolResponse } from './types.js';
 
 export type FakeToolHandler = (
   args: Record<string, unknown>,
 ) => ToolResponse | Promise<ToolResponse>;
 
 export class FakeToolClient implements ToolClient {
-  /** Every call, in order — assert on counts and arguments. */
-  readonly calls: { server: string; tool: string; args: Record<string, unknown> }[] = [];
+  /** Every call, in order — assert on counts, arguments, and forwarded options. */
+  readonly calls: {
+    server: string;
+    tool: string;
+    args: Record<string, unknown>;
+    options?: CallOptions;
+  }[] = [];
   private readonly handlers: Record<string, FakeToolHandler>;
 
   /** Handlers are keyed `${server}.${tool}`. */
@@ -20,8 +25,15 @@ export class FakeToolClient implements ToolClient {
     this.handlers = handlers;
   }
 
-  async call(server: string, tool: string, args: Record<string, unknown>): Promise<ToolResponse> {
-    this.calls.push({ server, tool, args });
+  async call(
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+    options?: CallOptions,
+  ): Promise<ToolResponse> {
+    // Options are recorded verbatim so tests can assert exactly what a
+    // handler forwarded (or that it forwarded nothing).
+    this.calls.push({ server, tool, args, ...(options !== undefined ? { options } : {}) });
     const handler = this.handlers[`${server}.${tool}`];
     if (handler === undefined) {
       throw new Error(`FakeToolClient has no handler for ${server}.${tool}`);
