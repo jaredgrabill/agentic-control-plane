@@ -23,6 +23,6 @@ Phase 3.
 | Element | Types | Notes |
 | --- | --- | --- |
 | principal | `User`, `Service`, `Agent` | attrs carry `tenant` |
-| action | `Action::"delegate"`, `Action::"<capability>"` | capability invocations use the capability name |
-| resource | `Agent`, `Corpus` | attrs carry `tenant` |
+| action | `Action::"delegate"`, `Action::"<capability>"`, `Action::"tool:<server>:<tool>"` | capability invocations use the capability name; tool calls (decided at the Tool Gateway PEP) name the exact tool on the exact server |
+| resource | `Agent`, `Corpus`, `Service` | attrs carry `tenant` (`Service` resources carry none — tenancy rides `context.tenant`) |
 | context | `tenant`, `scopes`, `risk`, … | scopes come from the *delegated* token |
