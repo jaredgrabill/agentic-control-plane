@@ -3,7 +3,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from acp_agent_sdk import Agent, CapabilityContext, EvalHarness, GoldenCase, load_golden
+from acp_agent_sdk import (
+    Agent,
+    CapabilityContext,
+    CapabilityError,
+    ErrorClass,
+    EvalHarness,
+    GoldenCase,
+    load_golden,
+)
 
 from .conftest import MANIFEST
 
@@ -56,6 +64,15 @@ class TestEvalHarness:
         assert "unicorns" in report.summary()
         assert report.pass_rate == 0.5
 
+    async def test_apostrophe_needles_render_double_quoted(self) -> None:
+        # Pins {needle!r}'s quote-switching rule (apostrophe and no double
+        # quote -> double-quoted repr). The TypeScript SDK replicates it and
+        # asserts the identical string, keeping the parity comparator honest.
+        report = await EvalHarness(make_agent()).run(
+            [case(name="apostrophe needle", expect={"must_contain": ["unicorn's horn"]})]
+        )
+        assert report.results[0].failures == ['answer does not mention "unicorn\'s horn"']
+
     async def test_citation_precision_counts_expected_docs_only(self) -> None:
         report = await EvalHarness(make_agent()).run(
             [case(expect={"must_cite_docs": ["policy/change-management"]})]
@@ -79,6 +96,39 @@ class TestEvalHarness:
         assert not report.results[1].passed
         assert report.results[2].passed
         assert report.abstention_accuracy == pytest.approx(2 / 3)
+
+    async def test_expected_error_class_accepts_a_matching_typed_failure(self) -> None:
+        agent = Agent(manifest=MANIFEST)
+
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            raise CapabilityError(ErrorClass.NEEDS_INPUT, "which audience do you mean?")
+
+        report = await EvalHarness(agent).run(
+            [case(name="needs input", expect={"error_class": "needs_input"})]
+        )
+        assert report.results[0].passed, report.summary()
+
+    async def test_expected_error_class_mismatch_names_the_actual_outcome(self) -> None:
+        completed = await EvalHarness(make_agent()).run(
+            [case(name="wanted a failure", expect={"error_class": "needs_input"})]
+        )
+        assert not completed.results[0].passed
+        assert completed.results[0].failures == [
+            "expected a needs_input failure, got a completed step"
+        ]
+
+        agent = Agent(manifest=MANIFEST)
+
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            raise CapabilityError(ErrorClass.PERMANENT, "wrong class")
+
+        wrong_class = await EvalHarness(agent).run(
+            [case(name="wrong class", expect={"error_class": "needs_input"})]
+        )
+        assert not wrong_class.results[0].passed
+        assert wrong_class.results[0].failures == ["expected a needs_input failure, got permanent"]
 
     async def test_load_golden_reads_files_and_rejects_empty(self, tmp_path: Path) -> None:
         (tmp_path / "cases.json").write_text(

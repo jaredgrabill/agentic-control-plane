@@ -1,0 +1,22 @@
+{
+  "name": "@acp/parity-harness",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Cross-SDK parity gate: runs the shared parity fixtures through the TypeScript EvalHarness and diffs reports against the Python runner's",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@acp/agent-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "vitest": "^3.2.4"
+  }
+}

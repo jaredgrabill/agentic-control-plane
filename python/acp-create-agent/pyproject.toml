@@ -10,6 +10,14 @@ dependencies = []
 [project.scripts]
 acp-create-agent = "acp_create_agent.main:main"
 
+# The scaffolder ships no runtime deps, but its tests execute the rendered
+# handler through the real EvalHarness — the template must pass its own gate.
+[dependency-groups]
+dev = ["acp-agent-sdk"]
+
+[tool.uv.sources]
+acp-agent-sdk = { workspace = true }
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

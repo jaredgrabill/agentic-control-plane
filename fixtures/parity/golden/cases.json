@@ -1,0 +1,66 @@
+{
+  "description": "The shared golden suite for the cross-SDK parity gate. Verdicts are deliberately mixed — passes AND failures — because the gate compares failure strings and metrics, not just green checkmarks.",
+  "cases": [
+    {
+      "name": "cites the change policy",
+      "capability": "parity.answer",
+      "input": { "question": "What is the change freeze policy?" },
+      "expect": {
+        "must_contain": ["freeze"],
+        "must_cite_docs": ["policy/change-management"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "multi-doc grounding",
+      "capability": "parity.answer",
+      "input": { "question": "freeze, oncall and retention interplay" },
+      "expect": {
+        "must_contain": ["oncall"],
+        "must_cite_docs": ["policy/change-management"]
+      }
+    },
+    {
+      "name": "missing needle fails",
+      "capability": "parity.answer",
+      "input": { "question": "freeze policy" },
+      "expect": { "must_contain": ["unicorns"] }
+    },
+    {
+      "name": "expected abstention",
+      "capability": "parity.answer",
+      "input": { "question": "this is unanswerable" },
+      "expect": { "abstain": true }
+    },
+    {
+      "name": "wrong abstention",
+      "capability": "parity.answer",
+      "input": { "question": "a totally novel topic" },
+      "expect": {}
+    },
+    {
+      "name": "empty question needs input",
+      "capability": "parity.answer",
+      "input": { "question": "" },
+      "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "bad output is permanent",
+      "capability": "parity.bad_output",
+      "input": {},
+      "expect": {}
+    },
+    {
+      "name": "confidence floor unmet",
+      "capability": "parity.answer",
+      "input": { "question": "freeze" },
+      "expect": { "min_confidence": 0.9 }
+    },
+    {
+      "name": "missing citation",
+      "capability": "parity.answer",
+      "input": { "question": "freeze" },
+      "expect": { "must_cite_docs": ["policy/nonexistent"] }
+    }
+  ]
+}

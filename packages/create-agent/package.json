@@ -1,0 +1,28 @@
+{
+  "name": "@acp/create-agent",
+  "version": "0.1.0",
+  "description": "Scaffolder for ACP TypeScript agents: manifest, handlers, eval harness, CI — working out of the box",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "create-agent": "./dist/main.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run --coverage"
+  },
+  "devDependencies": {
+    "@acp/agent-sdk": "workspace:*",
+    "@acp/protocol": "workspace:*",
+    "@types/node": "^22.15.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4",
+    "yaml": "^2.8.0"
+  }
+}

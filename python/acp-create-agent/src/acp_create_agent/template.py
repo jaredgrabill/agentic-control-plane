@@ -94,7 +94,7 @@ def register(agent: Agent) -> None:
       "name": "edge: empty audience needs input, not a guess",
       "capability": "{capability}",
       "input": {{ "audience": "" }},
-      "expect": {{ "abstain": false, "must_contain": [] }}
+      "expect": {{ "error_class": "needs_input" }}
     }}
   ]
 }}
