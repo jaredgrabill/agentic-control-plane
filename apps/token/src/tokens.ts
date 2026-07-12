@@ -5,6 +5,7 @@ import {
   intersectScopes,
   scopesOf,
   type ActClaim,
+  type ApprovalClaim,
   type PlatformClaims,
 } from '@acp/service-kit';
 import { SignJWT, createLocalJWKSet, jwtVerify } from 'jose';
@@ -54,6 +55,23 @@ export class TokenDeniedError extends AuthError {
   }
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+
+/**
+ * Human-approval grounds a broker asserts when minting a step token AFTER an
+ * ApprovalWorkflow granted the gated delegation. Shape-validated at mint;
+ * the resulting signed claim is what the tool gateway binds to the step.
+ */
+export interface ApprovalGrounds {
+  approval_id: string;
+  decision_id: string;
+  approver: string;
+  step_id: string;
+  capability: string;
+  subject_digest: string;
+}
+
 /** `agent:{id}@{version}` (or `agent:{id}`) → the bare kill-switch id; undefined for non-agents. */
 function agentIdOf(principal: string): string | undefined {
   if (!principal.startsWith('agent:')) return undefined;
@@ -100,6 +118,13 @@ export interface DelegateRequest {
   /** Acting party for the new token, e.g. agent:cloud-agent@0.1.0. */
   actor?: string | undefined;
   grounds: { task_id: string; subject_jti?: string | undefined; verified_at: string };
+  /**
+   * Human-approval grounds — present only when the orchestrator brokers a
+   * step token after an ApprovalWorkflow granted the R2 delegation. Signed
+   * into the token as the `approval` claim; the tool gateway binds it to the
+   * exact step before permitting the write.
+   */
+  approval?: ApprovalGrounds | undefined;
   ttlSeconds?: number | undefined;
 }
 
@@ -289,6 +314,14 @@ export class TokenIssuer {
     // `brokered`, the one claim already minted (supersedes design-0c §4's
     // "no brokered claim propagates").
     const brokered = sameActor ? subject.brokered : undefined;
+    // Item 1: the human-approval claim rides the SAME same-actor branch as
+    // `brokered`. After the 0c audience flip an agent presents an exchanged
+    // acp:tools token, so the tool gateway reads `approval` from the exchanged
+    // token — which only works because it propagates here. A new actor
+    // (actor-appending exchange) or a chain-free rescope inherits neither
+    // claim. No injection path: the claim can only come from the verified
+    // subject token; the exchange endpoint accepts no body-supplied approval.
+    const approval = sameActor ? subject.approval : undefined;
 
     return this.sign(
       {
@@ -299,6 +332,7 @@ export class TokenIssuer {
         scope: scopes.join(' '),
         ...(act !== undefined ? { act } : {}),
         ...(brokered !== undefined ? { brokered } : {}),
+        ...(approval !== undefined ? { approval } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
@@ -335,6 +369,10 @@ export class TokenIssuer {
       );
     }
     this.assertFreshGrounds(request.grounds);
+    const approvalClaim =
+      request.approval === undefined
+        ? undefined
+        : buildApprovalClaim(request.approval, subject.sub);
 
     // Explicit-or-nothing: no "default to the snapshot" branch. A toolless
     // agent (requested = []) mints a token with zero scopes, keeping the
@@ -375,6 +413,7 @@ export class TokenIssuer {
             : { subject_jti: request.grounds.subject_jti }),
           verified_at: request.grounds.verified_at,
         },
+        ...(approvalClaim !== undefined ? { approval: approvalClaim } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
@@ -424,4 +463,42 @@ export class TokenIssuer {
 function clampTtl(requested: number): number {
   if (!Number.isFinite(requested) || requested <= 0) return DEFAULT_TTL_SECONDS;
   return Math.min(Math.floor(requested), MAX_TTL_SECONDS);
+}
+
+/**
+ * Validates approval grounds and shapes the signed `approval` claim. Every
+ * field is checked at the mint so a malformed or self-approved grant never
+ * becomes a signed claim: ids are uuids, the digest is a sha256 digest, and
+ * the approver is a non-empty principal that is NOT the subject — structural
+ * separation of duties enforced independently of the gateway's own check.
+ */
+function buildApprovalClaim(grounds: ApprovalGrounds, subjectSub: string): ApprovalClaim {
+  const bad = (msg: string): never => {
+    throw new AuthError(`approval grounds rejected: ${msg}`, 400);
+  };
+  if (typeof grounds !== 'object' || grounds === null) bad('must be an object');
+  if (!UUID_RE.test(grounds.approval_id)) bad('approval_id must be a uuid');
+  if (!UUID_RE.test(grounds.decision_id)) bad('decision_id must be a uuid');
+  if (!UUID_RE.test(grounds.step_id)) bad('step_id must be a uuid');
+  if (typeof grounds.capability !== 'string' || grounds.capability === '') {
+    bad('capability must be a non-empty string');
+  }
+  if (!DIGEST_RE.test(grounds.subject_digest)) bad('subject_digest must be a sha256:<hex> digest');
+  if (typeof grounds.approver !== 'string' || grounds.approver === '') {
+    bad('approver must be a non-empty principal');
+  }
+  if (grounds.approver === subjectSub) {
+    bad(
+      `approver ${grounds.approver} is the subject of the request — an approver may not ` +
+        'approve their own delegation (separation of duties)',
+    );
+  }
+  return {
+    id: grounds.approval_id,
+    decision_id: grounds.decision_id,
+    approver: grounds.approver,
+    step_id: grounds.step_id,
+    capability: grounds.capability,
+    subject_digest: grounds.subject_digest,
+  };
 }

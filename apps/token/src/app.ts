@@ -46,6 +46,19 @@ interface TokenBody {
   actor?: string;
   subject?: { sub?: string; tenant?: string; roles?: string[]; scopes?: string[] };
   grounds?: { task_id?: string; subject_jti?: string; verified_at?: string };
+  /**
+   * Human-approval grounds. Legal ONLY on the broker delegation grant — the
+   * issue and exchange routes refuse a body-supplied approval so no client
+   * can inject an approval claim into a token it mints for itself.
+   */
+  approval?: {
+    approval_id?: string;
+    decision_id?: string;
+    approver?: string;
+    step_id?: string;
+    capability?: string;
+    subject_digest?: string;
+  };
 }
 
 export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance> {
@@ -93,6 +106,7 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     if (body.audience === undefined || body.audience === '') {
       throw new AuthError('audience is required — platform tokens are always audience-bound', 400);
     }
+    rejectApproval(body, 'client_credentials issuance');
     const audience = body.audience;
     const issued = await guarded('client_credentials', audience, client, () =>
       issuerSvc.issue({
@@ -127,6 +141,7 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     if (body.audience === undefined || body.audience === '') {
       throw new AuthError('audience is required — exchange rebinds the token to its target', 400);
     }
+    rejectApproval(body, 'token exchange');
     const audience = body.audience;
     const subjectToken = body.subject_token;
     const issued = await guarded(TOKEN_EXCHANGE_GRANT, audience, client, () =>
@@ -193,14 +208,25 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
             : { subject_jti: body.grounds.subject_jti }),
           verified_at: groundsVerifiedAt,
         },
+        // Passed through verbatim; delegate() shape-validates every field and
+        // refuses self-approval before it ever signs the claim.
+        ...(body.approval === undefined
+          ? {}
+          : { approval: body.approval as NonNullable<Parameters<typeof issuerSvc.delegate>[0]['approval']> }),
         ttlSeconds: parseTtl(body.requested_ttl),
       }),
     );
     await emitAudit(deps, 'token.brokered', client, issued, {
-      reason: { task_id: body.grounds.task_id },
+      reason: {
+        task_id: body.grounds.task_id,
+        ...(body.approval?.step_id === undefined ? {} : { step_id: body.approval.step_id }),
+      },
       details: {
         ...(body.actor === undefined ? {} : { actor: body.actor }),
         grounds: body.grounds,
+        // The approval grounds bound into the minted token — auditors see the
+        // decision, decider, and subject digest that authorized this write.
+        ...(body.approval === undefined ? {} : { approval: body.approval }),
       },
     });
     return reply.send({
@@ -228,6 +254,22 @@ function authenticateClient(
     return clients.authenticate(body.client_id, body.client_secret);
   }
   throw new AuthError('client authentication required (Basic header or client_id/client_secret)');
+}
+
+/**
+ * Approval grounds may ONLY be asserted on the broker delegation grant. A
+ * body-supplied approval on the issue or exchange route is refused (400) so
+ * no client can inject an approval claim into a token it mints for itself —
+ * the only legitimate source is delegate(), which shape-validates it.
+ */
+function rejectApproval(body: TokenBody, grant: string): void {
+  if (body.approval !== undefined) {
+    throw new AuthError(
+      `approval grounds are not accepted on ${grant} — only the broker delegation grant may ` +
+        'assert an approval, and only after an ApprovalWorkflow granted it',
+      400,
+    );
+  }
 }
 
 function splitScope(scope: string | undefined): string[] | undefined {

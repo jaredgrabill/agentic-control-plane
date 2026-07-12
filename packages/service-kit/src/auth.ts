@@ -26,6 +26,26 @@ export interface BrokeredClaim {
   verified_at: string;
 }
 
+/**
+ * Signed human-approval grounds (Phase 3 item 1). Only
+ * `TokenIssuer.delegate()` sets it — the orchestrator brokering a step token
+ * AFTER an ApprovalWorkflow granted the gated delegation. Rides verbatim
+ * across the agent's same-actor acp:tools exchange (SPRINT cross-item
+ * contract) so the tool gateway can bind it to the exact step. `subject_digest`
+ * is the sha256 over the full approval subject the approver saw — the tie
+ * between what was displayed, what was decided, and what executes.
+ */
+export interface ApprovalClaim {
+  /** approval_id: the ApprovalWorkflow instance the decision belongs to. */
+  id: string;
+  decision_id: string;
+  /** The verified approver principal (claims.sub of the deciding JWT), never the subject. */
+  approver: string;
+  step_id: string;
+  capability: string;
+  subject_digest: string;
+}
+
 export interface PlatformClaims extends JWTPayload {
   sub: string;
   tenant: string;
@@ -35,6 +55,8 @@ export interface PlatformClaims extends JWTPayload {
   act?: ActClaim;
   /** Present only on broker-delegated tokens and their same-actor exchanges. */
   brokered?: BrokeredClaim;
+  /** Present only on broker-delegated tokens minted after an approval, and their same-actor exchanges. */
+  approval?: ApprovalClaim;
 }
 
 export class AuthError extends Error {

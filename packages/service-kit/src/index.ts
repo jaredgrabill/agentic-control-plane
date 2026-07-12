@@ -9,6 +9,7 @@ export {
   intersectScopes,
   scopesOf,
   type ActClaim,
+  type ApprovalClaim,
   type BrokeredClaim,
   type PlatformClaims,
 } from './auth.js';

@@ -51,6 +51,14 @@ const CLIENTS = [
     roles: ['agent'],
     scopes: [],
   },
+  {
+    client_id: 'agent-approval',
+    client_secret: 'agent-secret',
+    principal: 'agent:approval-test-agent@0.1.0',
+    tenant: 'acme',
+    roles: ['agent'],
+    scopes: [],
+  },
 ];
 
 let app: FastifyInstance;
@@ -409,6 +417,164 @@ describe('governance-claim exchange propagation (SPRINT cross-item contract)', (
     expect(res.statusCode).toBe(200);
     const claims = decodeJwt(res.body.access_token);
     expect(claims.brokered).toBeUndefined();
+  });
+});
+
+describe('approval binding (item 1)', () => {
+  const DIGEST = 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08';
+  const APPROVAL = {
+    approval_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90',
+    decision_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f91',
+    approver: 'user:approver.ops',
+    step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+    capability: 'gov.test_write',
+    subject_digest: DIGEST,
+  };
+  const SNAPSHOT = {
+    sub: 'user:jane.doe',
+    tenant: 'acme',
+    roles: ['tenant-user'],
+    scopes: ['task:submit', 'gov:test:write'],
+  };
+  const NO_APPROVAL = Symbol('none');
+  const base = (approval: unknown = APPROVAL) => ({
+    grant_type: BROKER_DELEGATION_GRANT,
+    subject: SNAPSHOT,
+    audience: 'acp:agent:approval-test-agent',
+    scope: 'gov:test:write',
+    actor: 'agent:approval-test-agent@0.1.0',
+    grounds: {
+      task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      verified_at: new Date().toISOString(),
+    },
+    ...(approval === NO_APPROVAL ? {} : { approval }),
+  });
+
+  async function delegate(payload: unknown, auth = basic('svc-orchestrator', 'orch-secret')) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/delegate',
+      headers: { authorization: auth },
+      payload: payload as Record<string, unknown>,
+    });
+    return { statusCode: res.statusCode, body: res.json<{ access_token?: string }>() };
+  }
+
+  it('signs a well-formed approval claim into the brokered token', async () => {
+    const res = await delegate(base());
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token!) as unknown as PlatformClaims;
+    expect(claims.approval).toEqual({
+      id: APPROVAL.approval_id,
+      decision_id: APPROVAL.decision_id,
+      approver: 'user:approver.ops',
+      step_id: APPROVAL.step_id,
+      capability: 'gov.test_write',
+      subject_digest: DIGEST,
+    });
+  });
+
+  it('a delegation without approval grounds carries no approval claim', async () => {
+    const res = await delegate(base(NO_APPROVAL));
+    expect(res.statusCode).toBe(200);
+    expect(decodeJwt(res.body.access_token!).approval).toBeUndefined();
+  });
+
+  it('rejects malformed grounds: non-uuid ids and non-digest subject_digest → 400', async () => {
+    for (const bad of [
+      { ...APPROVAL, approval_id: 'not-a-uuid' },
+      { ...APPROVAL, decision_id: 'nope' },
+      { ...APPROVAL, step_id: 'nope' },
+      { ...APPROVAL, subject_digest: 'deadbeef' },
+      { ...APPROVAL, capability: '' },
+      { ...APPROVAL, approver: '' },
+    ]) {
+      const res = await delegate(base(bad));
+      expect(res.statusCode, JSON.stringify(bad)).toBe(400);
+    }
+  });
+
+  it('refuses self-approval structurally: approver === subject.sub → 400', async () => {
+    const res = await delegate(base({ ...APPROVAL, approver: 'user:jane.doe' }));
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.body)).toContain('separation of duties');
+  });
+
+  it('the issue route refuses a body-supplied approval field (no self-minted grounds)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: { grant_type: 'client_credentials', audience: 'acp:gateway', approval: APPROVAL },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain('approval');
+  });
+
+  it('the exchange route refuses a body-supplied approval field', async () => {
+    const userToken = await issueUserToken('knowledge:search:read');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: userToken,
+        audience: 'acp:tools',
+        approval: APPROVAL,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('propagates approval verbatim across the agent same-actor acp:tools exchange (SPRINT contract)', async () => {
+    // Supersedes item-1 design §3 "exchange strips approval": after 0c the
+    // agent presents an exchanged acp:tools token, so the approval claim MUST
+    // ride the same-actor branch alongside brokered.
+    const delegated = (await delegate(base())).body.access_token!;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('agent-approval', 'agent-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: delegated,
+        audience: 'acp:tools',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.json<{ access_token: string }>().access_token);
+    expect((claims as unknown as PlatformClaims).approval?.step_id).toBe(APPROVAL.step_id);
+    expect((claims as unknown as PlatformClaims).brokered?.task_id).toBe(
+      '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    );
+  });
+
+  it('DROPS approval when a platform client appends a NEW actor', async () => {
+    const delegated = (await delegate(base())).body.access_token!;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('svc-orchestrator', 'orch-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: delegated,
+        audience: 'acp:tools',
+        actor: 'agent:someone-else@0.1.0',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(decodeJwt(res.json<{ access_token: string }>().access_token).approval).toBeUndefined();
+  });
+
+  it('emits token.brokered audit carrying the approval grounds and step_id', async () => {
+    auditEvents.length = 0;
+    await delegate(base());
+    const event = auditEvents.find((e) => e.event_type === 'token.brokered');
+    expect(event?.reason?.step_id).toBe(APPROVAL.step_id);
+    expect((event?.details as { approval?: { decision_id: string } }).approval?.decision_id).toBe(
+      APPROVAL.decision_id,
+    );
   });
 });
 
