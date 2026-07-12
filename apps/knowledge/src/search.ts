@@ -14,7 +14,7 @@ import type { KnowledgeStore, SearchHit } from './store.js';
 export const KNOWLEDGE_AUDIENCE = 'acp:knowledge';
 
 export interface PolicyDecision {
-  decision: 'allow' | 'deny';
+  decision: 'allow' | 'deny' | 'require-approval';
   bundle_version: string;
   determining_policies: string[];
 }
@@ -87,10 +87,14 @@ export class SearchService {
         tenant: claims.tenant,
       },
     });
+    // Verify-only PEP: anything other than a clean allow fails closed. A
+    // three-way require-approval (no R2 knowledge capability exists yet) is
+    // refused here too — this inner PEP never suspends.
     if (decision.decision !== 'allow') {
       throw new AuthError(
-        `Cedar decision: deny for knowledge.search by ${actor} (bundle ${decision.bundle_version}); ` +
-          'the delegated token lacks a scope any permit accepts',
+        `Cedar decision: ${decision.decision} for knowledge.search by ${actor} ` +
+          `(bundle ${decision.bundle_version}); the delegated token lacks a scope any permit ` +
+          'accepts (or the action requires an approval this PEP cannot grant)',
         403,
       );
     }

@@ -693,3 +693,125 @@ describe('DevCredentialBroker token-exchange mode (injected fetch)', () => {
     );
   });
 });
+
+// -------------------------------------------------- require-approval (v1)
+
+const APPROVAL_TASK_ID = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40';
+const APPROVAL_STEP_ID = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51';
+const APPROVAL_DIGEST = `sha256:${'a'.repeat(64)}`;
+
+/** An agent caller whose acp:tools token carries brokered + approval claims. */
+function approvedAgentCaller(
+  over: { taskId?: string; stepId?: string; scope?: string } = {},
+): Caller {
+  return resolveCaller(
+    claimsFor({
+      aud: 'acp:tools',
+      scope: over.scope ?? 'cloud:inventory:read cloud:cost:read',
+      act: { sub: 'agent:cloud-agent@0.1.0', act: { sub: 'svc:orchestrator' } },
+      brokered: { task_id: over.taskId ?? APPROVAL_TASK_ID, verified_at: '2026-07-11T09:00:00Z' },
+      approval: {
+        id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90',
+        decision_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f91',
+        approver: 'user:approver.ops',
+        step_id: over.stepId ?? APPROVAL_STEP_ID,
+        capability: 'cloud.tag_apply',
+        subject_digest: APPROVAL_DIGEST,
+      },
+    }),
+    'raw-tools-jwt',
+  );
+}
+
+describe('require-approval (verify-only PEP fails closed)', () => {
+  it('refuses a require-approval decision when the token has no approval claim, with audit', async () => {
+    h.policy.decision = {
+      decision: 'require-approval',
+      bundle_version: '2026.07+gate',
+      determining_policies: ['gate-r2-delegation'],
+    };
+    const result = await h.core.callTool(agentCaller(), 'cloud-estate', 'inventory_search', {}, {});
+    expect(errorOf(result)).toMatchObject({ code: 'upstream_auth' });
+    expect(errorOf(result).message).toContain('require-approval');
+    expect(errorOf(result).message).toContain('no approval grounds');
+    // Audited as denied, no upstream contact.
+    const event = h.audit.at(-1)!;
+    expect((event.details as { outcome: string }).outcome).toBe('denied');
+    expect(h.broker.calls).toBe(0);
+  });
+
+  it('sends context.approval.granted=false when there is no claim', async () => {
+    await h.core.callTool(agentCaller(), 'cloud-estate', 'inventory_search', {}, {});
+    const ctx = h.policy.requests.at(-1)!.context as { approval: { granted: boolean } };
+    expect(ctx.approval).toEqual({ granted: false });
+  });
+
+  it('binds context.approval.granted=true when the claim matches the correlation task+step', async () => {
+    await h.core.callTool(
+      approvedAgentCaller(),
+      'cloud-estate',
+      'inventory_search',
+      {},
+      { taskId: APPROVAL_TASK_ID, stepId: APPROVAL_STEP_ID },
+    );
+    const ctx = h.policy.requests.at(-1)!.context as {
+      approval: { granted: boolean; capability?: string; step_id?: string; approval_id?: string };
+    };
+    expect(ctx.approval).toMatchObject({
+      granted: true,
+      capability: 'cloud.tag_apply',
+      step_id: APPROVAL_STEP_ID,
+    });
+  });
+
+  it('does NOT bind when the correlation step differs from the claim (replay onto another step)', async () => {
+    await h.core.callTool(
+      approvedAgentCaller(),
+      'cloud-estate',
+      'inventory_search',
+      {},
+      { taskId: APPROVAL_TASK_ID, stepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f77' },
+    );
+    const ctx = h.policy.requests.at(-1)!.context as { approval: { granted: boolean } };
+    expect(ctx.approval.granted).toBe(false);
+  });
+
+  it('does NOT bind when correlation is absent (no task/step to bind to)', async () => {
+    await h.core.callTool(approvedAgentCaller(), 'cloud-estate', 'inventory_search', {}, {});
+    const ctx = h.policy.requests.at(-1)!.context as { approval: { granted: boolean } };
+    expect(ctx.approval.granted).toBe(false);
+  });
+
+  it('does NOT bind when the brokered task differs from the correlation task', async () => {
+    await h.core.callTool(
+      approvedAgentCaller({ taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f99' }),
+      'cloud-estate',
+      'inventory_search',
+      {},
+      { taskId: APPROVAL_TASK_ID, stepId: APPROVAL_STEP_ID },
+    );
+    const ctx = h.policy.requests.at(-1)!.context as { approval: { granted: boolean } };
+    expect(ctx.approval.granted).toBe(false);
+  });
+
+  it('a bound approval still requires Cedar allow — a require-approval verdict refuses even when a claim is present', async () => {
+    // Carries the unbound approval id into the refusal audit for investigation.
+    h.policy.decision = {
+      decision: 'require-approval',
+      bundle_version: '2026.07+gate',
+      determining_policies: ['gate-r2-delegation'],
+    };
+    const result = await h.core.callTool(
+      approvedAgentCaller({ stepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f88' }),
+      'cloud-estate',
+      'inventory_search',
+      {},
+      { taskId: APPROVAL_TASK_ID, stepId: APPROVAL_STEP_ID },
+    );
+    expect(errorOf(result).code).toBe('upstream_auth');
+    const event = h.audit.at(-1)!;
+    expect((event.details as { approval_id?: string }).approval_id).toBe(
+      '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90',
+    );
+  });
+});

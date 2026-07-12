@@ -133,6 +133,18 @@ describe('SearchService', () => {
     expect(searches).toHaveLength(0);
   });
 
+  it('fails closed on require-approval — a verify-only PEP never grants an approval', async () => {
+    policyDecision = {
+      decision: 'require-approval',
+      bundle_version: '2026.07+abc',
+      determining_policies: ['gate-r2-delegation'],
+    };
+    await expect(makeService().search({ token: await makeToken(), query: 'q' })).rejects.toThrow(
+      /require-approval/,
+    );
+    expect(searches).toHaveLength(0);
+  });
+
   it('rejects wrong-audience tokens and empty queries', async () => {
     await expect(
       makeService().search({ token: await makeToken({ aud: 'acp:gateway' }), query: 'q' }),

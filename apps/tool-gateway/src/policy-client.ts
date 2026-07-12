@@ -7,7 +7,7 @@
  */
 
 export interface PolicyDecision {
-  decision: 'allow' | 'deny';
+  decision: 'allow' | 'deny' | 'require-approval';
   bundle_version: string;
   determining_policies: string[];
 }
