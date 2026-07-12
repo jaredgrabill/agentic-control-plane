@@ -68,8 +68,7 @@ const knownActions = [
 const flipTarget = flip !== undefined && !flip.needsTarget ? undefined : target;
 const missingTarget =
   (flip !== undefined && flip.needsTarget && target === undefined) ||
-  (action === 'tenant' &&
-    (tenantTarget === undefined || !TENANT_VERBS.includes(tenantVerb ?? '')));
+  (action === 'tenant' && (tenantTarget === undefined || !TENANT_VERBS.includes(tenantVerb ?? '')));
 const missingReason = reason === undefined;
 
 if (!knownActions.includes(action ?? '') || missingReason || missingTarget) {

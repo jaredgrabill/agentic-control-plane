@@ -34,9 +34,7 @@ const TENANT_ID_RE = /^[a-z0-9-]+$/;
  */
 export function assertTenantId(tenant: string): string {
   if (!TENANT_ID_RE.test(tenant)) {
-    throw new Error(
-      `tenant id ${JSON.stringify(tenant)} is not valid — expected /^[a-z0-9-]+$/`,
-    );
+    throw new Error(`tenant id ${JSON.stringify(tenant)} is not valid — expected /^[a-z0-9-]+$/`);
   }
   return tenant;
 }
