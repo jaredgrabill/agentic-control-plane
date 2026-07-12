@@ -88,7 +88,26 @@ function fakeNc(msgs: FakeMsg[]): NatsConnection {
   return { subscribe: () => sub } as unknown as NatsConnection;
 }
 
-const flush = () => new Promise((r) => setTimeout(r, 30));
+/**
+ * Deterministically waits until the responder has replied, polling the fake
+ * message rather than racing a fixed timeout against the async crypto chain
+ * (verify + xkey.open + seal). Resolves as soon as a response lands, or after
+ * ~2s so a genuinely stuck responder still fails the assertion rather than
+ * hanging the suite.
+ */
+async function waitForResponse(msg: FakeMsg): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    if (msg.respondedWith !== undefined) return;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
+/**
+ * A short bounded settle for the negative cases: the responder is expected to
+ * DROP the request without replying, so we give its async chain time to run to
+ * completion and then assert nothing was responded.
+ */
+const settle = () => new Promise((r) => setTimeout(r, 100));
 
 function makeDeps(msgs: FakeMsg[], audited: AuditEvent[]) {
   return {
@@ -112,7 +131,7 @@ describe('bus auth responder', () => {
     const msg = new FakeMsg(new TextEncoder().encode(requestJwt(await busToken())));
     const audited: AuditEvent[] = [];
     const responder = startBusAuthResponder(makeDeps([msg], audited));
-    await flush();
+    await waitForResponse(msg);
     expect(msg.respondedWith).toBeDefined();
 
     // The response carries a user JWT.
@@ -137,7 +156,7 @@ describe('bus auth responder', () => {
     );
     const audited: AuditEvent[] = [];
     const responder = startBusAuthResponder(makeDeps([msg], audited));
-    await flush();
+    await waitForResponse(msg);
     const decoded = Buffer.from(
       new TextDecoder().decode(msg.respondedWith).split('.')[1] ?? '',
       'base64url',
@@ -153,7 +172,7 @@ describe('bus auth responder', () => {
     const msg = new FakeMsg(new TextEncoder().encode(requestJwt(undefined)));
     const audited: AuditEvent[] = [];
     const responder = startBusAuthResponder(makeDeps([msg], audited));
-    await flush();
+    await waitForResponse(msg);
     expect(msg.respondedWith).toBeDefined();
     expect(audited).toHaveLength(0);
     await responder.stop();
@@ -171,7 +190,7 @@ describe('bus auth responder', () => {
     });
     const audited: AuditEvent[] = [];
     const responder = startBusAuthResponder(makeDeps([msg], audited));
-    await flush();
+    await waitForResponse(msg);
     const responded = msg.respondedWith;
     if (responded === undefined) throw new Error('responder did not reply');
     // The response is sealed to the server: open it with the server key.
@@ -191,7 +210,7 @@ describe('bus auth responder', () => {
     });
     const audited: AuditEvent[] = [];
     const responder = startBusAuthResponder(makeDeps([msg], audited));
-    await flush();
+    await settle();
     expect(msg.respondedWith).toBeUndefined();
     expect(audited).toHaveLength(0);
     await responder.stop();
