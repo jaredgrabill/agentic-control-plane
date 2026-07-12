@@ -177,33 +177,144 @@ describe('registration', () => {
     expect(res.json<{ error: { message: string } }>().error.message).toContain('agent-manifest');
   });
 
+  const r2Cap = (over: Partial<Capability> = {}): Capability => ({
+    name: 'change.submit',
+    description: 'Submit a change record.',
+    risk: 'R2',
+    input_schema: { type: 'object' },
+    output_schema: { type: 'object' },
+    examples: [{ input: {} }, { input: {} }, { input: {} }],
+    ...over,
+  });
+  const withdrawCap = (over: Partial<Capability> = {}): Capability => ({
+    name: 'change.withdraw',
+    description: 'Withdraw a submitted change record.',
+    risk: 'R1',
+    input_schema: { type: 'object' },
+    output_schema: { type: 'object' },
+    examples: [{ input: {} }, { input: {} }, { input: {} }],
+    ...over,
+  });
+
   it('rejects R2 capabilities without a compensator, accepts irreversible:true', async () => {
-    const r2: Capability = {
-      name: 'change.submit',
-      description: 'Submit a change record.',
-      risk: 'R2',
-      input_schema: { type: 'object' },
-      output_schema: { type: 'object' },
-      examples: [{ input: {} }, { input: {} }, { input: {} }],
-    };
     const rejected = await register({
-      manifest: manifest({ capabilities: [r2] }),
+      manifest: manifest({ capabilities: [r2Cap()] }),
       version: '0.1.0',
     });
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json<{ error: { message: string } }>().error.message).toContain('compensator');
 
+    // Compensator must resolve to a capability in the same manifest.
     const withCompensator = await register({
-      manifest: manifest({ capabilities: [{ ...r2, compensator: 'change.withdraw' }] }),
+      manifest: manifest({
+        capabilities: [r2Cap({ compensator: 'change.withdraw' }), withdrawCap()],
+      }),
       version: '0.1.0',
     });
     expect(withCompensator.statusCode).toBe(201);
 
     const irreversible = await register({
-      manifest: manifest({ capabilities: [{ ...r2, irreversible: true }] }),
+      manifest: manifest({ capabilities: [r2Cap({ irreversible: true })] }),
       version: '0.1.0',
     });
     expect(irreversible.statusCode).toBe(201);
+  });
+
+  it('accepts a mutual compensator pair (gov.test_write ⇄ gov.test_undo)', async () => {
+    const res = await register({
+      manifest: manifest({
+        capabilities: [
+          r2Cap({ name: 'gov.test_write', compensator: 'gov.test_undo' }),
+          r2Cap({ name: 'gov.test_undo', compensator: 'gov.test_write' }),
+        ],
+      }),
+      version: '0.1.0',
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
+  it('rejects a compensator+irreversible contradiction', async () => {
+    const res = await register({
+      manifest: manifest({
+        capabilities: [r2Cap({ compensator: 'change.withdraw', irreversible: true }), withdrawCap()],
+      }),
+      version: '0.1.0',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: { message: string } }>().error.message).toContain('contradict');
+  });
+
+  it('rejects a dangling compensator that names no capability in the manifest', async () => {
+    const res = await register({
+      manifest: manifest({ capabilities: [r2Cap({ compensator: 'change.withdraw' })] }),
+      version: '0.1.0',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: { message: string } }>().error.message).toContain('not a capability');
+  });
+
+  it('rejects a self-referential compensator', async () => {
+    const res = await register({
+      manifest: manifest({ capabilities: [r2Cap({ compensator: 'change.submit' })] }),
+      version: '0.1.0',
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.json<{ error: { message: string } }>().error.message).toContain('itself');
+  });
+
+  it('rejects a compensator whose own risk is R0 or R3, accepts R1', async () => {
+    const r0Comp = await register({
+      manifest: manifest({
+        capabilities: [
+          r2Cap({ compensator: 'change.withdraw' }),
+          withdrawCap({ risk: 'R0' }),
+        ],
+      }),
+      version: '0.1.0',
+    });
+    expect(r0Comp.statusCode).toBe(400);
+    expect(r0Comp.json<{ error: { message: string } }>().error.message).toContain('R0');
+
+    const r3Comp = await register({
+      manifest: manifest({
+        capabilities: [
+          r2Cap({ compensator: 'change.withdraw' }),
+          withdrawCap({ risk: 'R3', compensator: 'change.submit' }),
+        ],
+      }),
+      version: '0.1.0',
+    });
+    expect(r3Comp.statusCode).toBe(400);
+
+    const r1Comp = await register({
+      manifest: manifest({
+        capabilities: [r2Cap({ compensator: 'change.withdraw' }), withdrawCap({ risk: 'R1' })],
+      }),
+      version: '0.1.0',
+    });
+    expect(r1Comp.statusCode).toBe(201);
+  });
+
+  it('rejects an R0 that declares a compensator or irreversible', async () => {
+    const comp = await register({
+      manifest: manifest({
+        capabilities: [
+          { ...manifest().capabilities[0]!, compensator: 'change.withdraw' },
+          withdrawCap(),
+        ],
+      }),
+      version: '0.1.0',
+    });
+    expect(comp.statusCode).toBe(400);
+    expect(comp.json<{ error: { message: string } }>().error.message).toContain('R0');
+
+    const irr = await register({
+      manifest: manifest({
+        capabilities: [{ ...manifest().capabilities[0]!, irreversible: true }],
+      }),
+      version: '0.1.0',
+    });
+    expect(irr.statusCode).toBe(400);
   });
 
   it('rejects duplicate capability names and a missing version', async () => {

@@ -242,17 +242,96 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
  */
 export function validateRegistrationRules(manifest: AgentManifest): void {
   const seen = new Set<string>();
+  // Index capability risks up front so compensator references can be
+  // validated against the manifest as a whole (cross-agent compensators are
+  // unsupported v1; runtime discovery may still route the compensator to
+  // another server, which is acceptable).
+  const riskOf = new Map<string, string>();
+  for (const cap of manifest.capabilities) {
+    riskOf.set(cap.name, cap.risk);
+  }
+
   for (const cap of manifest.capabilities) {
     if (seen.has(cap.name)) {
       throw new AuthError(`duplicate capability ${cap.name} in manifest ${manifest.id}`, 400);
     }
     seen.add(cap.name);
-    if ((cap.risk === 'R2' || cap.risk === 'R3') && cap.compensator === undefined) {
-      if (cap.irreversible !== true) {
+
+    const isWrite = cap.risk === 'R2' || cap.risk === 'R3';
+    const hasCompensator = cap.compensator !== undefined;
+
+    // Rule 1 (keep): an R2/R3 write must declare a reversibility posture —
+    // a compensator OR an explicit irreversible flag.
+    if (isWrite && !hasCompensator && cap.irreversible !== true) {
+      throw new AuthError(
+        `capability ${cap.name} is ${cap.risk} but declares no compensator — declare one ` +
+          `(e.g. change.submit ⇄ change.withdraw) or mark it irreversible: true to accept ` +
+          `stricter approval requirements (orchestration.md)`,
+        400,
+      );
+    }
+
+    // Rule 2: compensator and irreversible are contradictory — a write is
+    // either reversible (names its compensator) or it is not (irreversible).
+    if (hasCompensator && cap.irreversible === true) {
+      throw new AuthError(
+        `capability ${cap.name} declares both a compensator (${String(cap.compensator)}) and ` +
+          `irreversible: true — these contradict: declare exactly one (a reversible write names ` +
+          `its compensator; an irreversible write has none)`,
+        400,
+      );
+    }
+
+    // Rule 6: R0 (read) and R1 (draft) never mutate persistent state that a
+    // compensator would undo, and irreversible only qualifies a write; an R0
+    // must declare neither. (An R1 MAY declare a compensator — legal but the
+    // saga ignores it; only R2+ writes are pushed onto the stack.)
+    if (cap.risk === 'R0' && (hasCompensator || cap.irreversible === true)) {
+      throw new AuthError(
+        `capability ${cap.name} is R0 (read-only) but declares ` +
+          `${hasCompensator ? 'a compensator' : 'irreversible: true'} — reversibility posture ` +
+          `applies only to R1+ (a read has nothing to compensate)`,
+        400,
+      );
+    }
+    if (cap.risk === 'R1' && cap.irreversible === true) {
+      throw new AuthError(
+        `capability ${cap.name} is R1 (draft) but declares irreversible: true — the irreversible ` +
+          `flag qualifies an R2+ write with no compensator; a draft has no persistent side effect`,
+        400,
+      );
+    }
+
+    if (hasCompensator) {
+      const compensator = cap.compensator as string;
+      // Rule 4: a capability may not name itself as its own compensator —
+      // running the write again does not undo it.
+      if (compensator === cap.name) {
         throw new AuthError(
-          `capability ${cap.name} is ${cap.risk} but declares no compensator — declare one ` +
-            `(e.g. change.submit ⇄ change.withdraw) or mark it irreversible: true to accept ` +
-            `stricter approval requirements (orchestration.md)`,
+          `capability ${cap.name} names itself as its compensator — a compensator must be a ` +
+            `distinct capability that reverses the write`,
+          400,
+        );
+      }
+      // Rule 3: the compensator must be a capability in the same manifest
+      // (dangling references cannot be dispatched by the saga).
+      const compRisk = riskOf.get(compensator);
+      if (compRisk === undefined) {
+        throw new AuthError(
+          `capability ${cap.name} names compensator ${compensator}, which is not a capability in ` +
+            `manifest ${manifest.id} — declare the compensator in the same manifest (cross-agent ` +
+            `compensators are unsupported)`,
+          400,
+        );
+      }
+      // Rule 5: the referenced compensator's own risk must be R1 or R2. An R0
+      // cannot undo a write; an R3 is platform-disabled (auto-write, never a
+      // safe unwind target).
+      if (compRisk !== 'R1' && compRisk !== 'R2') {
+        throw new AuthError(
+          `capability ${cap.name} names compensator ${compensator}, which is ${compRisk} — a ` +
+            `compensator must be R1 or R2 (an R0 read cannot reverse a write; R3 is not a safe ` +
+            `unwind target)`,
           400,
         );
       }
