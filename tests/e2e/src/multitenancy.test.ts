@@ -24,6 +24,7 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import type { AuditEvent, TaskResult } from '@acp/protocol';
@@ -31,6 +32,11 @@ import { KillSwitchControl } from '@acp/service-kit';
 import { connect, Events, tokenAuthenticator, type NatsConnection } from 'nats';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+// The REAL reserve primitive (the atomic conditional UPDATE under the
+// (tenant, period) row lock) — exercised concurrently below against the live
+// pg. Type-only imports from its module are erased, so this pulls in only
+// @acp/service-kit + pg at runtime.
+import { PgBudgetAdmission } from '../../../apps/gateway/src/budget.js';
 import {
   AUDIT_URL,
   GATEWAY_URL,
@@ -240,8 +246,30 @@ describe('1. provisioning: globex is a live tenant', () => {
       'acp:bus',
     );
     const nc = await busConnect(token);
-    nc.publish('acp.globex.audit.mt-e2e-provision', new TextEncoder().encode('{}'));
+    nc.publish('acp.globex.telemetry.mt-e2e-provision', new TextEncoder().encode('{}'));
     await nc.flush();
+    await nc.close();
+  });
+
+  it('a globex agent session cannot self-attest audit (forge task.completed) (B1)', async () => {
+    // The within-tenant budget cap is only sound because agents cannot publish
+    // audit at all — only the platform attests task.completed. A globex session
+    // publishing its OWN tenant's audit.task.completed is refused by the
+    // account boundary, so a forged zero-cost completion can never reach the
+    // ledger to drop the real charge.
+    const token = await mustToken(
+      'agent-knowledge-agent-globex',
+      'agent-knowledge-globex-dev-secret',
+      'acp:bus',
+    );
+    const nc = await busConnect(token);
+    const errors = collectErrors(nc);
+    nc.publish('acp.globex.audit.task.completed', new TextEncoder().encode('{}'));
+    await nc.flush();
+    await sleep(750);
+    const joined = errors.join(' ');
+    expect(joined).toMatch(/PERMISSIONS_VIOLATION/i);
+    expect(joined).toContain('acp.globex.audit.task.completed');
     await nc.close();
   });
 });
@@ -358,6 +386,58 @@ describe('3. per-tenant budget enforcement', () => {
     expect(Number(b.committed_micros) + Number(b.reserved_micros)).toBeLessThanOrEqual(
       Number(b.cap_micros),
     );
+  });
+});
+
+describe('3b. concurrent reserve under a tight cap (anti-TOCTOU)', () => {
+  // A dedicated pg-only tenant so this never disturbs globex's budget lane or
+  // any audit rows. reserve() is the gateway's real primitive.
+  const TENANT = 'mtconcurrency';
+  const CAP_MICROS = 100_000; // $0.10
+  const EST_MICROS = 30_000; // $0.03 → exactly 3 of these fit (90k ≤ 100k, 120k > 100k)
+  const FANOUT = 8;
+
+  it('admits exactly the fitting set; committed + reserved never exceeds the cap', async () => {
+    const admission = new PgBudgetAdmission({ pool: pool! });
+    const period = new Date().toISOString().slice(0, 8) + '01';
+    // Fresh cap row for this run.
+    await pool!.query(`DELETE FROM tenant_budget_reservation WHERE tenant = $1`, [TENANT]);
+    await pool!.query(`DELETE FROM tenant_budget WHERE tenant = $1`, [TENANT]);
+    await pool!.query(
+      `INSERT INTO tenant_budget (tenant, period_start, cap_micros, committed_micros, reserved_micros)
+       VALUES ($1, date_trunc('month', now() at time zone 'utc')::date, $2, 0, 0)`,
+      [TENANT, CAP_MICROS],
+    );
+    try {
+      // Fire FANOUT reserves concurrently — they serialize on the (tenant,
+      // period) row lock, each re-evaluating the predicate against the
+      // post-predecessor state (no read-then-write window).
+      const outcomes = await Promise.all(
+        Array.from({ length: FANOUT }, () =>
+          admission.reserve(TENANT, randomUUID(), EST_MICROS),
+        ),
+      );
+      const admitted = outcomes.filter((o) => o === 'ok').length;
+      const refused = outcomes.filter((o) => o === 'over_budget').length;
+      expect(admitted).toBe(Math.floor(CAP_MICROS / EST_MICROS)); // exactly 3
+      expect(refused).toBe(FANOUT - admitted);
+
+      const row = (
+        await pool!.query<{ committed_micros: string; reserved_micros: string; cap_micros: string }>(
+          `SELECT committed_micros, reserved_micros, cap_micros FROM tenant_budget
+            WHERE tenant = $1 AND period_start = $2`,
+          [TENANT, period],
+        )
+      ).rows[0]!;
+      // The invariant the cap exists to guarantee, after a concurrent storm.
+      expect(Number(row.reserved_micros)).toBe(admitted * EST_MICROS);
+      expect(Number(row.committed_micros) + Number(row.reserved_micros)).toBeLessThanOrEqual(
+        Number(row.cap_micros),
+      );
+    } finally {
+      await pool!.query(`DELETE FROM tenant_budget_reservation WHERE tenant = $1`, [TENANT]);
+      await pool!.query(`DELETE FROM tenant_budget WHERE tenant = $1`, [TENANT]);
+    }
   });
 });
 

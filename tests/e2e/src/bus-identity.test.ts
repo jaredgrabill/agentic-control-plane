@@ -101,9 +101,30 @@ describe('phase 3 bus identity (auth callout)', () => {
   it('an agent mints an acp:bus token and connects through the callout', async () => {
     const token = await busToken('agent-cloud-agent', 'agent-cloud-dev-secret');
     const nc = await busConnect(token);
-    // A live connection: an allowed publish flushes without error.
-    nc.publish('acp.acme.audit.bus-identity-test', new TextEncoder().encode('{}'));
+    // A live connection: an allowed publish (telemetry) flushes without error.
+    nc.publish('acp.acme.telemetry.bus-identity-test', new TextEncoder().encode('{}'));
     await nc.flush();
+    await nc.close();
+  });
+
+  it('an agent session cannot publish audit — it may not attest task.completed (B1)', async () => {
+    // Agents carry NO audit publish grant: the within-tenant budget cap trusts
+    // that only the platform attests task.completed. Even the agent's OWN
+    // tenant audit subject is refused by the account boundary.
+    const token = await busToken('agent-cloud-agent', 'agent-cloud-dev-secret');
+    const nc = await busConnect(token);
+    const errors: string[] = [];
+    void (async () => {
+      for await (const s of nc.status()) {
+        if (s.type === Events.Error) errors.push(JSON.stringify(s));
+      }
+    })();
+    nc.publish('acp.acme.audit.task.completed', new TextEncoder().encode('{}'));
+    await nc.flush();
+    await sleep(750);
+    const joined = errors.join(' ');
+    expect(joined).toMatch(/PERMISSIONS_VIOLATION/i);
+    expect(joined).toContain('acp.acme.audit.task.completed');
     await nc.close();
   });
 

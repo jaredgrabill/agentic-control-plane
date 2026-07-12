@@ -100,8 +100,10 @@ describe('BusAuthCore mint (happy path)', () => {
     };
     expect(nats.type).toBe('user');
     expect(nats.version).toBe(2);
+    // Agents publish telemetry + the platform RPC surface, NOT audit: a minted
+    // session must NOT be able to attest audit events (see the self-forgery
+    // regression below and budget.ts). Order is the template's.
     expect(nats.pub.allow).toEqual([
-      'acp.acme.audit.>',
       'acp.acme.telemetry.>',
       'acp.platform.svc.knowledge.>',
       '_INBOX.>',
@@ -112,6 +114,26 @@ describe('BusAuthCore mint (happy path)', () => {
       'acp.platform.control.>',
       '_INBOX.>',
     ]);
+  });
+
+  it('grants NO audit publish — an agent cannot forge task.completed (B1)', async () => {
+    // The within-tenant budget cap depends on only the PLATFORM attesting
+    // task.completed. A minted agent session must have no audit publish grant
+    // at all — not the tenant audit prefix, not the specific completion
+    // subject — so the NATS account boundary itself refuses the forgery.
+    reset();
+    const decision = await core.evaluate({ authToken: await busToken(), userNkey: USER_NKEY });
+    expect(decision.ok).toBe(true);
+    if (!decision.ok) return;
+    const pub = (decodeJwt(decision.userJwt).nats as { pub: { allow: string[] } }).pub.allow;
+    expect(pub).not.toContain('acp.acme.audit.>');
+    expect(pub.some((s) => s.startsWith('acp.acme.audit'))).toBe(false);
+    // No subject in the grant matches acp.acme.audit.task.completed.
+    const matches = (subj: string, pat: string): boolean => {
+      if (pat.endsWith('.>')) return subj.startsWith(pat.slice(0, -1));
+      return subj === pat;
+    };
+    expect(pub.some((p) => matches('acp.acme.audit.task.completed', p))).toBe(false);
   });
 });
 

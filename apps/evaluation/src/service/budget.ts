@@ -17,11 +17,15 @@
  *     skipped, so tenant A can never release or charge tenant B's ledger.
  *   - commitCharge is idempotent by task_id (tenant_budget_charge PK +
  *     ON CONFLICT DO NOTHING): a JetStream redelivery re-applies nothing.
- *   - RESIDUAL: an agent CAN publish a fabricated task.completed for its OWN
- *     tenant (the audit template allows acp.{tenant}.audit.>), naming its own
- *     running task with cost 0 to free its reservation early — self-tenant
- *     budget evasion, bounded by that tenant's own cap, on the threat-model
- *     backlog with audit-producer attestation.
+ *   - Only the PLATFORM attests task.completed. Audit is booked from the
+ *     SUBJECT tenant precisely because agent bus sessions carry NO audit
+ *     publish grant (apps/token/src/bus-auth/core.ts permissionsFor) — the
+ *     orchestrator (svc:orchestrator) is the sole producer over its account
+ *     connection. A compromised agent therefore cannot forge a zero-cost
+ *     task.completed to free its reservation and, via the marker dedup, drop
+ *     the real charge: the account boundary refuses the publish outright. (B1;
+ *     regression: token bus-auth "grants NO audit publish", E2E multitenancy
+ *     "cannot self-attest audit".)
  */
 
 import type { Logger } from '@acp/service-kit';
