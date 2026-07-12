@@ -126,18 +126,23 @@ export class BusAuthCore {
       };
     }
 
-    // 5) Kill switch: halted fleet, suspended agent, or denylisted principal
-    //    is refused at connection time (identity revocation at the door).
+    // 5) Kill switch: halted fleet, halted tenant, suspended agent, or
+    //    denylisted principal is refused at connection time (identity
+    //    revocation at the door). The tenant is the VERIFIED claims.tenant —
+    //    a halted tenant gets no new bus session; every other tenant is
+    //    untouched.
     const ks = this.config.killSwitch;
     if (ks !== undefined) {
       const reason =
         ks.fleetHalt() !== undefined
           ? 'fleet halt'
-          : ks.agentSuspension(agentId) !== undefined
-            ? `agent ${agentId} suspended`
-            : ks.principalDenied(claims.sub) !== undefined
-              ? `principal ${claims.sub} denylisted`
-              : undefined;
+          : ks.tenantHalt(claims.tenant) !== undefined
+            ? `tenant ${claims.tenant} halted`
+            : ks.agentSuspension(agentId) !== undefined
+              ? `agent ${agentId} suspended`
+              : ks.principalDenied(claims.sub) !== undefined
+                ? `principal ${claims.sub} denylisted`
+                : undefined;
       if (reason !== undefined) {
         return {
           ok: false,

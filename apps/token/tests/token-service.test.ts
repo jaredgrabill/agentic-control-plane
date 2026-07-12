@@ -1420,6 +1420,8 @@ describe('ADR-0007 broker-time denylist', () => {
   };
   const killSwitch = {
     fleetHalt: () => (state.fleet ? { active: true } : undefined),
+    // The tenant halt gates bus sessions + gateway intake, not token issuance.
+    tenantHalt: () => undefined,
     agentSuspension: (id: string) => (state.agents.has(id) ? { active: true } : undefined),
     principalDenied: (sub: string) => (state.principals.has(sub) ? { active: true } : undefined),
     capabilitySuspension: (n: string) => (state.capabilities.has(n) ? { active: true } : undefined),

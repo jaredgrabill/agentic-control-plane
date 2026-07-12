@@ -15,9 +15,15 @@ let issuerPublic: string;
 const account = accountFromSeed(ISSUER_SEED);
 
 // Toggleable kill-switch stub.
-const ks = { fleet: false, agents: new Set<string>(), principals: new Set<string>() };
+const ks = {
+  fleet: false,
+  tenants: new Set<string>(),
+  agents: new Set<string>(),
+  principals: new Set<string>(),
+};
 const killSwitch = {
   fleetHalt: () => (ks.fleet ? { active: true } : undefined),
+  tenantHalt: (tenant: string) => (ks.tenants.has(tenant) ? { active: true } : undefined),
   agentSuspension: (id: string) => (ks.agents.has(id) ? { active: true } : undefined),
   principalDenied: (sub: string) => (ks.principals.has(sub) ? { active: true } : undefined),
   capabilitySuspension: () => undefined,
@@ -40,6 +46,7 @@ beforeAll(async () => {
 
 function reset() {
   ks.fleet = false;
+  ks.tenants.clear();
   ks.agents.clear();
   ks.principals.clear();
 }
@@ -194,6 +201,30 @@ describe('BusAuthCore deny matrix (fail closed)', () => {
     const halted = await core.evaluate({ authToken: await busToken(), userNkey: USER_NKEY });
     expect(halted.ok).toBe(false);
     if (!halted.ok) expect(halted.error).toContain('fleet halt');
+  });
+
+  it('refuses a halted tenant by VERIFIED claims.tenant; other tenants unaffected', async () => {
+    reset();
+    ks.tenants.add('acme');
+    const halted = await core.evaluate({ authToken: await busToken(), userNkey: USER_NKEY });
+    expect(halted.ok).toBe(false);
+    if (!halted.ok) {
+      expect(halted.error).toContain('tenant acme halted');
+      expect(halted.principal).toBe('agent:cloud-agent@0.1.0');
+      expect(halted.tenant).toBe('acme');
+    }
+
+    // A halt on some OTHER tenant leaves this tenant's sessions untouched —
+    // the check is keyed by the verified token tenant, nothing else.
+    reset();
+    ks.tenants.add('globex');
+    const untouched = await core.evaluate({ authToken: await busToken(), userNkey: USER_NKEY });
+    expect(untouched.ok).toBe(true);
+
+    // A fleet halt still refuses everyone (tenant tier narrows, never widens).
+    ks.fleet = true;
+    const fleetHalted = await core.evaluate({ authToken: await busToken(), userNkey: USER_NKEY });
+    expect(fleetHalted.ok).toBe(false);
   });
 });
 
