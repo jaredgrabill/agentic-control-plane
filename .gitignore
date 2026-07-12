@@ -31,8 +31,9 @@ Thumbs.db
 site/
 .docusaurus/
 
-# Claude Code session-local settings
-.claude/settings.local.json
+# Claude Code agent runtime: worktrees, transcripts, and local settings —
+# all agent-runtime, none belongs in git.
+.claude/
 
 # codegen staging (atomic swap)
 generated.staging/
