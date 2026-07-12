@@ -32,6 +32,7 @@ services:
       ACP_NATS_KNOWLEDGE_PASSWORD: ${ACP_NATS_KNOWLEDGE_PASSWORD:-knowledge-dev-password}
       ACP_NATS_TOKEN_PASSWORD: ${ACP_NATS_TOKEN_PASSWORD:-token-dev-password}
       ACP_NATS_TOOL_GATEWAY_PASSWORD: ${ACP_NATS_TOOL_GATEWAY_PASSWORD:-tool-gateway-dev-password}
+      ACP_NATS_LLM_GATEWAY_PASSWORD: ${ACP_NATS_LLM_GATEWAY_PASSWORD:-llm-gateway-dev-password}
       ACP_NATS_AGENT_KNOWLEDGE_PASSWORD: ${ACP_NATS_AGENT_KNOWLEDGE_PASSWORD:-agent-knowledge-dev-password}
     ports:
       - '4222:4222'

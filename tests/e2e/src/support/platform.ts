@@ -19,6 +19,7 @@ export const GATEWAY_URL = 'http://localhost:7100';
 export const REGISTRY_URL = 'http://localhost:7102';
 export const AUDIT_URL = 'http://localhost:7104';
 export const KNOWLEDGE_URL = 'http://localhost:7105';
+export const LLM_GATEWAY_URL = 'http://localhost:7107';
 export const JAEGER_URL = 'http://localhost:16686';
 
 /** Boots the platform against the dev stack and resolves once it is ready. */

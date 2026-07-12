@@ -39,6 +39,14 @@
     "scopes": ["policy:decide"]
   },
   {
+    "client_id": "svc-llm-gateway",
+    "client_secret": "llm-gateway-dev-secret",
+    "principal": "svc:llm-gateway",
+    "tenant": "platform",
+    "roles": ["platform"],
+    "scopes": ["registry:read"]
+  },
+  {
     "client_id": "agent-knowledge-agent",
     "client_secret": "agent-knowledge-dev-secret",
     "principal": "agent:knowledge-agent@0.1.0",
@@ -57,7 +65,8 @@
       "registry:admin",
       "registry:read",
       "knowledge:ingest",
-      "audit:read"
+      "audit:read",
+      "llm:invoke"
     ]
   }
 ]

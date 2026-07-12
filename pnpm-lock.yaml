@@ -680,6 +680,9 @@ importers:
       '@acp/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@acp/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
       '@acp/tool-client':
         specifier: workspace:*
         version: link:../../packages/tool-client

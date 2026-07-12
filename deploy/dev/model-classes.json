@@ -1,0 +1,24 @@
+{
+  "kind": "acp-model-classes/v1",
+  "version": "2026.07",
+  "providers": {
+    "dev": { "type": "dev" }
+  },
+  "classes": {
+    "default-tier": {
+      "bindings": [{ "provider": "dev", "model": "dev-echo@1" }]
+    },
+    "cheap-tier": {
+      "bindings": [{ "provider": "dev", "model": "dev-echo@1" }]
+    },
+    "reasoning-tier": {
+      "bindings": [{ "provider": "dev", "model": "dev-echo@1" }]
+    },
+    "failover-proof": {
+      "bindings": [
+        { "provider": "dev", "model": "dev-fail-429@1", "max_attempts": 1 },
+        { "provider": "dev", "model": "dev-echo@1", "max_attempts": 1 }
+      ]
+    }
+  }
+}
