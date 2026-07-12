@@ -1,0 +1,15 @@
+{
+  "description": "Committed DEV calibration records loaded by the judge in dev/CI. Each record proves the judge MACHINERY (rubric → prompt → verdict parse → agreement) works end-to-end at agreement 1.0 against the dev-echo provider driven by scripted [[dev-llm]] verdicts (calibration/<rubric>/cases-dev.json). It is deliberately NOT a judgement of a real model — real calibration requires human-annotated cases scored by a real provider and is deferred to provider onboarding (evaluation.md). rubric_digest pins the exact rubric bytes; a rubric edit invalidates this record and the gate refuses to score until re-calibrated.",
+  "records": [
+    {
+      "schema": "acp-judge-calibration/v1",
+      "rubric": "answer-quality@1",
+      "rubric_digest": "sha256:0634c55f10fb17dd66b428a73014247dbae7782cdfc5ff1ab2b18bb38f5af78d",
+      "model_class": "default-tier",
+      "agreement": 1.0,
+      "min_agreement": 0.85,
+      "n": 4,
+      "generated_at": "2026-07-11T00:00:00Z"
+    }
+  ]
+}

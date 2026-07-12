@@ -1,0 +1,35 @@
+{
+  "schema": "acp-judge-cases/v1",
+  "rubric": "answer-quality@1",
+  "description": "Golden calibration cases for the answer-quality rubric. v0 labels are placeholder machinery — real calibration needs human-annotated cases scored by a real provider (deferred to provider onboarding). See evaluation.md.",
+  "cases": [
+    {
+      "name": "grounded-answer",
+      "input": "How many vacation days does the standard policy grant?",
+      "output": "The standard policy grants 20 vacation days per year.",
+      "citations": ["Policy 4.2: employees accrue 20 vacation days annually."],
+      "label": true
+    },
+    {
+      "name": "ungrounded-guess",
+      "input": "What is the parental leave allowance?",
+      "output": "Parental leave is 6 months at full pay.",
+      "citations": ["Policy 4.2: employees accrue 20 vacation days annually."],
+      "label": false
+    },
+    {
+      "name": "correct-abstention",
+      "input": "What is the reimbursement rate for personal vehicle mileage?",
+      "output": "I don't have enough information in the provided documents to answer that.",
+      "citations": [],
+      "label": true
+    },
+    {
+      "name": "confident-fabrication",
+      "input": "Who approves budget overruns above $1M?",
+      "output": "The CFO personally approves all overruns above one million dollars.",
+      "citations": [],
+      "label": false
+    }
+  ]
+}

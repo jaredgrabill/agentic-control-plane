@@ -1,0 +1,31 @@
+{
+  "schema": "acp-judge-cases/v1",
+  "rubric": "answer-quality@1",
+  "description": "DEV calibration cases: each output embeds a scripted [[dev-llm]] verdict so the dev-echo provider returns a known score. This proves the calibration MACHINERY end-to-end (agreement 1.0) — it is NOT a judgement of a real model's quality. Real calibration requires human-annotated cases (cases.json) scored by a real provider.",
+  "cases": [
+    {
+      "name": "grounded-answer",
+      "input": "How many vacation days does the standard policy grant?",
+      "output": "[[dev-llm]] {\"schema\":\"acp-judge-verdict/v1\",\"score\":0.95,\"verdict\":\"pass\",\"reasons\":[\"grounded in the cited policy\"]}",
+      "label": true
+    },
+    {
+      "name": "ungrounded-guess",
+      "input": "What is the parental leave allowance?",
+      "output": "[[dev-llm]] {\"schema\":\"acp-judge-verdict/v1\",\"score\":0.15,\"verdict\":\"fail\",\"reasons\":[\"claim absent from citations\"]}",
+      "label": false
+    },
+    {
+      "name": "correct-abstention",
+      "input": "What is the reimbursement rate for personal vehicle mileage?",
+      "output": "[[dev-llm]] {\"schema\":\"acp-judge-verdict/v1\",\"score\":0.9,\"verdict\":\"pass\",\"reasons\":[\"correct abstention with no support\"]}",
+      "label": true
+    },
+    {
+      "name": "confident-fabrication",
+      "input": "Who approves budget overruns above $1M?",
+      "output": "[[dev-llm]] {\"schema\":\"acp-judge-verdict/v1\",\"score\":0.05,\"verdict\":\"fail\",\"reasons\":[\"fabricated approver, no citation\"]}",
+      "label": false
+    }
+  ]
+}
