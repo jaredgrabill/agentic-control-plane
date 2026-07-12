@@ -413,9 +413,7 @@ describe('3b. concurrent reserve under a tight cap (anti-TOCTOU)', () => {
       // period) row lock, each re-evaluating the predicate against the
       // post-predecessor state (no read-then-write window).
       const outcomes = await Promise.all(
-        Array.from({ length: FANOUT }, () =>
-          admission.reserve(TENANT, randomUUID(), EST_MICROS),
-        ),
+        Array.from({ length: FANOUT }, () => admission.reserve(TENANT, randomUUID(), EST_MICROS)),
       );
       const admitted = outcomes.filter((o) => o === 'ok').length;
       const refused = outcomes.filter((o) => o === 'over_budget').length;
@@ -423,7 +421,11 @@ describe('3b. concurrent reserve under a tight cap (anti-TOCTOU)', () => {
       expect(refused).toBe(FANOUT - admitted);
 
       const row = (
-        await pool!.query<{ committed_micros: string; reserved_micros: string; cap_micros: string }>(
+        await pool!.query<{
+          committed_micros: string;
+          reserved_micros: string;
+          cap_micros: string;
+        }>(
           `SELECT committed_micros, reserved_micros, cap_micros FROM tenant_budget
             WHERE tenant = $1 AND period_start = $2`,
           [TENANT, period],
