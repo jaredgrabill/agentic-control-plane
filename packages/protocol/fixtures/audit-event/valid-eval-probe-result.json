@@ -1,0 +1,25 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e5002",
+  "occurred_at": "2026-07-11T10:06:05Z",
+  "tenant": "acme",
+  "event_type": "eval.probe_result",
+  "actor": {
+    "principal": "svc:prober",
+    "delegation_chain": [{ "sub": "svc:prober" }]
+  },
+  "action": {
+    "name": "probe:known-answer",
+    "inputs_digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  },
+  "artifacts": {
+    "agent_id": "knowledge-agent",
+    "agent_version": "0.1.0"
+  },
+  "details": {
+    "case": "vacation-policy",
+    "passed": true,
+    "duration_ms": 340,
+    "owner": "team:knowledge",
+    "checks": { "must_contain": true, "must_cite_docs": true, "abstain": false }
+  }
+}

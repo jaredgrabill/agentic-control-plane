@@ -1,0 +1,34 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e5001",
+  "occurred_at": "2026-07-11T10:06:00Z",
+  "tenant": "acme",
+  "event_type": "eval.score",
+  "actor": {
+    "principal": "svc:orchestrator",
+    "delegation_chain": [{ "sub": "user:jane.doe" }, { "sub": "svc:orchestrator" }]
+  },
+  "action": {
+    "name": "judge:answer-quality@1",
+    "inputs_digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "outputs_digest": "sha256:60303ae22b998861bce3b28f33eec1be758a213c86c93c076dbe9f558c11c752"
+  },
+  "reason": {
+    "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+    "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51"
+  },
+  "artifacts": {
+    "agent_id": "knowledge-agent",
+    "agent_version": "0.1.0",
+    "model": "dev-echo@1"
+  },
+  "details": {
+    "rubric": "answer-quality@1",
+    "rubric_digest": "sha256:8c8be44e3f1b3a4b5f6a1d2c3e4f5061728394a5b6c7d8e9f0011223344556677",
+    "model_class": "default-tier",
+    "route": "active",
+    "outcome": "scored",
+    "score": 0.92,
+    "verdict": "pass",
+    "calibration": { "agreement": 1.0, "min_agreement": 0.85 }
+  }
+}

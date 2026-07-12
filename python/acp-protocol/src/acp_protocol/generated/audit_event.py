@@ -50,6 +50,10 @@ class EventType(StrEnum):
     retrieval_served = "retrieval.served"
     tool_called = "tool.called"
     model_invoked = "model.invoked"
+    eval_score = "eval.score"
+    eval_probe_result = "eval.probe_result"
+    eval_drift_detected = "eval.drift_detected"
+    eval_budget_state_changed = "eval.budget_state_changed"
     killswitch_activated = "killswitch.activated"
     killswitch_cleared = "killswitch.cleared"
 
