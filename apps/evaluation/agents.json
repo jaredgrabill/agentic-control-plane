@@ -30,6 +30,11 @@
       "agent_id": "change-agent",
       "dir": "agents/change",
       "report_command": ["node", "agents/change/dist/eval-report.js", "--out", "{out}"]
+    },
+    {
+      "agent_id": "netsec-agent",
+      "dir": "agents/netsec",
+      "report_command": ["node", "agents/netsec/dist/eval-report.js", "--out", "{out}"]
     }
   ]
 }
