@@ -75,9 +75,82 @@ capabilities:
           service: payments-api
           period: { start: '2026-06-08', end: '2026-07-05' }
           threshold_pct: 25
+  - name: cloud.tag_apply
+    description: >
+      Set tags on an inventory resource. A production-affecting write (R2):
+      gated on human approval, and reversible by its compensator
+      cloud.tag_restore, which restores the previous tag values this call
+      records.
+    risk: R2
+    compensator: cloud.tag_restore
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [resource_id, tags]
+      properties:
+        resource_id: { type: string, minLength: 1 }
+        tags:
+          type: object
+          minProperties: 1
+          maxProperties: 10
+          additionalProperties: { type: string }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+        resource_id: { type: string }
+        applied: { type: object }
+        previous: { type: object }
+    examples:
+      - input: { resource_id: i-0a1f001, tags: { owner: team-payments } }
+      - input: { resource_id: i-0a1f001, tags: { cost_center: cc-42, owner: team-payments } }
+      - input: { resource_id: i-0b7e101, tags: { review: pending } }
+  - name: cloud.tag_restore
+    description: >
+      Restore the prior tag state of an inventory resource from a previous-value
+      map: re-apply keys that had a value, remove keys that were absent. The
+      declared compensator of cloud.tag_apply (mutual pair) — the honest inverse
+      that restores previous values rather than blindly deleting.
+    risk: R2
+    compensator: cloud.tag_apply
+    input_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        resource_id: { type: string, minLength: 1 }
+        previous: { type: object }
+        original:
+          type: object
+          properties:
+            step_id: { type: string }
+            capability: { type: string }
+            input: { type: object }
+            output: { type: object }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+        resource_id: { type: string }
+    examples:
+      - input: { resource_id: i-0a1f001, previous: { owner: platform-oncall } }
+      - input: { resource_id: i-0a1f001, previous: { added: null, owner: platform-oncall } }
+      - input:
+          original:
+            capability: cloud.tag_apply
+            output: { resource_id: i-0a1f001, previous: { owner: platform-oncall } }
 tools:
   - server: cloud-estate
-    scopes: [cloud:inventory:read, cloud:cost:read]
+    scopes: [cloud:inventory:read, cloud:cost:read, cloud:tag:write]
 models:
   allowed: [default-tier]
 data_classification: internal

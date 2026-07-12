@@ -62,7 +62,7 @@ const config: ToolServerConfig = {
         id: 'scripted',
         url: 'inmemory://scripted',
         auth: { mode: 'static-headers', headers: {} },
-        tools: { probe: { scope: 'probe:read' } },
+        tools: { probe: { scope: 'probe:read', risk: 'R0' } },
         rate_limit: { per_minute: 60, burst: 20 },
         timeout_ms: 15_000,
       },

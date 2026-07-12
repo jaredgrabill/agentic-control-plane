@@ -18,9 +18,26 @@ export type AuthMode =
   | { mode: 'static-headers'; headers: Record<string, string> }
   | { mode: 'token-exchange'; audience: string; scope: string[] };
 
+/** Risk classes a governed tool can declare, in ascending order of blast radius. */
+export type RiskClass = 'R0' | 'R1' | 'R2' | 'R3';
+
+const RISK_CLASSES: readonly RiskClass[] = ['R0', 'R1', 'R2', 'R3'];
+
+export function isRiskClass(value: unknown): value is RiskClass {
+  return typeof value === 'string' && (RISK_CLASSES as readonly string[]).includes(value);
+}
+
 export interface ToolSpec {
   /** The delegated scope a caller must hold for Cedar to permit the call. */
   scope: string;
+  /**
+   * The tool's risk class. Required — a tool with no declared risk cannot be
+   * governed (a config parse error, not a silent R0 default). The gateway
+   * refuses a tool whose risk exceeds the executing capability's risk (the
+   * signed `capability` claim), and refuses every R2+ tool called without a
+   * capability context at all.
+   */
+  risk: RiskClass;
 }
 
 export interface ToolServerEntry {
@@ -107,7 +124,13 @@ function parseEntry(
     if (!isRecord(spec) || typeof spec.scope !== 'string' || spec.scope === '') {
       fail(`tool ${name} needs a {scope} object`);
     }
-    tools[name] = { scope: (spec as { scope: string }).scope };
+    const risk: unknown = (spec as { risk?: unknown }).risk;
+    if (!isRiskClass(risk)) {
+      return fail(
+        `tool ${name} needs a risk class of R0, R1, R2, or R3 (got ${JSON.stringify(risk)})`,
+      );
+    }
+    tools[name] = { scope: (spec as { scope: string }).scope, risk };
   }
 
   const rate_limit = parseRateLimit(item.rate_limit, `rate_limit`, fail);

@@ -13,13 +13,24 @@
       }
     },
     {
-      "name": "R1 delegation has no permit in v0",
-      "expect": "deny",
+      "name": "R1 delegation is permitted for a same-tenant task:submit (item 3 flips the v0 deny pin)",
+      "expect": "allow",
+      "determined_by": "allow-r1-delegation",
       "request": {
         "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
         "action": "delegate",
         "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
         "context": { "risk": "R1", "scopes": ["task:submit"] }
+      }
+    },
+    {
+      "name": "R1 delegation without task:submit is denied",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R1", "scopes": ["itsm:change:draft"] }
       }
     },
     {
@@ -348,6 +359,456 @@
           "risk": "R3",
           "scopes": ["task:submit"],
           "compensation": { "active": true, "original_capability": "change.submit" }
+        }
+      }
+    },
+    {
+      "name": "tenant user delegates an R1 draft capability to the change agent",
+      "expect": "allow",
+      "determined_by": "allow-r1-delegation",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R1", "scopes": ["task:submit", "itsm:change:draft"] }
+      }
+    },
+    {
+      "name": "R1 cross-tenant delegation is denied",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:mallory", "attrs": { "tenant": "globex" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R1", "scopes": ["task:submit"] }
+      }
+    },
+    {
+      "name": "change agent calls change_get through the gateway PEP (R0 read)",
+      "expect": "allow",
+      "determined_by": "allow-tool-itsm-change-get",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_get",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": { "scopes": ["itsm:change:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "change agent calls calendar_conflicts through the gateway PEP (R0 read)",
+      "expect": "allow",
+      "determined_by": "allow-tool-itsm-calendar-conflicts",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:calendar_conflicts",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": { "scopes": ["itsm:calendar:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "change agent calls change_create_draft through the gateway PEP (R1)",
+      "expect": "allow",
+      "determined_by": "allow-tool-itsm-change-draft",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_create_draft",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": { "scopes": ["itsm:change:draft"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "approved change_submit executes (permit, gate NOT determining)",
+      "expect": "allow",
+      "determined_by": "permit-tool-itsm-change-submit",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_submit",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["itsm:change:submit"],
+          "tenant": "acme",
+          "approval": {
+            "granted": true,
+            "capability": "change.submit",
+            "approval_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90",
+            "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51"
+          },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "change_submit without a bound approval lifts to require-approval",
+      "expect": "require-approval",
+      "determined_by": "gate-tool-itsm-change-submit",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_submit",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["itsm:change:submit"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "change_submit with an approval for the WRONG capability still lifts to require-approval",
+      "expect": "require-approval",
+      "determined_by": "gate-tool-itsm-change-submit",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_submit",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["itsm:change:submit"],
+          "tenant": "acme",
+          "approval": { "granted": true, "capability": "change.withdraw" },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "change_submit without the submit scope is denied (never gated)",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_submit",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["itsm:change:read"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "change_submit cross-tenant is denied",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "globex" }
+        },
+        "action": "tool:itsm:change_submit",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["itsm:change:submit"],
+          "tenant": "acme",
+          "approval": { "granted": true, "capability": "change.submit" },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "approved change_withdraw executes",
+      "expect": "allow",
+      "determined_by": "permit-tool-itsm-change-withdraw",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_withdraw",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["itsm:change:withdraw"],
+          "tenant": "acme",
+          "approval": { "granted": true, "capability": "change.withdraw" },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "compensation change_withdraw of change.submit executes (gate NOT determining)",
+      "expect": "allow",
+      "determined_by": "permit-tool-itsm-change-withdraw",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_withdraw",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["itsm:change:withdraw"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": {
+            "active": true,
+            "original_capability": "change.submit",
+            "original_step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51"
+          }
+        }
+      }
+    },
+    {
+      "name": "change_withdraw without an approval or compensation lifts to require-approval",
+      "expect": "require-approval",
+      "determined_by": "gate-tool-itsm-change-withdraw",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_withdraw",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["itsm:change:withdraw"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "change_withdraw with a compensation of the WRONG original still lifts to require-approval",
+      "expect": "require-approval",
+      "determined_by": "gate-tool-itsm-change-withdraw",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_withdraw",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["itsm:change:withdraw"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": { "active": true, "original_capability": "change.draft" }
+        }
+      }
+    },
+    {
+      "name": "change_withdraw without the withdraw scope is denied",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_withdraw",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["itsm:change:read"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "approved tag_apply (cloud.tag_apply) executes",
+      "expect": "allow",
+      "determined_by": "permit-tool-cloud-estate-tag-apply",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:tag_apply",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": {
+          "scopes": ["cloud:tag:write"],
+          "tenant": "acme",
+          "approval": { "granted": true, "capability": "cloud.tag_apply" },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "approved tag_apply via cloud.tag_restore executes (restore re-applies previous values)",
+      "expect": "allow",
+      "determined_by": "permit-tool-cloud-estate-tag-apply",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:tag_apply",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": {
+          "scopes": ["cloud:tag:write"],
+          "tenant": "acme",
+          "approval": { "granted": true, "capability": "cloud.tag_restore" },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "compensation tag_apply unwinding cloud.tag_apply executes (gate NOT determining)",
+      "expect": "allow",
+      "determined_by": "permit-tool-cloud-estate-tag-apply",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:tag_apply",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": {
+          "scopes": ["cloud:tag:write"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": { "active": true, "original_capability": "cloud.tag_apply" }
+        }
+      }
+    },
+    {
+      "name": "unbound tag_apply lifts to require-approval",
+      "expect": "require-approval",
+      "determined_by": "gate-tool-cloud-estate-tag-apply",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:tag_apply",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": {
+          "scopes": ["cloud:tag:write"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "tag_apply without the cloud:tag:write scope is denied",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:tag_apply",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": {
+          "scopes": ["cloud:inventory:read"],
+          "tenant": "acme",
+          "approval": { "granted": true, "capability": "cloud.tag_apply" },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "approved tag_remove (cloud.tag_restore) executes",
+      "expect": "allow",
+      "determined_by": "permit-tool-cloud-estate-tag-remove",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:tag_remove",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": {
+          "scopes": ["cloud:tag:write"],
+          "tenant": "acme",
+          "approval": { "granted": true, "capability": "cloud.tag_restore" },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "compensation tag_remove unwinding cloud.tag_apply executes",
+      "expect": "allow",
+      "determined_by": "permit-tool-cloud-estate-tag-remove",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:tag_remove",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": {
+          "scopes": ["cloud:tag:write"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": { "active": true, "original_capability": "cloud.tag_apply" }
+        }
+      }
+    },
+    {
+      "name": "tag_remove with only a tag_apply approval lifts to require-approval (remove is a restore instrument)",
+      "expect": "require-approval",
+      "determined_by": "gate-tool-cloud-estate-tag-remove",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:tag_remove",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": {
+          "scopes": ["cloud:tag:write"],
+          "tenant": "acme",
+          "approval": { "granted": true, "capability": "cloud.tag_apply" },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
+      "name": "tag_remove without the cloud:tag:write scope is denied",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:tag_remove",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": {
+          "scopes": ["cloud:inventory:read"],
+          "tenant": "acme",
+          "approval": { "granted": true, "capability": "cloud.tag_restore" },
+          "compensation": { "active": false }
         }
       }
     },

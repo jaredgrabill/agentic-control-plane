@@ -69,6 +69,26 @@
       "capability": "cloud.cost_analysis",
       "input": { "period": { "start": "2026-07-05", "end": "2026-06-01" } },
       "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "tag_apply sets a tag and records the previous value for reversal",
+      "capability": "cloud.tag_apply",
+      "input": { "resource_id": "i-0a1f001", "tags": { "review": "pending" } },
+      "expect": {
+        "must_contain": ["applied tags", "i-0a1f001"],
+        "must_cite_docs": ["cloud/inventory-snapshot"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "tag_restore removes a key that was absent before, restoring prior state",
+      "capability": "cloud.tag_restore",
+      "input": { "resource_id": "i-0a1f001", "previous": { "review": null } },
+      "expect": {
+        "must_contain": ["restored prior tag state", "i-0a1f001"],
+        "must_cite_docs": ["cloud/inventory-snapshot"],
+        "min_confidence": 0.7
+      }
     }
   ]
 }

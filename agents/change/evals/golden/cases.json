@@ -1,0 +1,95 @@
+{
+  "description": "Golden set for the Change / ITSM agent. Deterministic, extractive handlers over the acme-corp itsm fixtures via one shared stateful store. Cases use distinct change ids so the shared write state never collides; needles are stable substrings, not sequential draft ids.",
+  "cases": [
+    {
+      "name": "a clear window reports no conflicts",
+      "capability": "change.conflict_check",
+      "input": { "window": { "start": "2026-07-16T07:00:00Z", "end": "2026-07-16T08:00:00Z" } },
+      "expect": {
+        "must_contain": ["is clear", "no scheduled changes"],
+        "must_cite_docs": ["itsm/change-calendar"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "a window inside the quarterly-close freeze is flagged",
+      "capability": "change.conflict_check",
+      "input": { "window": { "start": "2026-07-18T02:00:00Z", "end": "2026-07-18T03:00:00Z" } },
+      "expect": {
+        "must_contain": ["change freeze", "quarterly close"],
+        "must_cite_docs": ["itsm/change-calendar"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "a window beyond the coverage horizon abstains",
+      "capability": "change.conflict_check",
+      "input": { "window": { "start": "2026-09-05T02:00:00Z", "end": "2026-09-05T03:00:00Z" } },
+      "expect": { "abstain": true }
+    },
+    {
+      "name": "draft creates a change and cites the change log",
+      "capability": "change.draft",
+      "input": { "title": "Rotate the payments-api TLS certificate", "service": "payments-api" },
+      "expect": {
+        "must_contain": ["created draft change", "CHG-", "status draft"],
+        "must_cite_docs": ["itsm/change-log"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "draft with a too-short title is a typed needs_input failure",
+      "capability": "change.draft",
+      "input": { "title": "short" },
+      "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "submit moves a draft change to submitted",
+      "capability": "change.submit",
+      "input": { "change_id": "CHG-1001" },
+      "expect": {
+        "must_contain": ["submitted change CHG-1001", "was draft"],
+        "must_cite_docs": ["itsm/change-log"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "submit of a closed change is a typed permanent failure",
+      "capability": "change.submit",
+      "input": { "change_id": "CHG-1003" },
+      "expect": { "error_class": "permanent" }
+    },
+    {
+      "name": "withdraw by id withdraws a submitted change",
+      "capability": "change.withdraw",
+      "input": { "change_id": "CHG-1002" },
+      "expect": {
+        "must_contain": ["withdrew change CHG-1002", "was submitted"],
+        "must_cite_docs": ["itsm/change-log"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "withdraw resolves the change id from a compensator original handle",
+      "capability": "change.withdraw",
+      "input": {
+        "original": {
+          "capability": "change.submit",
+          "input": { "change_id": "CHG-1005" },
+          "output": { "change_id": "CHG-1005", "status": "submitted" }
+        }
+      },
+      "expect": {
+        "must_contain": ["withdrew change CHG-1005"],
+        "must_cite_docs": ["itsm/change-log"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "withdraw with no change id or handle is a typed needs_input failure",
+      "capability": "change.withdraw",
+      "input": {},
+      "expect": { "error_class": "needs_input" }
+    }
+  ]
+}

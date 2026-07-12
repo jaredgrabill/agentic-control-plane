@@ -1,0 +1,58 @@
+{
+  "document": {
+    "doc_id": "itsm/change-log",
+    "version": "2026-07-11",
+    "effective_date": "2026-07-11",
+    "url": "https://itsm.acme.example/changes/2026-07-11",
+    "lineage_id": "01981c00-0000-7000-8000-0000000000c1"
+  },
+  "as_of": "2026-07-11",
+  "tenant": "acme",
+  "changes": [
+    {
+      "change_id": "CHG-1001",
+      "title": "Rotate payments-api TLS certificate",
+      "description": "Replace the expiring wildcard certificate on the payments-api ingress before the 2026-07-20 expiry.",
+      "service": "payments-api",
+      "status": "draft",
+      "window": { "start": "2026-07-14T02:00:00Z", "end": "2026-07-14T03:00:00Z" },
+      "created_at": "2026-07-08T09:12:00Z"
+    },
+    {
+      "change_id": "CHG-1002",
+      "title": "Enable connection pooling on ledger-db",
+      "description": "Turn on PgBouncer transaction pooling for the ledger-core database.",
+      "service": "ledger-core",
+      "status": "submitted",
+      "window": { "start": "2026-07-15T04:00:00Z", "end": "2026-07-15T05:30:00Z" },
+      "created_at": "2026-07-07T15:40:00Z"
+    },
+    {
+      "change_id": "CHG-1003",
+      "title": "Retire legacy checkout redirect",
+      "description": "Remove the deprecated checkout-web redirect shim after the migration completed.",
+      "service": "checkout-web",
+      "status": "closed",
+      "window": { "start": "2026-06-30T01:00:00Z", "end": "2026-06-30T02:00:00Z" },
+      "created_at": "2026-06-25T11:05:00Z"
+    },
+    {
+      "change_id": "CHG-1004",
+      "title": "Raise payments-api rate limit to 5000 rps",
+      "description": "Increase the payments-api gateway rate limit ahead of the quarterly launch.",
+      "service": "payments-api",
+      "status": "draft",
+      "window": { "start": "2026-07-16T06:00:00Z", "end": "2026-07-16T06:30:00Z" },
+      "created_at": "2026-07-09T08:00:00Z"
+    },
+    {
+      "change_id": "CHG-1005",
+      "title": "Bump checkout-web CDN cache TTL",
+      "description": "Raise the edge cache TTL for static checkout assets.",
+      "service": "checkout-web",
+      "status": "submitted",
+      "window": { "start": "2026-07-18T09:00:00Z", "end": "2026-07-18T09:30:00Z" },
+      "created_at": "2026-07-08T13:20:00Z"
+    }
+  ]
+}

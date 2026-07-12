@@ -1,0 +1,169 @@
+id: change-agent
+name: Change / ITSM Agent
+owner: team-platform
+description: >
+  Governed change management over the acme ITSM system: read change records,
+  check a maintenance window against the change calendar, and — through the
+  approval and compensation machinery — draft, submit, and withdraw changes.
+  Answers are deterministic and extractive in v0 (no model calls); every write
+  is idempotency-keyed and every R2 write declares its compensator.
+capabilities:
+  - name: change.conflict_check
+    description: >
+      Check a proposed maintenance window against the change calendar: scheduled
+      changes and freeze periods that overlap it, and whether the window falls
+      within the calendar's coverage horizon. Abstains when the window ends
+      beyond the horizon (the calendar cannot answer).
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [window]
+      properties:
+        window:
+          type: object
+          required: [start, end]
+          additionalProperties: false
+          properties:
+            start: { type: string, minLength: 1 }
+            end: { type: string, minLength: 1 }
+        service: { type: string, minLength: 1 }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: { window: { start: '2026-07-14T02:00:00Z', end: '2026-07-14T03:00:00Z' } }
+      - input:
+          window: { start: '2026-07-18T02:00:00Z', end: '2026-07-18T03:00:00Z' }
+          service: payments-api
+      - input: { window: { start: '2026-09-05T02:00:00Z', end: '2026-09-05T03:00:00Z' } }
+  - name: change.draft
+    description: >
+      Create a draft change record with a title and optional service and
+      maintenance window. Returns the assigned change id; submitting it for
+      approval is a separate, higher-risk step.
+    risk: R1
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title: { type: string, minLength: 8, maxLength: 200 }
+        description: { type: string }
+        service: { type: string, minLength: 1 }
+        window:
+          type: object
+          required: [start, end]
+          additionalProperties: false
+          properties:
+            start: { type: string, minLength: 1 }
+            end: { type: string, minLength: 1 }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+        change_id: { type: string }
+        status: { type: string }
+    examples:
+      - input: { title: Rotate the payments-api TLS certificate }
+      - input:
+          title: Raise payments-api rate limit to 5000 rps
+          service: payments-api
+      - input:
+          title: Enable connection pooling on ledger-db
+          service: ledger-core
+          window: { start: '2026-07-22T04:00:00Z', end: '2026-07-22T05:00:00Z' }
+  - name: change.submit
+    description: >
+      Submit a draft change for approval. A production-affecting write (R2):
+      gated on human approval, and reversible by its compensator change.withdraw.
+    risk: R2
+    compensator: change.withdraw
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [change_id]
+      properties:
+        change_id: { type: string, pattern: '^CHG-' }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+        change_id: { type: string }
+        status: { type: string }
+        previous_status: { type: string }
+    examples:
+      - input: { change_id: CHG-1001 }
+      - input: { change_id: CHG-1004 }
+      - input: { change_id: CHG-2001 }
+  - name: change.withdraw
+    description: >
+      Withdraw a submitted change. A production-affecting write (R2): gated on
+      human approval, and the declared compensator of change.submit (so a saga
+      unwind of a submit withdraws it). Accepts a change_id directly or the
+      original write's recorded output during an unwind.
+    risk: R2
+    compensator: change.submit
+    input_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        change_id: { type: string, pattern: '^CHG-' }
+        reason: { type: string }
+        original:
+          type: object
+          properties:
+            step_id: { type: string }
+            capability: { type: string }
+            input: { type: object }
+            output: { type: object }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+        change_id: { type: string }
+        status: { type: string }
+        previous_status: { type: string }
+    examples:
+      - input: { change_id: CHG-1002 }
+      - input: { change_id: CHG-1002, reason: superseded by a newer change }
+      - input:
+          original:
+            capability: change.submit
+            input: { change_id: CHG-1004 }
+            output: { change_id: CHG-1004, status: submitted }
+tools:
+  - server: itsm
+    scopes:
+      - itsm:change:read
+      - itsm:calendar:read
+      - itsm:change:draft
+      - itsm:change:submit
+      - itsm:change:withdraw
+models:
+  allowed: [default-tier]
+data_classification: internal
+sla:
+  p95_latency_s: 30
+  quality_slo: 0.9

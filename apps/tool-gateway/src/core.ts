@@ -4,6 +4,10 @@
  *   (1) kill switch (fleet halt, agent suspension)
  *   (2) governed-tool lookup (config allowlist)
  *   (3) Cedar decision (deny → refused BEFORE any upstream contact)
+ *   (3.5) structural risk-class check (R3 disabled; a tool whose risk exceeds
+ *         the signed capability claim's risk is refused; every R2+ tool called
+ *         without a capability context is refused) — defense-in-depth with the
+ *         Cedar pair-policy: either alone blocks an unauthorized write
  *   (4) rate limit (after Cedar: denials never consume quota)
  *   (5) input validation against the upstream's advertised schema
  *   (6) credential brokering (static headers or per-call exchange)
@@ -189,6 +193,14 @@ export class ToolGatewayCore {
     // up an R2 tool pair-policy that permits only when context.approval.granted.
     const approval = deriveApproval(caller.claims, corr);
 
+    // Capability + compensation context, both from VERIFIED claims. Capability
+    // is ALWAYS present (defaulting to R0) so an R2 tool pair-policy can bind
+    // on it. Compensation is `active` only when a compensation claim rides a
+    // token whose brokered task matches THIS correlation — so an unwind's tool
+    // call is permitted (and not re-gated) exactly when it is a real unwind.
+    const capabilityContext = deriveCapability(caller.claims);
+    const compensationContext = deriveCompensation(caller.claims, corr);
+
     // (3) Cedar. Deny means NO upstream contact of any kind.
     const decision = await this.deps.policy.authorize({
       principal: {
@@ -198,7 +210,13 @@ export class ToolGatewayCore {
       },
       action: `tool:${serverId}:${tool}`,
       resource: { type: 'Service', id: `svc:${serverId}`, attrs: {} },
-      context: { scopes: caller.scopes, tenant: caller.tenant, approval },
+      context: {
+        scopes: caller.scopes,
+        tenant: caller.tenant,
+        approval,
+        capability: capabilityContext,
+        compensation: compensationContext,
+      },
       reason: {
         ...(corr.taskId !== undefined ? { task_id: corr.taskId } : {}),
         ...(corr.stepId !== undefined ? { step_id: corr.stepId } : {}),
@@ -242,6 +260,36 @@ export class ToolGatewayCore {
             `Cedar decision: require-approval for tool:${serverId}:${tool} by ${caller.principal} ` +
               `(bundle ${decision.bundle_version}); the token carries no approval grounds bound to ` +
               'this step — an R2 write requires a human-approved, step-bound token',
+          ),
+          'denied',
+        ),
+        decision,
+      };
+    }
+
+    // (3.5) STRUCTURAL risk-class enforcement — after Cedar (so the audit
+    // carries a real policy block if there was one) and before the limiter (so
+    // laundering probes do not consume quota). This is defense-in-depth: the
+    // Cedar pair-policy AND this check must both pass for an R2 tool. The
+    // check reads the executing risk from the VERIFIED `capability` claim, so
+    // it cannot be laundered by a header or by self-declaration.
+    //   - an R3 tool is refused unconditionally (platform-wide disabled);
+    //   - with a capability context, a tool whose risk EXCEEDS the capability's
+    //     risk is refused (an R0/R1 step cannot call an R2 tool; a compensator
+    //     carries R2 and passes);
+    //   - with NO capability context (a direct user/service caller, or a token
+    //     that lost the claim across an actor change), every R2+ tool is
+    //     refused — mutations flow only through the governed task path.
+    const risk = enforceRiskClass(spec.risk, caller.claims.capability);
+    if (risk !== undefined) {
+      await audit('denied', { riskRefusal: risk });
+      return {
+        ...refuse(
+          fail(
+            'upstream_auth',
+            `tool ${serverId}/${tool} (risk ${spec.risk}) refused: ${risk.reason} — ` +
+              `executing capability context ${risk.capabilityDescription}. An R2 write executes ` +
+              'only on a token whose signed capability claim declares risk >= the tool risk.',
           ),
           'denied',
         ),
@@ -401,6 +449,14 @@ export class ToolGatewayCore {
         outcome,
         ...(extras.retryAfterS !== undefined ? { retry_after_s: extras.retryAfterS } : {}),
         ...(extras.approvalId !== undefined ? { approval_id: extras.approvalId } : {}),
+        ...(extras.riskRefusal !== undefined
+          ? {
+              refusal: 'risk_class',
+              tool_risk: extras.riskRefusal.toolRisk,
+              capability: extras.riskRefusal.capability,
+              capability_risk: extras.riskRefusal.capabilityRisk,
+            }
+          : {}),
       },
     };
     try {
@@ -417,6 +473,8 @@ interface AuditExtras {
   retryAfterS?: number;
   /** Present when a require-approval refusal saw an approval claim that did not bind to this step. */
   approvalId?: string;
+  /** Present when a structural risk-class refusal fired (step 3.5). */
+  riskRefusal?: RiskRefusal;
 }
 
 /** The approval context handed to Cedar: granted only when a claim binds to THIS step. */
@@ -433,6 +491,113 @@ type ApprovalContext =
  * onto a different step. When a claim is present but unbound, its id rides the
  * refusal audit for investigation.
  */
+/** Cedar context for the executing capability — always present (R0 default). */
+interface CapabilityContext {
+  name: string;
+  risk: string;
+}
+
+/** Cedar context for a compensation unwind, active only when bound to this task. */
+type CompensationContext =
+  { active: true; original_capability: string; original_step_id: string } | { active: false };
+
+/** A structural risk-class refusal (step 3.5) and its audit fields. */
+interface RiskRefusal {
+  reason: string;
+  capabilityDescription: string;
+  toolRisk: string;
+  capability: string;
+  capabilityRisk: string;
+}
+
+function rankOf(risk: string): number {
+  // An unknown risk ranks as the most restrictive (R3) — fail-safe.
+  switch (risk) {
+    case 'R0':
+      return 0;
+    case 'R1':
+      return 1;
+    case 'R2':
+      return 2;
+    default:
+      return 3;
+  }
+}
+
+/**
+ * The structural risk-class check. Returns a RiskRefusal to block, or
+ * undefined to allow. Reads the executing risk from the VERIFIED capability
+ * claim only. R3 is refused unconditionally; with a capability context a tool
+ * exceeding its risk is refused; with NO capability context every R2+ tool is
+ * refused (mutations flow only through the governed task path).
+ */
+function enforceRiskClass(
+  toolRisk: string,
+  capability: Caller['claims']['capability'],
+): RiskRefusal | undefined {
+  if (rankOf(toolRisk) >= rankOf('R3')) {
+    return {
+      reason: 'R3 tools are disabled platform-wide',
+      capabilityDescription:
+        capability === undefined ? 'none' : `${capability.name} (${capability.risk})`,
+      toolRisk,
+      capability: capability?.name ?? '',
+      capabilityRisk: capability?.risk ?? '',
+    };
+  }
+  if (capability === undefined) {
+    if (rankOf(toolRisk) >= rankOf('R2')) {
+      return {
+        reason:
+          'no capability context — an R2+ tool call outside the governed task path is refused',
+        capabilityDescription: 'none',
+        toolRisk,
+        capability: '',
+        capabilityRisk: '',
+      };
+    }
+    return undefined;
+  }
+  if (rankOf(toolRisk) > rankOf(capability.risk)) {
+    return {
+      reason: `tool risk exceeds capability risk (risk-class laundering)`,
+      capabilityDescription: `${capability.name} (${capability.risk})`,
+      toolRisk,
+      capability: capability.name,
+      capabilityRisk: capability.risk,
+    };
+  }
+  return undefined;
+}
+
+/** Cedar capability context from the verified claim — defaults to R0 when absent. */
+function deriveCapability(claims: Caller['claims']): CapabilityContext {
+  return claims.capability ?? { name: '', risk: 'R0' };
+}
+
+/**
+ * Cedar compensation context from the verified claim. Active only when the
+ * token carries a compensation claim AND its brokered task binding matches
+ * THIS correlation — so a compensator's tool call is permitted (not re-gated)
+ * exactly when it is a real unwind of this task, never replayed elsewhere.
+ */
+function deriveCompensation(claims: Caller['claims'], corr: Correlation): CompensationContext {
+  const claim = claims.compensation;
+  if (
+    claim === undefined ||
+    claims.brokered?.task_id === undefined ||
+    corr.taskId === undefined ||
+    claims.brokered.task_id !== corr.taskId
+  ) {
+    return { active: false };
+  }
+  return {
+    active: true,
+    original_capability: claim.original_capability,
+    original_step_id: claim.original_step_id,
+  };
+}
+
 function deriveApproval(claims: Caller['claims'], corr: Correlation): ApprovalContext {
   const claim = claims.approval;
   if (claim === undefined) return { granted: false };

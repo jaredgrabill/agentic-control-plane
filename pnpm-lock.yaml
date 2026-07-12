@@ -36,6 +36,34 @@ importers:
         specifier: ^8.35.0
         version: 8.63.0(eslint@9.39.4(jiti@2.6.1))(typescript@5.9.3)
 
+  agents/change:
+    dependencies:
+      '@acp/agent-sdk':
+        specifier: workspace:*
+        version: link:../../packages/agent-sdk
+      '@acp/tool-client':
+        specifier: workspace:*
+        version: link:../../packages/tool-client
+    devDependencies:
+      '@acp/mock-tools':
+        specifier: workspace:*
+        version: link:../../deploy/mocks
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.29.0
+        version: 1.29.0(zod@3.25.76)
+      '@temporalio/common':
+        specifier: ^1.13.0
+        version: 1.20.2
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
+
   agents/cloud:
     dependencies:
       '@acp/agent-sdk':

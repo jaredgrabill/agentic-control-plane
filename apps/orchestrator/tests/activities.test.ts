@@ -485,6 +485,37 @@ describe('brokerToken', () => {
     expect(body!.compensation).toEqual(compensation);
     expect(Object.hasOwn(body!, 'approval')).toBe(false);
   });
+
+  it('forwards capability grounds (name + risk) into the broker request', async () => {
+    let body: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn((_u: string | URL, init?: RequestInit) => {
+      body = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return jsonResponse({ access_token: 'brokered.jwt' });
+    }) as unknown as typeof fetch;
+    await makeActivities(fetchImpl).brokerToken({
+      snapshot,
+      agent: card,
+      scopes: ['itsm:change:submit'],
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      capability: { name: 'change.submit', risk: 'R2' },
+    });
+    expect(body!.capability).toEqual({ name: 'change.submit', risk: 'R2' });
+  });
+
+  it('omits capability when the mint carries no capability grounds', async () => {
+    let body: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn((_u: string | URL, init?: RequestInit) => {
+      body = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return jsonResponse({ access_token: 'brokered.jwt' });
+    }) as unknown as typeof fetch;
+    await makeActivities(fetchImpl).brokerToken({
+      snapshot,
+      agent: card,
+      scopes: [],
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    });
+    expect(Object.hasOwn(body!, 'capability')).toBe(false);
+  });
 });
 
 describe('authorizeDelegation compensation context', () => {

@@ -7,7 +7,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { createCloudServer, loadCloudFixtures } from '@acp/mock-tools';
+import { CloudStore, createCloudServer, loadCloudFixtures } from '@acp/mock-tools';
 import { McpToolClient, type ToolClient } from '@acp/tool-client';
 import { CLOUD_ESTATE } from './tools.js';
 
@@ -16,12 +16,16 @@ export const FIXTURES_DIR = fileURLToPath(new URL('../../../fixtures/acme-corp',
 
 export function fixtureToolClient(fixturesDir: string = FIXTURES_DIR): ToolClient {
   const fixtures = loadCloudFixtures(fixturesDir);
+  // ONE shared CloudStore per ToolClient closure: tag writes (apply/restore)
+  // must survive the fresh-McpServer-per-call transport so an eval that applies
+  // a tag then restores it sees its own writes (read-your-writes).
+  const store = new CloudStore(fixtures);
   return new McpToolClient({
     servers: {
       [CLOUD_ESTATE]: {
         transport: () => {
           const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-          void createCloudServer(fixtures).connect(serverTransport);
+          void createCloudServer(store).connect(serverTransport);
           return clientTransport;
         },
       },

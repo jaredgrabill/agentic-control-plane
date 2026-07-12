@@ -390,6 +390,99 @@ describe('tool failures propagate through the execute taxonomy', () => {
   });
 });
 
+describe('cloud.tag_apply (R2 write)', () => {
+  it('applies tags, records previous values, and keys the write by the step id', async () => {
+    const tools = new FakeToolClient({
+      'cloud-estate.tag_apply': () => ({
+        data: {
+          resource_id: 'i-0a1f001',
+          applied: { owner: 'team-x' },
+          previous: { owner: 'platform-oncall' },
+        },
+        provenance: [INVENTORY_PROV],
+      }),
+    });
+    const req = stepRequest('cloud.tag_apply', {
+      resource_id: 'i-0a1f001',
+      tags: { owner: 'team-x' },
+    });
+    const step = await buildAgent(tools).execute(req);
+    expect(step.status).toBe('completed');
+    const output = step.output as unknown as { previous: Record<string, string | null> };
+    expect(output.previous).toEqual({ owner: 'platform-oncall' });
+    expect(tools.calls[0]!.args.idempotency_key).toBe(req.step_id);
+  });
+
+  it('fails needs_input on a missing resource or empty tags before the tool call', async () => {
+    const tools = new FakeToolClient({});
+    expect(
+      (await buildAgent(tools).execute(stepRequest('cloud.tag_apply', { tags: { a: 'b' } }))).error
+        ?.class,
+    ).toBe('needs_input');
+    expect(
+      (
+        await buildAgent(tools).execute(
+          stepRequest('cloud.tag_apply', { resource_id: 'i-1', tags: {} }),
+        )
+      ).error?.class,
+    ).toBe('needs_input');
+    expect(tools.calls).toHaveLength(0);
+  });
+});
+
+describe('cloud.tag_restore (honest inverse)', () => {
+  it('re-applies previous values and removes keys that were absent, with suffixed keys', async () => {
+    const tools = new FakeToolClient({
+      'cloud-estate.tag_apply': () => ({
+        data: { resource_id: 'i-0a1f001', applied: { owner: 'platform-oncall' }, previous: {} },
+        provenance: [INVENTORY_PROV],
+      }),
+      'cloud-estate.tag_remove': () => ({
+        data: { resource_id: 'i-0a1f001', removed: ['added'], absent: [] },
+        provenance: [INVENTORY_PROV],
+      }),
+    });
+    const req = stepRequest('cloud.tag_restore', {
+      resource_id: 'i-0a1f001',
+      previous: { owner: 'platform-oncall', added: null },
+    });
+    const step = await buildAgent(tools).execute(req);
+    expect(step.status).toBe('completed');
+    expect(tools.calls.map((c) => c.tool)).toEqual(['tag_apply', 'tag_remove']);
+    // Multi-write step: each write suffixes the step-id idempotency key.
+    expect(tools.calls[0]!.args.idempotency_key).toBe(`${req.step_id}:restore:apply`);
+    expect(tools.calls[1]!.args.idempotency_key).toBe(`${req.step_id}:restore:remove`);
+  });
+
+  it('resolves the resource + previous map from a compensator original handle', async () => {
+    const tools = new FakeToolClient({
+      'cloud-estate.tag_remove': () => ({
+        data: { resource_id: 'i-0a1f001', removed: ['review'], absent: [] },
+        provenance: [INVENTORY_PROV],
+      }),
+    });
+    const step = await buildAgent(tools).execute(
+      stepRequest('cloud.tag_restore', {
+        original: {
+          output: { resource_id: 'i-0a1f001', previous: { review: null } },
+        },
+      }),
+    );
+    expect(step.status).toBe('completed');
+    expect(tools.calls[0]!.tool).toBe('tag_remove');
+  });
+
+  it('fails needs_input when neither a direct state nor an original handle is present', async () => {
+    const tools = new FakeToolClient({});
+    const step = await buildAgent(tools).execute(
+      stepRequest('cloud.tag_restore', { resource_id: 'i-0a1f001' }),
+    );
+    expect(step.status).toBe('failed');
+    expect(step.error?.class).toBe('needs_input');
+    expect(tools.calls).toHaveLength(0);
+  });
+});
+
 describe('pure helpers', () => {
   it('pct and formatting reproduce the storyline numbers exactly', () => {
     expect(pct(18120, 13940).toFixed(1)).toBe('30.0');

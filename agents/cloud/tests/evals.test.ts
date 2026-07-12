@@ -45,7 +45,7 @@ describe('cloud-agent eval suites', () => {
     expect(payload.agent_id).toBe('cloud-agent');
     expect(payload.agent_version).toBe('0.1.0');
     expect(payload.suite.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(payload.suite.case_count).toBe(8);
+    expect(payload.suite.case_count).toBe(10);
     expect(payload.metrics.pass_rate).toBe(1);
     expect(payload.metrics.abstention_accuracy).toBe(1);
   });

@@ -109,6 +109,12 @@ const services = [
     ['deploy/mocks/dist/forge/main.js'],
     { ACP_MOCK_FORGE_PORT: '7302', ACP_MOCK_FIXTURES: join(repoRoot, 'fixtures', 'acme-corp') },
   ],
+  [
+    'itsm-mock',
+    'node',
+    ['deploy/mocks/dist/itsm/main.js'],
+    { ACP_MOCK_ITSM_PORT: '7303', ACP_MOCK_FIXTURES: join(repoRoot, 'fixtures', 'acme-corp') },
+  ],
   // Item 5: agent tool calls traverse the Tool Gateway PEP; the mocks stay
   // reachable on 7301/7302 as the gateway's upstreams only. Item 0c: each
   // agent holds its OWN token-service client so it can exchange the step's
@@ -134,6 +140,17 @@ const services = [
       ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
       ACP_AGENT_CLIENT_ID: 'agent-code-agent',
       ACP_AGENT_CLIENT_SECRET: 'agent-code-dev-secret',
+    },
+  ],
+  [
+    'change-agent',
+    'node',
+    ['agents/change/dist/main.js'],
+    {
+      ACP_TOOL_SERVER_ITSM_URL: 'http://localhost:7106/mcp/itsm',
+      ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+      ACP_AGENT_CLIENT_ID: 'agent-change-agent',
+      ACP_AGENT_CLIENT_SECRET: 'agent-change-dev-secret',
     },
   ],
 ];
@@ -187,7 +204,7 @@ process.on('SIGTERM', () => shutdown(0));
 
 // Readiness gate: every HTTP door answers /healthz. The mocks (7301/7302)
 // have one; the agents are Temporal workers with no HTTP door.
-const healthPorts = [7101, 7102, 7103, 7104, 7105, 7106, 7107, 7100, 7301, 7302];
+const healthPorts = [7101, 7102, 7103, 7104, 7105, 7106, 7107, 7100, 7301, 7302, 7303];
 const deadline = Date.now() + 120_000;
 for (const port of healthPorts) {
   for (;;) {

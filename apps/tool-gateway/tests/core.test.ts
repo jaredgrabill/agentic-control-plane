@@ -171,8 +171,8 @@ function makeHarness(options: { scriptedTimeoutMs?: number; auditFails?: boolean
           url: 'inmemory://cloud-estate',
           auth: { mode: 'static-headers', headers: { 'x-acp-broker-credential': 'cloud-cred' } },
           tools: {
-            inventory_search: { scope: 'cloud:inventory:read' },
-            cost_report: { scope: 'cloud:cost:read' },
+            inventory_search: { scope: 'cloud:inventory:read', risk: 'R0' },
+            cost_report: { scope: 'cloud:cost:read', risk: 'R0' },
           },
           rate_limit: { per_minute: 60, burst: 20 },
           timeout_ms: 15_000,
@@ -184,7 +184,12 @@ function makeHarness(options: { scriptedTimeoutMs?: number; auditFails?: boolean
           id: 'scripted',
           url: 'inmemory://scripted',
           auth: { mode: 'static-headers', headers: {} },
-          tools: { probe: { scope: 'probe:read' } },
+          tools: {
+            probe: { scope: 'probe:read', risk: 'R0' },
+            draft_probe: { scope: 'probe:draft', risk: 'R1' },
+            write_probe: { scope: 'probe:write', risk: 'R2' },
+            disabled_probe: { scope: 'probe:admin', risk: 'R3' },
+          },
           rate_limit: { per_minute: 60, burst: 20 },
           timeout_ms: options.scriptedTimeoutMs ?? 15_000,
         },
@@ -592,7 +597,7 @@ describe('static headers over real HTTP: broker credential in, caller Authorizat
             id: 'httpup',
             url: `http://127.0.0.1:${port}/mcp`,
             auth: { mode: 'static-headers', headers: { 'x-acp-broker-credential': 'secret-cred' } },
-            tools: { probe: { scope: 'probe:read' } },
+            tools: { probe: { scope: 'probe:read', risk: 'R0' } },
             rate_limit: { per_minute: 60, burst: 20 },
             timeout_ms: 15_000,
           },
@@ -638,7 +643,7 @@ describe('DevCredentialBroker token-exchange mode (injected fetch)', () => {
     id: 'knowledge',
     url: 'http://localhost:7105/mcp',
     auth: { mode: 'token-exchange', audience: 'acp:knowledge', scope: ['knowledge:search:read'] },
-    tools: { knowledge_search: { scope: 'knowledge:search:read' } },
+    tools: { knowledge_search: { scope: 'knowledge:search:read', risk: 'R0' } },
     rate_limit: { per_minute: 60, burst: 5 },
     timeout_ms: 15_000,
   };
@@ -813,5 +818,200 @@ describe('require-approval (verify-only PEP fails closed)', () => {
     expect((event.details as { approval_id?: string }).approval_id).toBe(
       '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90',
     );
+  });
+});
+
+// ------------------------------------------- risk-class enforcement (item 3)
+
+const RISK_TASK_ID = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40';
+const RISK_STEP_ID = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44';
+
+/** An agent caller whose acp:tools token carries a capability claim of `risk`. */
+function capabilityAgentCaller(
+  capability: { name: string; risk: string } | undefined,
+  over: { taskId?: string; scope?: string; compensation?: PlatformClaims['compensation'] } = {},
+): Caller {
+  return resolveCaller(
+    claimsFor({
+      aud: 'acp:tools',
+      scope: over.scope ?? 'probe:read probe:draft probe:write probe:admin',
+      act: { sub: 'agent:change-agent@0.1.0', act: { sub: 'svc:orchestrator' } },
+      brokered: { task_id: over.taskId ?? RISK_TASK_ID, verified_at: '2026-07-11T09:00:00Z' },
+      ...(capability === undefined ? {} : { capability }),
+      ...(over.compensation === undefined ? {} : { compensation: over.compensation }),
+    }),
+    'raw-tools-jwt',
+  );
+}
+
+describe('structural risk-class enforcement (step 3.5)', () => {
+  const cap = (risk: string) => ({ name: 'change.step', risk });
+
+  it('an R3 tool is refused unconditionally, even from an R3 capability context', async () => {
+    const result = await h.core.callTool(
+      capabilityAgentCaller(cap('R3')),
+      'scripted',
+      'disabled_probe',
+      {},
+      CORR,
+    );
+    expect(errorOf(result).code).toBe('upstream_auth');
+    expect(errorOf(result).message).toContain('R3 tools are disabled');
+    expect(h.scriptedCalls.calls).toBe(0);
+    expect(h.limiter.calls).toBe(0); // refused before the limiter
+  });
+
+  it('refuses an R2 tool from an R0 and an R1 capability context (matrix)', async () => {
+    for (const risk of ['R0', 'R1']) {
+      const result = await h.core.callTool(
+        capabilityAgentCaller(cap(risk)),
+        'scripted',
+        'write_probe',
+        {},
+        CORR,
+      );
+      expect(errorOf(result).code, risk).toBe('upstream_auth');
+      expect(errorOf(result).message, risk).toContain('exceeds capability risk');
+    }
+    expect(h.scriptedCalls.calls).toBe(0);
+  });
+
+  it('refuses an R1 tool from an R0 context but allows it from an R1 context', async () => {
+    const refused = await h.core.callTool(
+      capabilityAgentCaller(cap('R0')),
+      'scripted',
+      'draft_probe',
+      {},
+      CORR,
+    );
+    expect(errorOf(refused).code).toBe('upstream_auth');
+    const allowed = await h.core.callTool(
+      capabilityAgentCaller(cap('R1')),
+      'scripted',
+      'draft_probe',
+      {},
+      CORR,
+    );
+    expect(envelopeOf(allowed)?.ok).toBe(true);
+  });
+
+  it('allows an R2 tool from an R2 capability context (equal rank passes)', async () => {
+    const result = await h.core.callTool(
+      capabilityAgentCaller(cap('R2')),
+      'scripted',
+      'write_probe',
+      {},
+      CORR,
+    );
+    expect(envelopeOf(result)?.ok).toBe(true);
+    expect(h.scriptedCalls.calls).toBe(1);
+  });
+
+  it('allows an R0 tool from an R0 context (read path unaffected)', async () => {
+    const result = await h.core.callTool(
+      capabilityAgentCaller(cap('R0')),
+      'scripted',
+      'probe',
+      {},
+      CORR,
+    );
+    expect(envelopeOf(result)?.ok).toBe(true);
+  });
+
+  it('refuses every R2+ tool when there is NO capability context (direct caller)', async () => {
+    const result = await h.core.callTool(
+      userCaller('probe:write'),
+      'scripted',
+      'write_probe',
+      {},
+      {},
+    );
+    expect(errorOf(result).code).toBe('upstream_auth');
+    expect(errorOf(result).message).toContain('no capability context');
+    expect(h.scriptedCalls.calls).toBe(0);
+  });
+
+  it('allows R0/R1 tools when there is no capability context (Cedar still decides)', async () => {
+    const r0 = await h.core.callTool(userCaller('probe:read'), 'scripted', 'probe', {}, {});
+    expect(envelopeOf(r0)?.ok).toBe(true);
+    const r1 = await h.core.callTool(userCaller('probe:draft'), 'scripted', 'draft_probe', {}, {});
+    expect(envelopeOf(r1)?.ok).toBe(true);
+  });
+
+  it('audits a risk-class refusal as denied with the refusal fields', async () => {
+    await h.core.callTool(capabilityAgentCaller(cap('R0')), 'scripted', 'write_probe', {}, CORR);
+    const event = h.audit.at(-1)!;
+    expect((event.details as { outcome: string }).outcome).toBe('denied');
+    expect(event.details as Record<string, unknown>).toMatchObject({
+      refusal: 'risk_class',
+      tool_risk: 'R2',
+      capability: 'change.step',
+      capability_risk: 'R0',
+    });
+  });
+
+  it('runs AFTER Cedar: a deny is recorded as a policy block, not a risk refusal', async () => {
+    h.policy.decision = {
+      decision: 'deny',
+      bundle_version: '2026.07+deny',
+      determining_policies: [],
+    };
+    const result = await h.core.callTool(
+      capabilityAgentCaller(cap('R0')),
+      'scripted',
+      'write_probe',
+      {},
+      CORR,
+    );
+    expect(errorOf(result).message).toContain('Cedar decision: deny');
+    const event = h.audit.at(-1)!;
+    expect((event.details as { refusal?: string }).refusal).toBeUndefined();
+  });
+
+  it('feeds Cedar a capability context (R0 default) and an inactive compensation context', async () => {
+    await h.core.callTool(capabilityAgentCaller(cap('R2')), 'scripted', 'write_probe', {}, CORR);
+    const ctx = h.policy.requests.at(-1)!.context as {
+      capability: { name: string; risk: string };
+      compensation: { active: boolean };
+    };
+    expect(ctx.capability).toEqual({ name: 'change.step', risk: 'R2' });
+    expect(ctx.compensation).toEqual({ active: false });
+  });
+
+  it('defaults the Cedar capability context to R0 when the token carries no claim', async () => {
+    await h.core.callTool(userCaller('probe:read'), 'scripted', 'probe', {}, {});
+    const ctx = h.policy.requests.at(-1)!.context as { capability: { name: string; risk: string } };
+    expect(ctx.capability).toEqual({ name: '', risk: 'R0' });
+  });
+
+  it('marks compensation active only when the claim binds to this correlation task', async () => {
+    const compensation = {
+      original_step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+      original_capability: 'change.submit',
+    };
+    // Bound: brokered.task_id === corr.taskId → active.
+    await h.core.callTool(
+      capabilityAgentCaller(cap('R2'), { compensation }),
+      'scripted',
+      'write_probe',
+      {},
+      CORR,
+    );
+    const bound = h.policy.requests.at(-1)!.context as { compensation: { active: boolean } };
+    expect(bound.compensation).toMatchObject({
+      active: true,
+      original_capability: 'change.submit',
+    });
+
+    // Replayed onto a DIFFERENT task → inactive (cannot re-arm elsewhere).
+    await h.core.callTool(
+      capabilityAgentCaller(cap('R2'), { compensation }),
+      'scripted',
+      'write_probe',
+      {},
+      { taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3fff', stepId: RISK_STEP_ID },
+    );
+    const unbound = h.policy.requests.at(-1)!.context as { compensation: { active: boolean } };
+    expect(unbound.compensation).toEqual({ active: false });
   });
 });

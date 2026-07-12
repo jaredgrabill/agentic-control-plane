@@ -6,6 +6,7 @@ import {
   scopesOf,
   type ActClaim,
   type ApprovalClaim,
+  type CapabilityClaim,
   type CompensationClaim,
   type PlatformClaims,
 } from '@acp/service-kit';
@@ -59,6 +60,7 @@ export class TokenDeniedError extends AuthError {
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
 const CAPABILITY_RE = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+const RISK_CLASSES = new Set(['R0', 'R1', 'R2', 'R3']);
 
 /**
  * Human-approval grounds a broker asserts when minting a step token AFTER an
@@ -87,6 +89,20 @@ export interface CompensationGrounds {
   original_capability: string;
   approval_id?: string;
   approver?: string;
+}
+
+/**
+ * Capability grounds a broker asserts when minting ANY step token (Phase 3
+ * item 3): the exact capability executing and its declared risk class. Unlike
+ * approval/compensation grounds, these ride EVERY brokered step token (R0..R2),
+ * because the tool-gateway risk-class PEP needs the executing risk on every
+ * call — laundering an R2 tool through an R0/R1 step must be visible. Shape-
+ * validated at the mint; the signed `capability` claim is what item 3's tool
+ * gateway reads as `context.capability` and enforces `rank(tool) <= rank(cap)`.
+ */
+export interface CapabilityGrounds {
+  name: string;
+  risk: string;
 }
 
 /** `agent:{id}@{version}` (or `agent:{id}`) → the bare kill-switch id; undefined for non-agents. */
@@ -149,6 +165,14 @@ export interface DelegateRequest {
    * `context.compensation`. Mutually exclusive with `approval` (400 if both).
    */
   compensation?: CompensationGrounds | undefined;
+  /**
+   * Capability grounds — the executing capability's name and declared risk
+   * class. Present on every brokered step token so the tool gateway can
+   * enforce risk classes on every tool call. Signed into the token as the
+   * `capability` claim. Optional: an absent claim is treated as R0 context
+   * downstream (fail-safe — only R0 tools pass).
+   */
+  capability?: CapabilityGrounds | undefined;
   ttlSeconds?: number | undefined;
 }
 
@@ -356,6 +380,17 @@ export class TokenIssuer {
     // verified subject token; the exchange endpoint accepts no body-supplied
     // compensation.
     const compensation = sameActor ? subject.compensation : undefined;
+    // Item 3: the capability claim rides the SAME same-actor branch as
+    // `brokered`, `approval`, and `compensation`. This is the load-bearing
+    // propagation for the tool-gateway risk-class check: an agent presents an
+    // exchanged acp:tools token, so the gateway reads `capability` (the
+    // executing risk class) from the EXCHANGED token — which only works
+    // because it propagates here. A new actor (actor-appending exchange) or a
+    // chain-free rescope inherits NONE of the four claims: a stolen R2-context
+    // token cannot be laundered onto a different actor to launder its risk.
+    // No injection path: the claim can only come from the verified subject
+    // token; the exchange endpoint accepts no body-supplied capability.
+    const capability = sameActor ? subject.capability : undefined;
 
     return this.sign(
       {
@@ -368,6 +403,7 @@ export class TokenIssuer {
         ...(brokered !== undefined ? { brokered } : {}),
         ...(approval !== undefined ? { approval } : {}),
         ...(compensation !== undefined ? { compensation } : {}),
+        ...(capability !== undefined ? { capability } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
@@ -419,6 +455,8 @@ export class TokenIssuer {
         : buildApprovalClaim(request.approval, subject.sub);
     const compensationClaim =
       request.compensation === undefined ? undefined : buildCompensationClaim(request.compensation);
+    const capabilityClaim =
+      request.capability === undefined ? undefined : buildCapabilityClaim(request.capability);
 
     // Explicit-or-nothing: no "default to the snapshot" branch. A toolless
     // agent (requested = []) mints a token with zero scopes, keeping the
@@ -461,6 +499,7 @@ export class TokenIssuer {
         },
         ...(approvalClaim !== undefined ? { approval: approvalClaim } : {}),
         ...(compensationClaim !== undefined ? { compensation: compensationClaim } : {}),
+        ...(capabilityClaim !== undefined ? { capability: capabilityClaim } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
@@ -590,4 +629,25 @@ function buildCompensationClaim(raw: unknown): CompensationClaim {
     ...(grounds.approval_id === undefined ? {} : { approval_id: grounds.approval_id }),
     ...(grounds.approver === undefined ? {} : { approver: grounds.approver }),
   };
+}
+
+/**
+ * Validates capability grounds and shapes the signed `capability` claim. The
+ * name must match the capability pattern and the risk must be one of the four
+ * declared classes — a malformed capability or an unknown risk never becomes a
+ * signed claim, because the tool gateway enforces risk from exactly this field.
+ */
+function buildCapabilityClaim(raw: unknown): CapabilityClaim {
+  const bad = (msg: string): never => {
+    throw new AuthError(`capability grounds rejected: ${msg}`, 400);
+  };
+  if (typeof raw !== 'object' || raw === null) bad('must be an object');
+  const grounds = raw as CapabilityGrounds;
+  if (typeof grounds.name !== 'string' || !CAPABILITY_RE.test(grounds.name)) {
+    bad('name must be a capability name (e.g. change.submit)');
+  }
+  if (typeof grounds.risk !== 'string' || !RISK_CLASSES.has(grounds.risk)) {
+    bad('risk must be one of R0, R1, R2, R3');
+  }
+  return { name: grounds.name, risk: grounds.risk };
 }

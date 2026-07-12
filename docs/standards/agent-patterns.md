@@ -36,6 +36,21 @@ CI config — working out of the box.
   can't write a golden dataset for it, it's too broad.
 - R2+ capabilities **MUST** declare a compensator or the `irreversible`
   flag ([orchestration.md](../architecture/orchestration.md)).
+- **Write capabilities** pass `idempotency_key = ctx.stepId` on every tool
+  write (plan-minted, stable across activity retries — the duplicate-delivery
+  boundary); a multi-write step suffixes it deterministically
+  (`${ctx.stepId}:restore:apply`, `:restore:remove`) so each write is
+  de-duplicated independently. A missing step id is a caller bug, not a reason
+  to fall back to a random key (that defeats de-duplication).
+- **Compensator input** arrives as `{original: {step_id, capability, input,
+  output}}` — the recorded state of the write being undone. A compensator
+  recovers its target mechanically from that handle (e.g. `change.withdraw`
+  reads `original.output.change_id`), never from fresh attacker-supplied input.
+- **Compensator-output principle:** a compensator restores the PRIOR state, so
+  a reversible write must record what it needs for an honest inverse. A tag
+  write returns the previous value of each key (null when absent) and its
+  compensator re-applies previous values / removes only genuinely-absent keys —
+  a blind delete would lie when the write overwrote an existing value.
 - Handlers **MUST** be stateless between invocations: all state arrives in
   the request (task context) or lives in platform stores. Agent-local
   memory (caches, session files) is forbidden — it breaks replay, shadow

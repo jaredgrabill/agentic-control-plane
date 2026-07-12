@@ -11,8 +11,10 @@
         }
       },
       "tools": {
-        "inventory_search": { "scope": "cloud:inventory:read" },
-        "cost_report": { "scope": "cloud:cost:read" }
+        "inventory_search": { "scope": "cloud:inventory:read", "risk": "R0" },
+        "cost_report": { "scope": "cloud:cost:read", "risk": "R0" },
+        "tag_apply": { "scope": "cloud:tag:write", "risk": "R2" },
+        "tag_remove": { "scope": "cloud:tag:write", "risk": "R2" }
       },
       "rate_limit": { "per_minute": 60, "burst": 20 },
       "timeout_ms": 15000
@@ -27,8 +29,26 @@
         }
       },
       "tools": {
-        "repo_dependencies": { "scope": "code:repo:read" },
-        "ci_runs": { "scope": "code:ci:read" }
+        "repo_dependencies": { "scope": "code:repo:read", "risk": "R0" },
+        "ci_runs": { "scope": "code:ci:read", "risk": "R0" }
+      },
+      "rate_limit": { "per_minute": 60, "burst": 20 }
+    },
+    {
+      "id": "itsm",
+      "url": "http://localhost:7303/mcp",
+      "auth": {
+        "mode": "static-headers",
+        "headers": {
+          "x-acp-broker-credential": "${ACP_TOOL_CRED_ITSM:-itsm-dev-broker}"
+        }
+      },
+      "tools": {
+        "change_get": { "scope": "itsm:change:read", "risk": "R0" },
+        "calendar_conflicts": { "scope": "itsm:calendar:read", "risk": "R0" },
+        "change_create_draft": { "scope": "itsm:change:draft", "risk": "R1" },
+        "change_submit": { "scope": "itsm:change:submit", "risk": "R2" },
+        "change_withdraw": { "scope": "itsm:change:withdraw", "risk": "R2" }
       },
       "rate_limit": { "per_minute": 60, "burst": 20 }
     },
@@ -41,7 +61,7 @@
         "scope": ["knowledge:search:read"]
       },
       "tools": {
-        "knowledge_search": { "scope": "knowledge:search:read" }
+        "knowledge_search": { "scope": "knowledge:search:read", "risk": "R0" }
       },
       "rate_limit": { "per_minute": 60, "burst": 5 }
     }

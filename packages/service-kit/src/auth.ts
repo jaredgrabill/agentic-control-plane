@@ -68,6 +68,25 @@ export interface CompensationClaim {
   approver?: string;
 }
 
+/**
+ * Signed capability grounds (Phase 3 item 3). Only `TokenIssuer.delegate()`
+ * sets it — the orchestrator brokering a step token names the exact capability
+ * executing and its declared risk class. Rides verbatim across the agent's
+ * same-actor acp:tools exchange (SPRINT cross-item contract) so the tool
+ * gateway's risk-class PEP reads the risk from a VERIFIED claim, not from a
+ * caller-supplied header or a registry lookup that cannot know which
+ * capability is running. A tool whose risk exceeds `risk` is refused
+ * structurally (design §D3). Absent (an unbrokered token, or one that lost the
+ * claim across an actor change) is treated as R0 context — fail-safe: only R0
+ * reads pass, every R1+/R2 tool is refused.
+ */
+export interface CapabilityClaim {
+  /** The capability name executing this step (e.g. change.submit). */
+  name: string;
+  /** The declared risk class of that capability: R0 | R1 | R2 | R3. */
+  risk: string;
+}
+
 export interface PlatformClaims extends JWTPayload {
   sub: string;
   tenant: string;
@@ -81,6 +100,8 @@ export interface PlatformClaims extends JWTPayload {
   approval?: ApprovalClaim;
   /** Present only on broker-delegated compensator tokens, and their same-actor exchanges. */
   compensation?: CompensationClaim;
+  /** Present only on broker-delegated step tokens naming the executing capability, and their same-actor exchanges. */
+  capability?: CapabilityClaim;
 }
 
 export class AuthError extends Error {

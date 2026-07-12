@@ -31,6 +31,28 @@ context.approval.capability == "<capability>"`) plus an annotated
 the lift is restrictive, a sloppy gate can only over-gate (block), never
 silently bypass — the fail-safe direction.
 
+Realized R2 tool pairs (item 3): `permit`/`gate-tool-itsm-change-submit`,
+`…-itsm-change-withdraw`, `…-cloud-estate-tag-apply`,
+`…-cloud-estate-tag-remove`. The tool gateway derives `context.approval`,
+`context.compensation`, and `context.capability` from the VERIFIED token
+claims (never a header) and binds approval to the exact step before the
+decision. A withdraw/restore permit ALSO accepts a compensation grounds
+branch (`context.compensation.active == true &&
+context.compensation.original_capability == "<original>"`) — a compensator
+is pre-authorized by the original write's approval and must not re-gate.
+
+**`has`-guard discipline:** every access past a variant field is guarded
+(`context.approval has capability`, `context.compensation has
+original_capability`) and ordered AFTER the boolean that selects the
+variant (`granted == true && … has capability && …`), so Cedar
+short-circuits before touching an absent attribute — a gate permit must
+never evaluation-error (that would fail the decision closed but silently).
+R0/R1 tool permits (`allow-tool-itsm-change-get`,
+`allow-tool-itsm-calendar-conflicts`, `allow-tool-itsm-change-draft`) are
+plain permits with no approval binding; the structural risk-class check at
+the gateway is the defense-in-depth backstop that also refuses R2 tools
+called from an R0/R1 or absent capability context.
+
 ### Compensation carve-out (item 2)
 
 When a task fails, is cancelled, or is caught by a kill switch, the

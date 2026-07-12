@@ -86,6 +86,16 @@ PEPs consume the three-way, with different verbs:
   corr.stepId === approval.step_id`); a require-approval verdict is refused
   (`upstream_auth`, audited). v1 binds approval at STEP granularity
   (tool-call-level divergence is item-3 risk-class territory).
+- **Risk-class enforcement (item 3) narrows the downstream tool-call surface.**
+  The step token also carries a signed `capability {name, risk}` claim; the
+  tool gateway refuses a tool whose risk exceeds it, and refuses every R2+ tool
+  called with no capability context at all. Combined with a Cedar pair-policy
+  bound on the approval/compensation grounds, an R2 write executes only when
+  the token was brokered through the governed (approved, or compensating) path
+  — a bare R2-scoped token, a forged agent-context token, or a direct
+  IDE-shaped user token cannot execute a mutation. This does not fully close
+  the STEP-granularity residual (the approver saw the step input, not the exact
+  tool args), but it binds the executing capability's risk to what runs.
 
 The approver decides via the gateway approval API (`GET /v1/approvals/:id`,
 `POST /:id/decision`, scope `approvals:decide`) or `scripts/approve.mjs`
