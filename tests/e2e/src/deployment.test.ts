@@ -148,6 +148,70 @@ function stopChild(child: ChildProcess): void {
   }
 }
 
+/** True once a child's run has settled (exited by code or signal). */
+function hasExited(child: ChildProcess): boolean {
+  return child.exitCode !== null || child.signalCode !== null;
+}
+
+/**
+ * Stops a child and resolves only once its process has actually exited (its
+ * run() has settled), so teardown never returns while a worker is still
+ * draining. Bounded so a wedged child can't hang the suite forever.
+ */
+async function stopChildAndWait(child: ChildProcess, timeoutMs = 20_000): Promise<void> {
+  if (hasExited(child)) return;
+  const exited = new Promise<void>((resolve) => {
+    child.once('exit', () => {
+      resolve();
+    });
+    child.once('error', () => {
+      resolve();
+    });
+  });
+  stopChild(child);
+  await Promise.race([exited, new Promise<void>((r) => setTimeout(r, timeoutMs))]);
+}
+
+/**
+ * Fully tears down the platform child, waiting for the whole service tree to
+ * exit. Force-killing without waiting lets the next file boot run-platform on
+ * the same fixed ports/task-queues while this platform's Temporal workers are
+ * still DRAINING — the exact race that surfaces as an IllegalStateError and
+ * fails the file. Awaiting exit here serialises the handoff.
+ */
+async function stopPlatformAndWait(p: ChildProcess | undefined, timeoutMs = 30_000): Promise<void> {
+  if (p === undefined) return;
+  if (hasExited(p)) return;
+  const exited = new Promise<void>((resolve) => {
+    p.once('exit', () => {
+      resolve();
+    });
+    p.once('error', () => {
+      resolve();
+    });
+  });
+  stopPlatform(p);
+  await Promise.race([exited, new Promise<void>((r) => setTimeout(r, timeoutMs))]);
+}
+
+/**
+ * Waits for a freshly spawned candidate worker to have a chance to connect its
+ * queue, failing fast if it exits first. Guards against driving traffic at (or
+ * asserting shutdown of) a worker whose run() already settled — a settled
+ * worker is what throws IllegalStateError on a later touch.
+ */
+async function awaitCandidateReady(child: ChildProcess, ms: number): Promise<void> {
+  const deadline = Date.now() + ms;
+  while (Date.now() < deadline) {
+    if (hasExited(child)) {
+      throw new Error(
+        `candidate worker exited before it became ready (code=${String(child.exitCode)}, signal=${String(child.signalCode)})`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, 250));
+  }
+}
+
 async function submitTask(): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/v1/tasks`, {
     method: 'POST',
@@ -264,10 +328,22 @@ beforeAll(async () => {
   void registerAndActivate;
 }, 300_000);
 
-afterAll(() => {
-  for (const w of candidateWorkers) stopChild(w);
-  stopPlatform(platform);
-});
+afterAll(async () => {
+  // Best-effort but AWAITED teardown: stop every candidate worker and the
+  // platform tree and wait for each to exit, wrapped so a draining worker's
+  // IllegalStateError can never escape the hook and crash the file. Candidate
+  // workers first (they connect to the platform), then the platform itself.
+  try {
+    await Promise.allSettled(candidateWorkers.map((w) => stopChildAndWait(w)));
+  } catch {
+    /* teardown is best-effort */
+  }
+  try {
+    await stopPlatformAndWait(platform);
+  } catch {
+    /* teardown is best-effort */
+  }
+}, 120_000);
 
 describe('deployment controller v0 (DoD)', () => {
   it('promotes a shadow candidate to active through the gates with zero manual routing', async () => {
@@ -283,9 +359,10 @@ describe('deployment controller v0 (DoD)', () => {
     void activeBefore;
 
     await recordBaseline('0.2.0', writeToken);
-    spawnCandidate('0.2.0', 'agent-knowledge-agent-v2', 'agent-knowledge-v2-dev-secret');
-    // Give the candidate worker time to connect its queue.
-    await new Promise((r) => setTimeout(r, 8000));
+    const v2 = spawnCandidate('0.2.0', 'agent-knowledge-agent-v2', 'agent-knowledge-v2-dev-secret');
+    // Give the candidate worker time to connect its queue, failing fast if it
+    // dies first rather than driving traffic at a worker that never came up.
+    await awaitCandidateReady(v2, 8000);
 
     // Start the deployment via the CLI (exercises deploy.mjs end-to-end).
     const config = JSON.stringify({
@@ -379,10 +456,15 @@ describe('deployment controller v0 (DoD)', () => {
     await recordBaseline('0.3.0', writeToken);
     // v3 fails every answer (deployment-rehearsal directive) — shadow/canary
     // steps breach, so the controller rejects it.
-    spawnCandidate('0.3.0', 'agent-knowledge-agent-v3', 'agent-knowledge-v3-dev-secret', {
-      ACP_KNOWLEDGE_AGENT_FAILURE: 'permanent',
-    });
-    await new Promise((r) => setTimeout(r, 8000));
+    const v3 = spawnCandidate(
+      '0.3.0',
+      'agent-knowledge-agent-v3',
+      'agent-knowledge-v3-dev-secret',
+      {
+        ACP_KNOWLEDGE_AGENT_FAILURE: 'permanent',
+      },
+    );
+    await awaitCandidateReady(v3, 8000);
 
     const config = JSON.stringify({
       shadow_soak_s: 5,
