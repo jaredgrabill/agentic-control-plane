@@ -16,6 +16,7 @@ import {
   defineSignal,
   executeChild,
   isCancellation,
+  log,
   proxyActivities,
   setHandler,
   startChild,
@@ -139,6 +140,30 @@ async function runTaskBody(
     details: { plan, planner: plan.planner },
   });
 
+  // "No action without audit": any early return AFTER task.planned still emits a
+  // terminal task.completed so an auditor never sees a planned-but-unterminated
+  // task (routed 0b-QA LOW — a fail-closed cost rejection previously returned
+  // without a terminal record). The failure rides details.error.
+  const failClosedAfterPlanned = async (
+    error: NonNullable<TaskResult['error']>,
+  ): Promise<TaskResult> => {
+    await control.emitAudit({
+      event_id: uuid4(),
+      occurred_at: new Date().toISOString(),
+      tenant: task.tenant,
+      event_type: 'task.completed',
+      actor: {
+        principal: 'svc:orchestrator',
+        delegation_chain: [{ sub: task.principal }, { sub: 'svc:orchestrator' }],
+      },
+      action: { name: 'task.completed' },
+      reason: { task_id: task.task_id },
+      artifacts: { workflow_run_id: workflowInfo().runId },
+      details: { status: 'failed', error, gaps: [], rejected_before_execution: true },
+    });
+    return fail(task, error);
+  };
+
   // Cost Meter: resolve the current price book once, pin its version for the
   // whole task. If the book can't be loaded, fail CLOSED when max_cost_usd is
   // set (the budget cannot be honored) and otherwise proceed with cost
@@ -149,7 +174,7 @@ async function runTaskBody(
     book = await control.getPriceBook();
   } catch {
     if (task.budget?.max_cost_usd !== undefined) {
-      return fail(task, {
+      return failClosedAfterPlanned({
         class: 'retryable',
         message:
           'price book unavailable — max_cost_usd cannot be enforced; task rejected fail-closed',
@@ -747,6 +772,26 @@ async function runAgentStep(
     );
   }
 
+  // Checkpoint 1(a): tier-2/3 kill switch BEFORE authorizeDelegation. A halt
+  // fails the step closed (policy_denied) and NEVER spawns an ApprovalWorkflow,
+  // so an incomplete plan triggers the saga unwind (design-2 D5). The
+  // compensation-exemption matrix lives in the activity — a fleet/risk halt is
+  // exempt for a compensator, a named-capability/agent halt is not.
+  const preHalt = await control.checkKillSwitch({
+    capability: planStep.capability,
+    risk: declared.risk,
+    agentId: card.manifest.id,
+    compensation: isCompensation,
+  });
+  if (preHalt.halted) {
+    return failed({
+      class: 'policy_denied',
+      message:
+        `capability ${planStep.capability} halted by kill switch ` +
+        `(tier ${preHalt.tier}: ${preHalt.target}): ${preHalt.reason} — step not executed`,
+    });
+  }
+
   // Scopes the delegation may carry: the target's manifest bindings. The
   // token service intersects these with what the snapshot holds —
   // delegation narrows, never widens.
@@ -868,6 +913,27 @@ async function runAgentStep(
         message:
           `agent ${card.manifest.id}@${card.version} serving ${planStep.capability} is no longer ` +
           'active after the approval wait — the granted approval does not apply to a changed agent',
+      });
+    }
+
+    // Checkpoint 1(b): re-check the kill switch AFTER the approval wait. A
+    // suspension that landed DURING the (possibly long) gate must still stop the
+    // write — the granted approval does not license execution under a fresh
+    // halt. Symmetric with the re-discovery above; never a compensator here (the
+    // compensation branch has no approval wait).
+    const postHalt = await control.checkKillSwitch({
+      capability: planStep.capability,
+      risk: declared.risk,
+      agentId: card.manifest.id,
+      compensation: isCompensation,
+    });
+    if (postHalt.halted) {
+      return failed({
+        class: 'policy_denied',
+        message:
+          `capability ${planStep.capability} halted by kill switch ` +
+          `(tier ${postHalt.tier}: ${postHalt.target}): ${postHalt.reason} after approval ` +
+          `${approvalId} — step not executed`,
       });
     }
 
@@ -1005,15 +1071,34 @@ async function runAgentStep(
     const startedMs = Date.now();
     const stepResult = await agent.execute_capability(request);
     const durationMs = Date.now() - startedMs;
-    await control.emitAudit(
-      stepAudit(dispatch, 'step.completed', card, {
+    try {
+      await control.emitAudit(
+        stepAudit(dispatch, 'step.completed', card, {
+          capability: planStep.capability,
+          status: stepResult.status,
+          usage: stepResult.usage ?? null,
+          duration_ms: durationMs,
+          ...compensationDetails,
+        }),
+      );
+    } catch (err) {
+      // The write COMPLETED but its step.completed audit exhausted retries.
+      // Do NOT discard the write by rethrowing (which would return the step
+      // failed with `executed` undefined, so a genuinely-completed R2 write
+      // would never enter the compensation stack and never be unwound —
+      // routed item-2-QA). Swallow, alarm loudly, and return the real result so
+      // the completed write stays compensable. The gap is DETECTABLE — a
+      // step.dispatched with no matching step.completed — and the
+      // audit-integrity runbook carries the detection query. Audit-write failure
+      // is a platform incident; the alarm is this log (the stream is down, so a
+      // fallback audit event cannot be written either).
+      log.error('step.completed audit failed after retries — write kept compensable, gap alarmed', {
+        task_id: dispatch.taskId,
+        step_id: planStep.step_id,
         capability: planStep.capability,
-        status: stepResult.status,
-        usage: stepResult.usage ?? null,
-        duration_ms: durationMs,
-        ...compensationDetails,
-      }),
-    );
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
     return stepResult;
   });
 
@@ -1288,8 +1373,14 @@ export async function ApprovalWorkflow(input: ApprovalGateInput): Promise<Approv
       rejected_signals: rejectedSignals,
       ...(decision.note === undefined ? {} : { note: decision.note }),
     },
-    // The APPROVER is the actor of a grant/deny — the chain they presented.
-    { principal: decision.approver, chain: decision.approver_chain },
+    // The APPROVER is the actor of a grant/deny. The approver principal is
+    // validated (the signal handler refuses an empty or self-approving approver);
+    // the approver_chain is NOT — a raw Temporal signal could carry any array.
+    // Re-validate it against the verified approver before it becomes the audited
+    // delegation chain: trust the signal's chain only when it actually starts at
+    // the approver (outermost link), else record the approver alone (routed
+    // item-1-QA — approver_chain was previously taken verbatim).
+    { principal: decision.approver, chain: validatedApproverChain(decision.approver, decision.approver_chain) },
   );
 
   return {
@@ -1341,6 +1432,24 @@ async function emitApprovalAudit(
     },
     details,
   });
+}
+
+/**
+ * Re-derives the audited approver delegation chain from the VERIFIED approver
+ * principal rather than trusting the signal's copy (routed item-1-QA). The
+ * approver principal is validated by the signal handler; the approver_chain is
+ * not, so it is honoured only when it actually starts at that approver
+ * (delegationChain yields the root subject outermost/first). Otherwise the
+ * approver alone is recorded — an unverified chain never enters the ledger.
+ */
+function validatedApproverChain(
+  approver: string,
+  chain: { sub: string }[] | undefined,
+): { sub: string }[] {
+  const head = chain?.[0]?.sub;
+  return Array.isArray(chain) && chain.length > 0 && head === approver
+    ? chain
+    : [{ sub: approver }];
 }
 
 function fail(task: TaskRequest, error: NonNullable<TaskResult['error']>): TaskResult {

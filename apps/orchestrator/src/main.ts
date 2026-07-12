@@ -3,6 +3,7 @@ import { createRequire } from 'node:module';
 import {
   AuditPublisher,
   JwtVerifier,
+  KillSwitchWatcher,
   connectBus,
   createLogger,
   ensureAuditStream,
@@ -49,6 +50,9 @@ const activities = createControlActivities({
   audit: new AuditPublisher(nc, logger),
   logger,
   priceBookPath: env('ACP_PRICE_BOOK_PATH', defaultPriceBookPath()),
+  // Item 5: the pre-dispatch kill-switch checkpoint answers from this in-memory
+  // watcher (fast path — routers react within the <10s SLO without polling).
+  killSwitch: await KillSwitchWatcher.start(nc, logger),
 });
 
 const connection = await NativeConnection.connect({

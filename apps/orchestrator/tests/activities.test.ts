@@ -917,3 +917,102 @@ describe('getPriceBook', () => {
     ).rejects.toThrow(/could not be read or parsed/);
   });
 });
+
+describe('checkKillSwitch (compensation-exemption matrix)', () => {
+  const flags = {
+    fleet: false,
+    agent: new Set<string>(),
+    capability: new Set<string>(),
+    // Executing risks blocked by an active covering flag (test computes coverage).
+    risk: new Set<string>(),
+  };
+  const killSwitch = {
+    fleetHalt: () => (flags.fleet ? { reason: 'fleet down' } : undefined),
+    agentSuspension: (id: string) => (flags.agent.has(id) ? { reason: 'agent bad' } : undefined),
+    capabilitySuspension: (n: string) =>
+      flags.capability.has(n) ? { reason: 'cap bad' } : undefined,
+    riskClassSuspension: (r: string) => (flags.risk.has(r) ? { reason: 'risk bad' } : undefined),
+  };
+  function acts() {
+    return createControlActivities({
+      registryUrl: 'http://r.test',
+      policyUrl: 'http://p.test',
+      tokenUrl: 'http://t.test',
+      auditUrl: 'http://a.test',
+      clientId: 'svc-orchestrator',
+      clientSecret: 'secret',
+      verifier: { verify },
+      audit: { publish: () => Promise.resolve() },
+      logger: createLogger('orchestrator-test'),
+      fetchImpl: vi.fn(),
+      priceBookPath: defaultPriceBookPath(),
+      killSwitch,
+    });
+  }
+  const reset = () => {
+    flags.fleet = false;
+    flags.agent.clear();
+    flags.capability.clear();
+    flags.risk.clear();
+  };
+  const check = (over: Partial<Parameters<ControlActivities['checkKillSwitch']>[0]> = {}) =>
+    acts().checkKillSwitch({
+      capability: 'change.submit',
+      risk: 'R2',
+      agentId: 'change-agent',
+      compensation: false,
+      ...over,
+    });
+
+  it('answers not-halted when no flag is set', async () => {
+    reset();
+    expect(await check()).toEqual({ halted: false });
+  });
+
+  it('blocks fleet + risk for a NORMAL step but EXEMPTs a compensator', async () => {
+    reset();
+    flags.fleet = true;
+    expect((await check()).halted).toBe(true);
+    expect((await check({ compensation: true })).halted).toBe(false);
+
+    reset();
+    flags.risk.add('R2');
+    expect(await check()).toMatchObject({ halted: true, tier: 'risk', target: 'R2' });
+    expect((await check({ compensation: true })).halted).toBe(false);
+  });
+
+  it('blocks named-capability + agent for BOTH normal and compensator', async () => {
+    reset();
+    flags.capability.add('change.submit');
+    expect(await check()).toMatchObject({ halted: true, tier: 'capability' });
+    expect(await check({ compensation: true })).toMatchObject({ halted: true, tier: 'capability' });
+
+    reset();
+    flags.agent.add('change-agent');
+    expect(await check()).toMatchObject({ halted: true, tier: 'agent' });
+    expect(await check({ compensation: true })).toMatchObject({ halted: true, tier: 'agent' });
+  });
+
+  it('answers not-halted when no killSwitch is wired (unit/no-op default)', async () => {
+    const noKs = createControlActivities({
+      registryUrl: 'http://r.test',
+      policyUrl: 'http://p.test',
+      tokenUrl: 'http://t.test',
+      clientId: 'svc-orchestrator',
+      clientSecret: 'secret',
+      verifier: { verify },
+      audit: { publish: () => Promise.resolve() },
+      logger: createLogger('orchestrator-test'),
+      fetchImpl: vi.fn(),
+      priceBookPath: defaultPriceBookPath(),
+    });
+    expect(
+      await noKs.checkKillSwitch({
+        capability: 'change.submit',
+        risk: 'R2',
+        agentId: 'change-agent',
+        compensation: false,
+      }),
+    ).toEqual({ halted: false });
+  });
+});

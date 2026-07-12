@@ -150,6 +150,7 @@ const control: ControlActivities = {
   planTask: vi.fn(),
   discoverAgent: vi.fn(),
   resolveRoute: vi.fn(),
+  checkKillSwitch: vi.fn(),
   authorizeDelegation: vi.fn(),
   brokerToken: vi.fn(),
   digestApprovalSubject: vi.fn(),
@@ -238,6 +239,8 @@ beforeEach(() => {
       if (card === null) return null;
       return { card, route: input.pin === undefined ? 'active' : 'pinned', bucket: 0 };
     });
+  // Kill switch is clear by default; individual tests override to halt.
+  vi.mocked(control.checkKillSwitch).mockReset().mockResolvedValue({ halted: false });
   vi.mocked(control.digestValue)
     .mockReset()
     .mockResolvedValue({ digest: `sha256:${'0'.repeat(64)}` });
@@ -680,6 +683,34 @@ describe('TaskWorkflow v1', () => {
   });
 });
 
+describe('TaskWorkflow kill switch (checkpoint 1)', () => {
+  it('fails a step closed on a capability halt, naming the switch, spawning no approval', async () => {
+    knowledgeExec.mockImplementation((req) =>
+      Promise.resolve(completedStep(req, answerOutput('should not run', ['x'], 0.9))),
+    );
+    vi.mocked(control.checkKillSwitch).mockResolvedValue({
+      halted: true,
+      tier: 'capability',
+      target: 'knowledge.answer_with_citations',
+      reason: 'bad citations',
+    });
+
+    const result = await runTask(task, ['knowledge-agent']);
+    // The single step is denied → the plan is a failure with an honest gap.
+    expect(result.status).not.toBe('completed');
+    expect(JSON.stringify(result.gaps)).toContain('kill switch');
+    // The write path never opened: no broker mint, no agent execution, no
+    // approval gate spawned.
+    expect(control.brokerToken).not.toHaveBeenCalled();
+    expect(knowledgeExec).not.toHaveBeenCalled();
+    expect(audited.some((e) => e.event_type === 'approval.requested')).toBe(false);
+    // checkKillSwitch was consulted BEFORE authorizeDelegation.
+    expect(control.checkKillSwitch).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'knowledge.answer_with_citations', compensation: false }),
+    );
+  });
+});
+
 describe('TaskWorkflow cost meter', () => {
   const completedAudit = () =>
     audited.find((e) => e.event_type === 'task.completed')!.details as {
@@ -858,7 +889,14 @@ describe('TaskWorkflow cost meter', () => {
     expect(result.error?.message).toContain('price book unavailable');
     expect(control.brokerToken).not.toHaveBeenCalled();
     expect(knowledgeExec).not.toHaveBeenCalled();
-    expect(audited.some((e) => e.event_type === 'task.completed')).toBe(false);
+    // "No action without audit" (routed 0b-QA): a post-planned early return
+    // still emits a terminal task.completed carrying the failure, so an auditor
+    // never sees a planned-but-unterminated task.
+    const terminal = audited.find((e) => e.event_type === 'task.completed');
+    expect(terminal).toBeDefined();
+    const details = terminal!.details as { status: string; rejected_before_execution: boolean };
+    expect(details.status).toBe('failed');
+    expect(details.rejected_before_execution).toBe(true);
   });
 
   it('(7b) fault injection without a cost budget: proceed, cost null, version null', async () => {

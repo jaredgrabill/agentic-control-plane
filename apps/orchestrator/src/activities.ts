@@ -19,7 +19,24 @@ import { loadResolvedPriceBook } from '@acp/cost-meter';
 import type { ResolvedPriceBook } from '@acp/cost-meter/pricing';
 import { RULE_PLANNER, buildPlanSteps } from './planner.js';
 import { GateEvaluator, type GateReport } from './deployment-gates.js';
-import type { ControlActivities, DeploymentPreflight, PrincipalSnapshot } from './types.js';
+import type {
+  ControlActivities,
+  DeploymentPreflight,
+  KillSwitchVerdict,
+  PrincipalSnapshot,
+} from './types.js';
+
+/**
+ * The read side of the kill switch the worker's checkKillSwitch activity needs
+ * (structurally service-kit's KillSwitchWatcher). Each method returns a truthy
+ * state only when the flag is ACTIVE. Injectable so unit tests stub it.
+ */
+export interface KillSwitchReader {
+  fleetHalt(): { reason?: string } | undefined;
+  agentSuspension(agentId: string): { reason?: string } | undefined;
+  capabilitySuspension(name: string): { reason?: string } | undefined;
+  riskClassSuspension(risk: string): { reason?: string } | undefined;
+}
 
 export interface ControlDeps {
   registryUrl: string;
@@ -37,6 +54,11 @@ export interface ControlDeps {
   fetchImpl?: typeof fetch;
   /** Absolute path to the current price book (Cost Meter); default packaged book. */
   priceBookPath: string;
+  /**
+   * The worker's kill-switch watcher (item 5). Absent in unit tests that do
+   * not exercise checkKillSwitch — the activity then answers "not halted".
+   */
+  killSwitch?: KillSwitchReader;
 }
 
 /**
@@ -209,6 +231,55 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
         // shadow-or-canary) is mirrored; the primary still runs the incumbent.
         ...(set.shadow === undefined ? {} : { shadowCard: set.shadow }),
       };
+    },
+
+    checkKillSwitch(input): Promise<KillSwitchVerdict> {
+      const ks = deps.killSwitch;
+      if (ks === undefined) return Promise.resolve({ halted: false });
+      // Named capability and agent flags block EVEN a compensator (surgical
+      // intent wins; design-2 test 7 expects an honest-incomplete unwind when
+      // the compensator's only server is the suspended agent).
+      const named = ks.capabilitySuspension(input.capability);
+      if (named !== undefined) {
+        return Promise.resolve({
+          halted: true,
+          tier: 'capability',
+          target: input.capability,
+          reason: named.reason ?? 'no reason recorded',
+        });
+      }
+      const agent = ks.agentSuspension(input.agentId);
+      if (agent !== undefined) {
+        return Promise.resolve({
+          halted: true,
+          tier: 'agent',
+          target: input.agentId,
+          reason: agent.reason ?? 'no reason recorded',
+        });
+      }
+      // Fleet and covering risk-class flags are EXEMPT for a compensator: a halt
+      // must not make an in-flight write permanently un-compensable.
+      if (!input.compensation) {
+        const fleet = ks.fleetHalt();
+        if (fleet !== undefined) {
+          return Promise.resolve({
+            halted: true,
+            tier: 'fleet',
+            target: 'fleet',
+            reason: fleet.reason ?? 'no reason recorded',
+          });
+        }
+        const risk = ks.riskClassSuspension(input.risk);
+        if (risk !== undefined) {
+          return Promise.resolve({
+            halted: true,
+            tier: 'risk',
+            target: input.risk,
+            reason: risk.reason ?? 'no reason recorded',
+          });
+        }
+      }
+      return Promise.resolve({ halted: false });
     },
 
     async authorizeDelegation(input) {
