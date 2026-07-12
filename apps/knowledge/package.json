@@ -13,6 +13,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@acp/embedding": "workspace:*",
     "@acp/protocol": "workspace:*",
     "@acp/service-kit": "workspace:*",
     "@acp/tool-client": "workspace:*",

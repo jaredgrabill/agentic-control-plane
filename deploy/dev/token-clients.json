@@ -34,7 +34,31 @@
     "principal": "svc:orchestrator",
     "tenant": "platform",
     "roles": ["platform", "broker"],
-    "scopes": ["registry:read", "registry:deploy", "policy:decide", "audit:read"]
+    "scopes": [
+      "registry:read",
+      "registry:deploy",
+      "policy:decide",
+      "audit:read",
+      "eval:write",
+      "eval:read",
+      "llm:invoke"
+    ]
+  },
+  {
+    "client_id": "svc-evaluation",
+    "client_secret": "evaluation-dev-secret",
+    "principal": "svc:evaluation",
+    "tenant": "platform",
+    "roles": ["platform"],
+    "scopes": ["registry:read", "registry:suspend", "deploy:write"]
+  },
+  {
+    "client_id": "svc-prober",
+    "client_secret": "prober-dev-secret",
+    "principal": "svc:prober",
+    "tenant": "acme",
+    "roles": ["tenant-user"],
+    "scopes": ["task:submit", "knowledge:search:read"]
   },
   {
     "client_id": "svc-tool-gateway",
@@ -122,7 +146,9 @@
       "audit:read",
       "deploy:write",
       "deploy:read",
-      "llm:invoke"
+      "llm:invoke",
+      "eval:read",
+      "eval:write"
     ]
   }
 ]

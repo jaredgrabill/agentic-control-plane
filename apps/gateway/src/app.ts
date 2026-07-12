@@ -34,6 +34,10 @@ interface GateThresholds {
   max_cost_ratio: number;
   min_shadow_completion: number;
   min_shadow_samples: number;
+  /** Item 6: candidate mean judged quality may not fall more than this below the incumbent's. */
+  max_quality_delta: number;
+  /** Item 6: minimum judged samples on EACH side before quality gates. */
+  min_quality_samples: number;
 }
 interface DeploymentConfig {
   shadow_soak_s: number;
@@ -55,6 +59,8 @@ const DEFAULT_DEPLOYMENT_CONFIG: DeploymentConfig = {
     max_cost_ratio: 1.25,
     min_shadow_completion: 0.9,
     min_shadow_samples: 5,
+    max_quality_delta: 0.1,
+    min_quality_samples: 5,
   },
 };
 

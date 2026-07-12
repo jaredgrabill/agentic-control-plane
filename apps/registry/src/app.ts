@@ -76,16 +76,22 @@ const RISK_CLASS_TARGETS = new Set(['R1', 'R2', 'R3']);
  * operator); `both` accepts either. canary→active and active→deprecated are
  * DELIBERATELY absent — they happen only via the atomic /promote route.
  */
-type ScopeClass = 'deploy' | 'admin' | 'both';
+// `sanction` = the narrow *→suspended edge: registry:admin OR the online-eval
+// SLO-floor's registry:suspend scope (item 6, D6) may drive it. registry:suspend
+// is valid ONLY on this edge — it cannot reinstate or drive any other
+// transition, so an automated quality sanction cannot become a general
+// registry-admin capability.
+type ScopeClass = 'deploy' | 'admin' | 'both' | 'sanction';
 const TRANSITIONS: Record<string, Partial<Record<LifecycleState, ScopeClass>>> = {
   registered: { shadow: 'deploy', active: 'admin', retired: 'admin' },
-  shadow: { canary: 'deploy', suspended: 'admin', retired: 'admin' },
-  canary: { shadow: 'deploy', canary: 'deploy', suspended: 'admin' },
-  active: { suspended: 'admin' },
+  shadow: { canary: 'deploy', suspended: 'sanction', retired: 'admin' },
+  canary: { shadow: 'deploy', canary: 'deploy', suspended: 'sanction' },
+  active: { suspended: 'sanction' },
   deprecated: { retired: 'both' },
   // agent-lifecycle.md sends suspended agents back through shadow to re-earn
   // trust; suspended→active is the documented v0 legacy edge that keeps the
   // kill-switch reinstatement E2E working (deviation noted in the design).
+  // Reinstatement stays admin-only — registry:suspend can suspend but never lift.
   suspended: { shadow: 'admin', active: 'admin' },
 };
 
@@ -93,6 +99,7 @@ const SCOPE_FOR: Record<ScopeClass, string[]> = {
   deploy: ['registry:deploy'],
   admin: ['registry:admin'],
   both: ['registry:deploy', 'registry:admin'],
+  sanction: ['registry:admin', 'registry:suspend'],
 };
 
 export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
@@ -209,10 +216,11 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
     return applyStateTransition(deps, now, request, reply, claims, card, {
       target: body.state as LifecycleState | undefined,
       reason: body.reason,
-      // The legacy route is admin-only (its edges are registered→active,
-      // →suspended, suspended→active/…): a deploy-only edge belongs on the
-      // versioned route.
-      allowedClasses: ['admin', 'both'],
+      // The legacy route carries the admin edges (registered→active,
+      // suspended→active/…) plus the sanction edge (→suspended, which
+      // registry:admin or the online-eval registry:suspend scope may drive). A
+      // deploy-only edge belongs on the versioned route.
+      allowedClasses: ['admin', 'both', 'sanction'],
     });
   });
 
@@ -235,7 +243,7 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
       target: body.state as LifecycleState | undefined,
       reason: body.reason,
       rampPercent: body.ramp_percent,
-      allowedClasses: ['deploy', 'admin', 'both'],
+      allowedClasses: ['deploy', 'admin', 'both', 'sanction'],
     });
   });
 

@@ -68,11 +68,23 @@ export function startBusAuthResponder(deps: BusAuthResponderDeps): BusAuthRespon
 
 async function handle(deps: BusAuthResponderDeps, msg: Msg): Promise<void> {
   const serverXkey = msg.headers?.get(SERVER_XKEY_HEADER);
-  const encrypted = serverXkey !== undefined && serverXkey !== '';
+
+  // The responder always runs with an xkey configured (main wires it whenever
+  // the auth callout is enabled), so the server ALWAYS seals its request and
+  // advertises its ephemeral key in the header. A request that arrives without
+  // that header therefore cannot be from the server — it is forged plaintext
+  // injected by a co-account publisher probing the callout. Drop it: a
+  // plaintext path would be a token-minting oracle.
+  if (serverXkey === undefined || serverXkey === '') {
+    deps.logger.warn(
+      'bus auth request arrived without the server xkey header while xkey is configured — dropped (would be forged plaintext)',
+    );
+    return;
+  }
 
   let requestToken: string;
   try {
-    const raw = encrypted ? deps.xkey.open(msg.data, serverXkey) : msg.data;
+    const raw = deps.xkey.open(msg.data, serverXkey);
     requestToken = new TextDecoder().decode(raw);
   } catch (err) {
     // Cannot decrypt/read → cannot even name the connection; log, drop.
@@ -99,7 +111,7 @@ async function handle(deps: BusAuthResponderDeps, msg: Msg): Promise<void> {
     ...(decision.ok ? { userJwt: decision.userJwt } : { error: decision.error }),
   });
   const out = new TextEncoder().encode(response);
-  msg.respond(encrypted ? deps.xkey.seal(out, serverXkey) : out);
+  msg.respond(deps.xkey.seal(out, serverXkey));
 
   // Audit only verified outcomes: an allow, or a token that verified but was
   // refused by policy/kill switch. Unauthenticated scanners (no principal)

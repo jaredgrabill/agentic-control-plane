@@ -1,5 +1,6 @@
 import type {
   AgentCard,
+  Answer,
   Budget,
   Plan,
   PlanStep,
@@ -7,8 +8,22 @@ import type {
   StepResult,
   TaskRequest,
 } from '@acp/protocol';
+import type { ProbeExpect, ProbeTarget } from '@acp/online-eval';
 import type { ResolvedPriceBook } from '@acp/cost-meter/pricing';
 import type { GateReport, GateThresholds } from './deployment-gates.js';
+
+/**
+ * Input to the singleton ProbeWorkflow (item 6). The probe suite + cadence are
+ * passed in (the starter reads deploy config), so the isolate needs no fs and
+ * continueAsNew carries the config across cycle rollovers.
+ */
+export interface ProbeWorkflowInput {
+  interval_s: number;
+  probe_failure_weight: number;
+  targets: ProbeTarget[];
+  /** Cycle counter within one workflow run; continueAsNew resets at 50. */
+  cycle?: number;
+}
 
 export type { GateReport, GateThresholds } from './deployment-gates.js';
 
@@ -262,6 +277,33 @@ export interface RouteResult {
   bucket: number;
   /** The shadow candidate to mirror this step to (shadow soak only). */
   shadowCard?: AgentCard;
+  /**
+   * Online-eval (item 6): true when THIS step is selected for judged scoring.
+   * Deterministic per (task_id, step_id); boosted to always-on during a shadow
+   * soak so the incumbent is judged paired with the candidate. Never set for a
+   * pinned compensator dispatch.
+   */
+  judge_sample?: boolean;
+}
+
+/**
+ * Input to the JudgeScoreWorkflow — a fire-and-forget judged score of one
+ * completed step (item 6). Carries the input + output text in-hand at step
+ * completion (the only place the full output exists; audit keeps digests only).
+ */
+export interface JudgeScoreInput {
+  task_id: string;
+  step_id: string;
+  tenant: string;
+  agent_id: string;
+  agent_version: string;
+  capability: string;
+  /** The route the scored step ran (shadow scores feed only deployment gates). */
+  route: 'active' | 'canary' | 'shadow';
+  input: Record<string, unknown>;
+  /** The step's Answer-envelope output; null on a failed step. */
+  output: Record<string, unknown> | null;
+  status: 'completed' | 'failed';
 }
 
 /** Input to the ShadowStepWorkflow — a fire-and-forget mirror of one primary step. */
@@ -302,6 +344,8 @@ export const DEFAULT_DEPLOYMENT_CONFIG: DeploymentConfig = {
     max_cost_ratio: 1.25,
     min_shadow_completion: 0.9,
     min_shadow_samples: 5,
+    max_quality_delta: 0.1,
+    min_quality_samples: 5,
   },
 };
 
@@ -386,8 +430,63 @@ export interface ControlActivities {
     capability: string;
     tenant: string;
     taskId: string;
+    /** The step being routed — feeds deterministic per-step judge sampling (item 6). */
+    stepId?: string;
     pin?: { agentId: string; version: string };
   }): Promise<RouteResult | null>;
+  /**
+   * Online-eval (item 6): score one completed step with the calibrated judge
+   * and ingest the result. Gated judge call (an uncalibrated/failed judge is a
+   * JUDGE condition, never an agent quality observation) → embed the input →
+   * POST the score to the eval service (idempotent) → emit eval.score. Catches
+   * everything: a scoring failure must never disturb the (abandoned) workflow
+   * or, via the shadow path, the primary step. A failed step is ingested as a
+   * quality observation (passed:false) with no LLM call.
+   */
+  scoreWithJudge(input: JudgeScoreInput): Promise<void>;
+  /**
+   * Online-eval probes (item 6): mint a fresh subject token for the synthetic
+   * prober (client_creds svc-prober, aud acp:gateway) so a probe runs the real
+   * trust path minus intake. Returns the token and its principal (for the probe
+   * TaskRequest attribution).
+   */
+  mintProbeSubject(): Promise<{ token: string; principal: string }>;
+  /**
+   * Online-eval probes (item 6): score one probe case against its golden
+   * expectations (judge-independent), POST the result to the eval service, and
+   * emit eval.probe_result. Resolves the active serving version + owner from the
+   * registry. Catches everything (a probe recording failure is not an incident).
+   */
+  recordProbeResult(input: {
+    agent_id: string;
+    capability: string;
+    tenant: string;
+    case_name: string;
+    expect: ProbeExpect;
+    weight: number;
+    answer: Answer | null;
+    task_id: string;
+    duration_ms: number;
+  }): Promise<{ passed: boolean }>;
+  /**
+   * Online-eval probes (item 6): logs a warning for every active agent lacking
+   * probe coverage, so "every active agent is probed" is visible not silently
+   * false. Returns the uncovered agent ids.
+   */
+  listProbeTargets(input: { covered: string[] }): Promise<{ uncovered: string[] }>;
+  /**
+   * Online-eval change freeze (item 6, D5). Reads the agent's quality budget
+   * from the eval service. FAIL-CLOSED: an unreachable eval service returns
+   * frozen:true (reason freeze_check_unavailable) — a deployment must not
+   * proceed when the safety signal is unavailable (matches the item-4 gate
+   * posture). DeploymentWorkflow calls it before candidate validation and again
+   * before promotion.
+   */
+  checkQualityFreeze(agentId: string): Promise<{
+    frozen: boolean;
+    reason?: string;
+    burn_ratio?: number;
+  }>;
   /**
    * Cedar decision for one delegation. The orchestrator is the PEP for
    * agent-to-agent and user-to-agent delegation. Presents the principal's
@@ -491,6 +590,8 @@ export interface ControlActivities {
     kind: 'shadow' | 'canary';
     tenant: string;
     since: string;
+    /** The agent id, for the item-6 judged-quality fold (scores by version+route). */
+    agentId?: string;
     candidateVersion: string;
     incumbentVersion?: string;
     thresholds: GateThresholds;

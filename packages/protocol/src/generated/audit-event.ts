@@ -43,6 +43,10 @@ export type EventType =
   | 'retrieval.served'
   | 'tool.called'
   | 'model.invoked'
+  | 'eval.score'
+  | 'eval.probe_result'
+  | 'eval.drift_detected'
+  | 'eval.budget_state_changed'
   | 'killswitch.activated'
   | 'killswitch.cleared';
 export type Digest = string;

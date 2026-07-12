@@ -74,6 +74,30 @@ class FakeMsg {
   }
 }
 
+/**
+ * Builds the message the server actually sends: the request sealed to the
+ * responder's xkey with the server's ephemeral key advertised in the header.
+ * The responder now REFUSES any request lacking that header (a plaintext path
+ * would be a token-minting oracle), so every legitimate case seals.
+ */
+function sealedMsg(authToken: string | undefined): FakeMsg {
+  const plain = new TextEncoder().encode(requestJwt(authToken));
+  const sealed = serverXkey.seal(plain, responderXkey.getPublicKey());
+  return new FakeMsg(sealed, {
+    get: (k) => (k === 'Nats-Server-Xkey' ? serverXkey.getPublicKey() : undefined),
+  });
+}
+
+/** Opens a sealed response and returns its nats claim. */
+function openResponse(msg: FakeMsg): { jwt?: string; error?: string } {
+  const opened = serverXkey.open(msg.respondedWith!, responderXkey.getPublicKey());
+  const decoded = Buffer.from(
+    new TextDecoder().decode(opened).split('.')[1] ?? '',
+    'base64url',
+  ).toString('utf8');
+  return (JSON.parse(decoded) as { nats: { jwt?: string; error?: string } }).nats;
+}
+
 /** A fake NatsConnection whose subscribe replays a scripted set of messages. */
 function fakeNc(msgs: FakeMsg[]): NatsConnection {
   async function* iterate(): AsyncGenerator<Msg> {
@@ -127,19 +151,15 @@ function makeDeps(msgs: FakeMsg[], audited: AuditEvent[]) {
 }
 
 describe('bus auth responder', () => {
-  it('mints and audits an allow for a valid token (unencrypted)', async () => {
-    const msg = new FakeMsg(new TextEncoder().encode(requestJwt(await busToken())));
+  it('mints and audits an allow for a valid (sealed) token', async () => {
+    const msg = sealedMsg(await busToken());
     const audited: AuditEvent[] = [];
     const responder = startBusAuthResponder(makeDeps([msg], audited));
     await waitForResponse(msg);
     expect(msg.respondedWith).toBeDefined();
 
     // The response carries a user JWT.
-    const decoded = Buffer.from(
-      new TextDecoder().decode(msg.respondedWith).split('.')[1] ?? '',
-      'base64url',
-    ).toString('utf8');
-    const nats = (JSON.parse(decoded) as { nats: { jwt?: string; error?: string } }).nats;
+    const nats = openResponse(msg);
     expect(nats.jwt).toBeDefined();
     expect(nats.error).toBeUndefined();
 
@@ -151,17 +171,11 @@ describe('bus auth responder', () => {
   });
 
   it('audits a deny for a verified-but-refused token', async () => {
-    const msg = new FakeMsg(
-      new TextEncoder().encode(requestJwt(await busToken({ roles: ['tenant-user'] }))),
-    );
+    const msg = sealedMsg(await busToken({ roles: ['tenant-user'] }));
     const audited: AuditEvent[] = [];
     const responder = startBusAuthResponder(makeDeps([msg], audited));
     await waitForResponse(msg);
-    const decoded = Buffer.from(
-      new TextDecoder().decode(msg.respondedWith).split('.')[1] ?? '',
-      'base64url',
-    ).toString('utf8');
-    const nats = (JSON.parse(decoded) as { nats: { error?: string } }).nats;
+    const nats = openResponse(msg);
     expect(nats.error).toBeDefined();
     expect(audited).toHaveLength(1);
     expect((audited[0]!.details as { decision: string }).decision).toBe('deny');
@@ -169,11 +183,23 @@ describe('bus auth responder', () => {
   });
 
   it('responds but does NOT audit an unverified (credential-less) connect', async () => {
-    const msg = new FakeMsg(new TextEncoder().encode(requestJwt(undefined)));
+    const msg = sealedMsg(undefined);
     const audited: AuditEvent[] = [];
     const responder = startBusAuthResponder(makeDeps([msg], audited));
     await waitForResponse(msg);
     expect(msg.respondedWith).toBeDefined();
+    expect(audited).toHaveLength(0);
+    await responder.stop();
+  });
+
+  it('drops a header-less (plaintext) request without responding or auditing', async () => {
+    // No Nats-Server-Xkey header: the responder runs with xkey configured, so
+    // this could only be forged plaintext from a co-account publisher.
+    const msg = new FakeMsg(new TextEncoder().encode(requestJwt(await busToken())));
+    const audited: AuditEvent[] = [];
+    const responder = startBusAuthResponder(makeDeps([msg], audited));
+    await settle();
+    expect(msg.respondedWith).toBeUndefined();
     expect(audited).toHaveLength(0);
     await responder.stop();
   });

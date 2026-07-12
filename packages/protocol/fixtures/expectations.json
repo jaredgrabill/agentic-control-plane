@@ -167,6 +167,22 @@
       "schema": "audit-event",
       "valid": true
     },
+    { "file": "audit-event/valid-eval-score.json", "schema": "audit-event", "valid": true },
+    {
+      "file": "audit-event/valid-eval-probe-result.json",
+      "schema": "audit-event",
+      "valid": true
+    },
+    {
+      "file": "audit-event/valid-eval-drift-detected.json",
+      "schema": "audit-event",
+      "valid": true
+    },
+    {
+      "file": "audit-event/valid-eval-budget-state-changed.json",
+      "schema": "audit-event",
+      "valid": true
+    },
     { "file": "eval-report/valid-knowledge-run.json", "schema": "eval-report", "valid": true },
     {
       "file": "eval-report/invalid-metric-out-of-range.json",

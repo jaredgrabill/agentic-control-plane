@@ -17,6 +17,9 @@ importers:
       '@eslint/js':
         specifier: ^9.30.0
         version: 9.39.4
+      '@temporalio/client':
+        specifier: ^1.13.0
+        version: 1.20.2
       eslint:
         specifier: ^9.30.0
         version: 9.39.4(jiti@2.6.1)
@@ -156,16 +159,46 @@ importers:
 
   apps/evaluation:
     dependencies:
+      '@acp/embedding':
+        specifier: workspace:*
+        version: link:../../packages/embedding
+      '@acp/judge':
+        specifier: workspace:*
+        version: link:../../packages/judge
+      '@acp/llm-client':
+        specifier: workspace:*
+        version: link:../../packages/llm-client
+      '@acp/online-eval':
+        specifier: workspace:*
+        version: link:../../packages/online-eval
       '@acp/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@acp/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      fastify:
+        specifier: ^5.4.0
+        version: 5.10.0
+      pg:
+        specifier: ^8.16.0
+        version: 8.22.0
     devDependencies:
       '@types/node':
         specifier: ^22.15.0
         version: 22.20.1
+      '@types/pg':
+        specifier: ^8.15.4
+        version: 8.20.0
       '@vitest/coverage-v8':
         specifier: ^3.2.4
         version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      jose:
+        specifier: ^6.0.11
+        version: 6.2.3
+      nats:
+        specifier: ^2.29.3
+        version: 2.29.3
       vitest:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
@@ -212,6 +245,9 @@ importers:
 
   apps/knowledge:
     dependencies:
+      '@acp/embedding':
+        specifier: workspace:*
+        version: link:../../packages/embedding
       '@acp/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -307,6 +343,18 @@ importers:
       '@acp/cost-meter':
         specifier: workspace:*
         version: link:../../packages/cost-meter
+      '@acp/embedding':
+        specifier: workspace:*
+        version: link:../../packages/embedding
+      '@acp/judge':
+        specifier: workspace:*
+        version: link:../../packages/judge
+      '@acp/llm-client':
+        specifier: workspace:*
+        version: link:../../packages/llm-client
+      '@acp/online-eval':
+        specifier: workspace:*
+        version: link:../../packages/online-eval
       '@acp/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -616,8 +664,58 @@ importers:
         specifier: ^2.8.0
         version: 2.9.0
 
+  packages/embedding:
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
+
+  packages/judge:
+    dependencies:
+      '@acp/llm-client':
+        specifier: workspace:*
+        version: link:../llm-client
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
+
   packages/llm-client:
     dependencies:
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
+
+  packages/online-eval:
+    dependencies:
+      '@acp/embedding':
+        specifier: workspace:*
+        version: link:../embedding
       ajv:
         specifier: ^8.17.1
         version: 8.20.0

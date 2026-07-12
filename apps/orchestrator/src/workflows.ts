@@ -12,6 +12,7 @@ import {
   CancellationScope,
   ParentClosePolicy,
   condition,
+  continueAsNew,
   defineQuery,
   defineSignal,
   executeChild,
@@ -19,12 +20,14 @@ import {
   log,
   proxyActivities,
   setHandler,
+  sleep,
   startChild,
   uuid4,
   workflowInfo,
 } from '@temporalio/workflow';
 import type {
   AgentCard,
+  Answer,
   Budget,
   CapabilityError,
   PlanStep,
@@ -55,6 +58,8 @@ import {
   type ExecutedWrite,
   type PrincipalSnapshot,
   type ShadowStepInput,
+  type JudgeScoreInput,
+  type ProbeWorkflowInput,
   type StepDispatch,
   type StepExecution,
 } from './types.js';
@@ -738,6 +743,7 @@ async function runAgentStep(
     capability: planStep.capability,
     tenant: dispatch.tenant,
     taskId: dispatch.taskId,
+    stepId: planStep.step_id,
     ...(dispatch.compensation === undefined
       ? {}
       : {
@@ -905,6 +911,7 @@ async function runAgentStep(
         capability: planStep.capability,
         tenant: dispatch.tenant,
         taskId: dispatch.taskId,
+        stepId: planStep.step_id,
       })
     )?.card;
     if (current?.manifest.id !== card.manifest.id || current.version !== card.version) {
@@ -1102,6 +1109,31 @@ async function runAgentStep(
     return stepResult;
   });
 
+  // Online-eval (item 6): a sampled production step is judged out-of-band. The
+  // JudgeScoreWorkflow is started ABANDON and never awaited (shadow pattern), so
+  // a slow or failing judge cannot touch this step's latency or outcome. Only
+  // active/canary routes are sampled (a pinned compensator is never judged).
+  if (route.judge_sample === true && route.route !== 'pinned') {
+    await startChild(JudgeScoreWorkflow, {
+      workflowId: `${workflowInfo().workflowId}-judge`,
+      parentClosePolicy: ParentClosePolicy.ABANDON,
+      args: [
+        {
+          task_id: dispatch.taskId,
+          step_id: planStep.step_id,
+          tenant: dispatch.tenant,
+          agent_id: card.manifest.id,
+          agent_version: card.version,
+          capability: planStep.capability,
+          route: route.route,
+          input: request.input,
+          output: result.output ?? null,
+          status: result.status,
+        } satisfies JudgeScoreInput,
+      ],
+    });
+  }
+
   // Executed metadata — only the child knows the discovered capability's risk
   // and reversibility. The TaskWorkflow reads it to build the compensation
   // stack (completed R2/R3 with a compensator) or record an irreversible write.
@@ -1231,10 +1263,113 @@ export async function ShadowStepWorkflow(input: ShadowStepInput): Promise<void> 
       duration_ms: durationMs,
       ...(result.error?.class === undefined ? {} : { error_class: result.error.class }),
     });
+
+    // Online-eval (item 6): judge the shadow output too. This is the paired
+    // scoring item 4 promised — the shadow score (route 'shadow') feeds ONLY the
+    // deployment gate's metrics.quality, never the production error budget (the
+    // budget excludes shadow rows). scoreWithJudge catches everything.
+    await control.scoreWithJudge({
+      task_id: input.taskId,
+      step_id: input.stepId,
+      tenant: input.tenant,
+      agent_id: shadowCard.manifest.id,
+      agent_version: shadowCard.version,
+      capability: input.capability,
+      route: 'shadow',
+      input: input.input,
+      output: result.output ?? null,
+      status: result.status === 'completed' ? 'completed' : 'failed',
+    });
   } catch (err) {
     // A shadow failure is data, never an incident: record it and close cleanly.
     await emitResult('failed', { error_class: 'shadow_error', error: rootMessage(err) });
   }
+}
+
+/**
+ * JudgeScoreWorkflow (item 6) — a fire-and-forget child that scores ONE
+ * completed production step with the calibrated judge. Started
+ * ParentClosePolicy.ABANDON and never awaited by the parent step, so its
+ * latency (an LLM call) and any failure are fully isolated from the task. The
+ * whole body is a single scoreWithJudge activity that catches everything; the
+ * ≤3 retries here are a safety net for a transient audit/POST blip.
+ */
+export async function JudgeScoreWorkflow(input: JudgeScoreInput): Promise<void> {
+  const scorer = proxyActivities<ControlActivities>({
+    startToCloseTimeout: '30 seconds',
+    retry: { maximumAttempts: 3 },
+  });
+  await scorer.scoreWithJudge(input);
+}
+
+/** Cycles per ProbeWorkflow run before continueAsNew keeps history bounded. */
+const PROBE_CYCLES_PER_RUN = 50;
+
+/**
+ * ProbeWorkflow (item 6) — the singleton synthetic prober (workflowId
+ * `synthetic-prober`). Each cycle runs every configured probe case through a
+ * REAL TaskWorkflow child (real trust path minus intake: a freshly-minted
+ * svc-prober subject token → planner → Cedar → broker → agent), then records a
+ * deterministic known-answer result (judge-INDEPENDENT, so probe signal
+ * survives an unhealthy judge). It sleeps interval_s between cycles and
+ * continueAsNews every 50 cycles to keep history bounded. Time-skip-testable.
+ */
+export async function ProbeWorkflow(input: ProbeWorkflowInput): Promise<void> {
+  const probeControl = proxyActivities<ControlActivities>({
+    startToCloseTimeout: '30 seconds',
+    retry: { maximumAttempts: 2 },
+  });
+  const startCycle = input.cycle ?? 0;
+
+  for (let cycle = startCycle; cycle < PROBE_CYCLES_PER_RUN; cycle++) {
+    // "Every active agent is probed" made visible: warn on uncovered agents.
+    await probeControl.listProbeTargets({ covered: input.targets.map((t) => t.agent_id) });
+
+    for (const target of input.targets) {
+      for (const testCase of target.cases) {
+        const taskId = uuid4();
+        const startedMs = Date.now();
+        let answer: Answer | null = null;
+        try {
+          const subject = await probeControl.mintProbeSubject();
+          const result = await executeChild(TaskWorkflow, {
+            workflowId: `probe-${taskId}`,
+            args: [
+              {
+                kind: 'task_request',
+                task_id: taskId,
+                tenant: target.tenant,
+                principal: subject.principal,
+                subject_token: subject.token,
+                input: { text: testCase.input, capability: target.capability },
+                budget: { max_steps: 2 },
+              },
+            ],
+          });
+          answer = result.answer ?? null;
+        } catch (err) {
+          // A probe TaskWorkflow that throws is itself a failed probe (recorded
+          // below as a null answer → known-answer checks fail).
+          log.warn('probe task failed', { task_id: taskId, err: rootMessage(err) });
+        }
+        await probeControl.recordProbeResult({
+          agent_id: target.agent_id,
+          capability: target.capability,
+          tenant: target.tenant,
+          case_name: testCase.name,
+          expect: testCase.expect,
+          weight: input.probe_failure_weight,
+          answer,
+          task_id: taskId,
+          duration_ms: Date.now() - startedMs,
+        });
+      }
+    }
+
+    await sleep(input.interval_s * 1000);
+  }
+
+  await continueAsNew<typeof ProbeWorkflow>({ ...input, cycle: 0 });
 }
 
 /** Signal the gateway sends a verified human decision on. */

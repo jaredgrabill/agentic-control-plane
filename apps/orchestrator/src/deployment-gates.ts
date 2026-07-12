@@ -31,6 +31,46 @@ export interface GateThresholds {
   min_shadow_completion: number;
   /** Shadow: minimum paired samples before the gate can decide. */
   min_shadow_samples: number;
+  /** Item 6: candidate mean judged quality may not fall more than this below the incumbent's. */
+  max_quality_delta: number;
+  /** Item 6: minimum judged samples on EACH side before quality gates. */
+  min_quality_samples: number;
+}
+
+/**
+ * Paired judged-quality means for a gate (item 6, D8). Fetched from the eval
+ * service scores store by version+route+window and passed in, so the evaluator
+ * stays pure. A null mean or too-few samples on either side omits quality
+ * entirely (the gate stays deterministic-only, exactly as item 4 shipped).
+ */
+export interface QualityInput {
+  candidateMean: number | null;
+  incumbentMean: number | null;
+  candidateN: number;
+  incumbentN: number;
+}
+
+/** Folds paired judged quality into a report: sets metrics.quality + a breach reason. */
+function applyQuality(
+  report: GateReport,
+  thresholds: GateThresholds,
+  quality?: QualityInput,
+): void {
+  if (quality === undefined) return;
+  if (quality.candidateMean === null || quality.incumbentMean === null) return;
+  if (
+    quality.candidateN < thresholds.min_quality_samples ||
+    quality.incumbentN < thresholds.min_quality_samples
+  ) {
+    return;
+  }
+  report.metrics.quality = Number(quality.candidateMean.toFixed(4));
+  if (quality.incumbentMean - quality.candidateMean > thresholds.max_quality_delta) {
+    report.reasons.push(
+      `judged quality ${quality.candidateMean.toFixed(3)} is more than ` +
+        `${thresholds.max_quality_delta} below the incumbent's ${quality.incumbentMean.toFixed(3)}`,
+    );
+  }
 }
 
 export interface GateReport {
@@ -102,6 +142,7 @@ export class GateEvaluator {
       incumbentVersion: string;
       thresholds: GateThresholds;
       priceBook?: ResolvedPriceBook | undefined;
+      quality?: QualityInput;
     },
   ): GateReport {
     const completed = events.filter(
@@ -166,6 +207,7 @@ export class GateEvaluator {
       }
     }
 
+    applyQuality(report, t, params.quality);
     report.verdict = reasons.length > 0 ? 'fail' : 'pass';
     return report;
   }
@@ -180,7 +222,11 @@ export class GateEvaluator {
    */
   evaluateShadow(
     events: AuditEvent[],
-    params: { thresholds: GateThresholds; priceBook?: ResolvedPriceBook | undefined },
+    params: {
+      thresholds: GateThresholds;
+      priceBook?: ResolvedPriceBook | undefined;
+      quality?: QualityInput;
+    },
   ): GateReport {
     const primaries = new Map<string, StepStat>();
     for (const e of events) {
@@ -265,6 +311,7 @@ export class GateEvaluator {
       }
     }
 
+    applyQuality(report, t, params.quality);
     report.verdict = reasons.length > 0 ? 'fail' : 'pass';
     return report;
   }

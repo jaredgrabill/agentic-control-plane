@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   auditEvent as auditEventParser,
   plan as planParser,
@@ -17,11 +17,17 @@ import {
 import { ApplicationFailure } from '@temporalio/common';
 import { loadResolvedPriceBook } from '@acp/cost-meter';
 import type { ResolvedPriceBook } from '@acp/cost-meter/pricing';
+import { HashEmbedder } from '@acp/embedding';
+import { GatewayClient } from '@acp/llm-client';
+import { createJudge, loadDevCalibration, type Judge } from '@acp/judge';
+import { decideJudgeSample, type OnlineEvalConfig, type ScoreIngest } from '@acp/online-eval';
 import { RULE_PLANNER, buildPlanSteps } from './planner.js';
-import { GateEvaluator, type GateReport } from './deployment-gates.js';
+import { checkProbe } from './probe-checks.js';
+import { GateEvaluator, type GateReport, type QualityInput } from './deployment-gates.js';
 import type {
   ControlActivities,
   DeploymentPreflight,
+  JudgeScoreInput,
   KillSwitchVerdict,
   PrincipalSnapshot,
 } from './types.js';
@@ -54,6 +60,20 @@ export interface ControlDeps {
   fetchImpl?: typeof fetch;
   /** Absolute path to the current price book (Cost Meter); default packaged book. */
   priceBookPath: string;
+  /** LLM gateway base URL — the calibrated judge's completion endpoint (item 6). */
+  llmGatewayUrl?: string;
+  /** Evaluation service base URL — the scores store the judge POSTs to (item 6). */
+  evaluationUrl?: string;
+  /** Synthetic-prober credentials (item 6): its own client_creds identity (svc-prober). */
+  proberClientId?: string;
+  proberClientSecret?: string;
+  /** Scope string the probe subject token requests (the probed agents' tool scopes). */
+  proberScope?: string;
+  /**
+   * Online-eval config (item 6): per-step sample rates + judge rubric/model
+   * class. Absent in unit tests that do not exercise judged scoring.
+   */
+  onlineEval?: OnlineEvalConfig;
   /**
    * The worker's kill-switch watcher (item 5). Absent in unit tests that do
    * not exercise checkKillSwitch — the activity then answers "not halted".
@@ -88,6 +108,165 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
     }
     const body = (await res.json()) as { access_token: string };
     return body.access_token;
+  }
+
+  // --- Online-eval judge scoring (item 6) ---------------------------------
+  let judge: Judge | undefined;
+  function getJudge(): Judge {
+    judge ??= createJudge({
+      gateway: new GatewayClient({ url: deps.llmGatewayUrl ?? '', fetchImpl: doFetch }),
+      tokenProvider: () => serviceToken('acp:llm', 'llm:invoke'),
+      calibration: loadDevCalibration(),
+      rubricId: deps.onlineEval?.judge.rubric ?? 'answer-quality@1',
+      modelClass: deps.onlineEval?.judge.model_class ?? 'default-tier',
+      minAgreement: deps.onlineEval?.judge.min_agreement ?? 0.85,
+    });
+    return judge;
+  }
+
+  /** Fetches the paired judged-quality means for a deployment gate (item 6, D8). */
+  async function fetchGateQuality(input: {
+    kind: 'shadow' | 'canary';
+    agentId?: string;
+    candidateVersion: string;
+    incumbentVersion?: string;
+    since: string;
+  }): Promise<QualityInput | undefined> {
+    if (
+      deps.evaluationUrl === undefined ||
+      input.agentId === undefined ||
+      input.incumbentVersion === undefined
+    ) {
+      return undefined;
+    }
+    const candidateRoute = input.kind === 'shadow' ? 'shadow' : 'canary';
+    try {
+      const token = await serviceToken('acp:eval', 'eval:read');
+      const aggregate = async (
+        version: string,
+        route: string,
+      ): Promise<{ mean: number | null; n: number }> => {
+        const res = await doFetch(
+          `${deps.evaluationUrl ?? ''}/v1/scores/aggregate` +
+            `?agent_id=${encodeURIComponent(input.agentId ?? '')}` +
+            `&agent_version=${encodeURIComponent(version)}&route=${route}` +
+            `&since=${encodeURIComponent(input.since)}`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) return { mean: null, n: 0 };
+        return (await res.json()) as { mean: number | null; n: number };
+      };
+      const cand = await aggregate(input.candidateVersion, candidateRoute);
+      const inc = await aggregate(input.incumbentVersion, 'active');
+      return {
+        candidateMean: cand.mean,
+        incumbentMean: inc.mean,
+        candidateN: cand.n,
+        incumbentN: inc.n,
+      };
+    } catch (err) {
+      deps.logger.warn({ err, agentId: input.agentId }, 'gate quality fold unavailable — omitting');
+      return undefined;
+    }
+  }
+
+  async function postScore(ingest: ScoreIngest): Promise<void> {
+    const token = await serviceToken('acp:eval', 'eval:write');
+    const res = await doFetch(`${deps.evaluationUrl ?? ''}/v1/scores`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify(ingest),
+    });
+    if (!res.ok) {
+      throw new Error(`score ingest failed: ${res.status} ${await res.text()}`);
+    }
+  }
+
+  async function runJudgeScore(input: JudgeScoreInput): Promise<void> {
+    const inputText = deriveText(input.input, ['question', 'query', 'text']);
+    const scoreId = deterministicUuid(`${input.task_id}:${input.step_id}:${input.route}`);
+    const artifacts = {
+      agent_id: input.agent_id,
+      agent_version: input.agent_version,
+    };
+    const reason = { task_id: input.task_id, step_id: input.step_id };
+
+    // A hard step failure is a quality observation (passed:false) — no LLM call.
+    if (input.status === 'failed' || input.output === null) {
+      await postScore({
+        id: scoreId,
+        agent_id: input.agent_id,
+        agent_version: input.agent_version,
+        capability: input.capability,
+        tenant: input.tenant,
+        task_id: input.task_id,
+        step_id: input.step_id,
+        source: 'judge',
+        route: input.route,
+        score: null,
+        passed: false,
+        weight: 1,
+        outcome: 'failed_step',
+      });
+      await emitEvalScore(deps, {
+        tenant: input.tenant,
+        artifacts,
+        reason,
+        rubricName: deps.onlineEval?.judge.rubric ?? 'answer-quality@1',
+        inputsDigest: sha256Digest(inputText),
+        details: { route: input.route, outcome: 'failed_step' },
+      });
+      return;
+    }
+
+    const outputText = deriveText(input.output, ['text', 'answer']);
+    const citations = extractCitations(input.output);
+    const result = await getJudge().score({ input: inputText, output: outputText, citations });
+
+    // Only a genuine judged verdict is a quality observation. uncalibrated /
+    // judge_error / unparseable_verdict are JUDGE conditions — audit them for
+    // observability, but INGEST NOTHING (no error-budget burn).
+    if (result.outcome === 'scored' && result.score !== undefined) {
+      await postScore({
+        id: scoreId,
+        agent_id: input.agent_id,
+        agent_version: input.agent_version,
+        capability: input.capability,
+        tenant: input.tenant,
+        task_id: input.task_id,
+        step_id: input.step_id,
+        source: 'judge',
+        route: input.route,
+        score: result.score,
+        passed: null,
+        weight: 1,
+        rubric: result.rubric,
+        rubric_digest: result.rubric_digest,
+        ...(result.model !== undefined ? { model: result.model } : {}),
+        outcome: 'scored',
+        input_embedding: new HashEmbedder().embed(inputText),
+      });
+    }
+    await emitEvalScore(deps, {
+      tenant: input.tenant,
+      artifacts: { ...artifacts, ...(result.model !== undefined ? { model: result.model } : {}) },
+      reason,
+      rubricName: result.rubric,
+      inputsDigest: sha256Digest(inputText),
+      ...(result.verdict !== undefined
+        ? { outputsDigest: sha256Digest(stableStringify(result.verdict)) }
+        : {}),
+      details: {
+        rubric: result.rubric,
+        rubric_digest: result.rubric_digest,
+        model_class: result.model_class,
+        route: input.route,
+        outcome: result.outcome,
+        ...(result.score !== undefined ? { score: result.score } : {}),
+        ...(result.verdict !== undefined ? { verdict: result.verdict } : {}),
+        ...(result.calibration !== undefined ? { calibration: result.calibration } : {}),
+      },
+    });
   }
 
   return {
@@ -212,6 +391,19 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
         shadow?: AgentCard;
       };
 
+      // A shadow soak boosts the primary (incumbent) to always-judged, so the
+      // incumbent's score pairs with the shadow candidate's for the gate.
+      const boost = set.shadow !== undefined;
+      const sample = (agentId: string): boolean =>
+        deps.onlineEval === undefined || input.stepId === undefined
+          ? false
+          : decideJudgeSample(deps.onlineEval.sample, {
+              taskId: input.taskId,
+              stepId: input.stepId,
+              agentId,
+              boost,
+            }).selected;
+
       // Canary session pinning: this task's bucket falls under the ramp → the
       // whole task runs the candidate; otherwise the incumbent.
       if (set.canary !== undefined && bucket < set.canary.ramp_percent) {
@@ -220,6 +412,7 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
           route: 'canary',
           rampPercent: set.canary.ramp_percent,
           bucket,
+          judge_sample: sample(set.canary.card.manifest.id),
         };
       }
       if (set.active === undefined) return null;
@@ -227,10 +420,174 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
         card: set.active,
         route: 'active',
         bucket,
+        judge_sample: sample(set.active.manifest.id),
         // A shadow candidate (shadow soak only — an agent has at most one
         // shadow-or-canary) is mirrored; the primary still runs the incumbent.
         ...(set.shadow === undefined ? {} : { shadowCard: set.shadow }),
       };
+    },
+
+    async scoreWithJudge(input): Promise<void> {
+      // Alarm-continue: a scoring failure (judge, embedding, POST, audit) must
+      // never disturb the abandoned JudgeScoreWorkflow or — via the shadow
+      // path — the primary step. Temporal's ≤3 retries are a safety net; the
+      // activity itself swallows everything.
+      try {
+        await runJudgeScore(input);
+      } catch (err) {
+        deps.logger.warn(
+          { err, task_id: input.task_id, step_id: input.step_id },
+          'scoreWithJudge failed — alarm-continue (no quality observation recorded)',
+        );
+      }
+    },
+
+    async mintProbeSubject(): Promise<{ token: string; principal: string }> {
+      const res = await doFetch(`${deps.tokenUrl}/v1/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'client_credentials',
+          client_id: deps.proberClientId ?? 'svc-prober',
+          client_secret: deps.proberClientSecret ?? '',
+          audience: 'acp:gateway',
+          scope: deps.proberScope ?? 'task:submit knowledge:search:read',
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`probe subject mint failed: ${res.status} ${await res.text()}`);
+      }
+      const body = (await res.json()) as { access_token: string; principal?: string };
+      // The token's sub is the prober principal; the token service echoes it.
+      return { token: body.access_token, principal: body.principal ?? 'svc:prober' };
+    },
+
+    async recordProbeResult(input): Promise<{ passed: boolean }> {
+      const check = checkProbe(input.answer, input.expect);
+
+      // Resolve the active serving version + owner so the score/audit attribute
+      // to the version actually probed (probes hit ACTIVE only).
+      let agentVersion = 'unknown';
+      let owner = 'unknown';
+      try {
+        const token = await serviceToken('acp:registry', 'registry:read');
+        const cardRes = await doFetch(
+          `${deps.registryUrl}/v1/agents/${encodeURIComponent(input.agent_id)}`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        if (cardRes.ok) {
+          const card = (await cardRes.json()) as AgentCard;
+          agentVersion = card.version;
+          owner = card.manifest.owner;
+        }
+      } catch {
+        // best-effort attribution; a registry blip still records the result
+      }
+
+      try {
+        const token = await serviceToken('acp:eval', 'eval:write');
+        const scoreRes = await doFetch(`${deps.evaluationUrl ?? ''}/v1/scores`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            id: deterministicUuid(`${input.task_id}:${input.case_name}:probe`),
+            agent_id: input.agent_id,
+            agent_version: agentVersion,
+            capability: input.capability,
+            tenant: input.tenant,
+            task_id: input.task_id,
+            source: 'probe',
+            route: 'probe',
+            score: null,
+            passed: check.passed,
+            weight: input.weight,
+            outcome: check.passed ? 'probe_pass' : 'probe_fail',
+          } satisfies ScoreIngest),
+        });
+        if (!scoreRes.ok) {
+          throw new Error(`probe score ingest failed: ${scoreRes.status} ${await scoreRes.text()}`);
+        }
+      } catch (err) {
+        deps.logger.warn(
+          { err, agent_id: input.agent_id },
+          'probe score ingest failed (alarm-continue)',
+        );
+      }
+
+      await deps.audit.publish({
+        event_id: randomUUID(),
+        occurred_at: new Date().toISOString(),
+        tenant: input.tenant,
+        event_type: 'eval.probe_result',
+        actor: { principal: 'svc:prober', delegation_chain: [{ sub: 'svc:prober' }] },
+        action: { name: 'probe:known-answer' },
+        reason: { task_id: input.task_id },
+        artifacts: { agent_id: input.agent_id, agent_version: agentVersion },
+        details: {
+          case: input.case_name,
+          capability: input.capability,
+          passed: check.passed,
+          duration_ms: input.duration_ms,
+          owner,
+          checks: check.checks,
+        },
+      });
+      return { passed: check.passed };
+    },
+
+    async checkQualityFreeze(
+      agentId,
+    ): Promise<{ frozen: boolean; reason?: string; burn_ratio?: number }> {
+      try {
+        const token = await serviceToken('acp:eval', 'eval:read');
+        const res = await doFetch(
+          `${deps.evaluationUrl ?? ''}/v1/agents/${encodeURIComponent(agentId)}/quality`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) {
+          // A non-2xx (eval reachable but erroring) is fail-closed too.
+          return { frozen: true, reason: 'freeze_check_unavailable' };
+        }
+        const body = (await res.json()) as {
+          frozen?: boolean;
+          budget?: { burn_ratio?: number; state?: string };
+        };
+        return {
+          frozen: body.frozen === true,
+          ...(body.frozen === true ? { reason: 'change_freeze' } : {}),
+          ...(body.budget?.burn_ratio !== undefined ? { burn_ratio: body.budget.burn_ratio } : {}),
+        };
+      } catch (err) {
+        // Fail-closed: the eval service is unreachable, so the safety signal is
+        // unavailable — refuse the deployment rather than proceed blind.
+        deps.logger.warn({ err, agentId }, 'quality freeze check unavailable — failing closed');
+        return { frozen: true, reason: 'freeze_check_unavailable' };
+      }
+    },
+
+    async listProbeTargets(input): Promise<{ uncovered: string[] }> {
+      try {
+        const token = await serviceToken('acp:registry', 'registry:read');
+        const res = await doFetch(`${deps.registryUrl}/v1/agents?state=active`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return { uncovered: [] };
+        const { agents } = (await res.json()) as { agents: AgentCard[] };
+        const covered = new Set(input.covered);
+        const uncovered = [...new Set(agents.map((a) => a.manifest.id))].filter(
+          (id) => !covered.has(id),
+        );
+        if (uncovered.length > 0) {
+          deps.logger.warn(
+            { uncovered },
+            'active agents without synthetic probe coverage — quality visibility is incomplete',
+          );
+        }
+        return { uncovered };
+      } catch (err) {
+        deps.logger.warn({ err }, 'listProbeTargets failed');
+        return { uncovered: [] };
+      }
     },
 
     checkKillSwitch(input): Promise<KillSwitchVerdict> {
@@ -537,14 +894,26 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
       } catch {
         book = undefined;
       }
+
+      // Item 6 (D8): fold paired judged quality from the eval scores store. The
+      // candidate's route is 'shadow' (shadow soak) or 'canary' (ramp); the
+      // incumbent is always the 'active' route. Any error omits quality — the
+      // gate stays deterministic-only (exactly as item 4 shipped).
+      const quality = await fetchGateQuality(input);
+
       const evaluator = new GateEvaluator();
       return input.kind === 'shadow'
-        ? evaluator.evaluateShadow(events, { thresholds: input.thresholds, priceBook: book })
+        ? evaluator.evaluateShadow(events, {
+            thresholds: input.thresholds,
+            priceBook: book,
+            ...(quality === undefined ? {} : { quality }),
+          })
         : evaluator.evaluateCanary(events, {
             candidateVersion: input.candidateVersion,
             incumbentVersion: input.incumbentVersion ?? '',
             thresholds: input.thresholds,
             priceBook: book,
+            ...(quality === undefined ? {} : { quality }),
           });
     },
 
@@ -561,4 +930,66 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
       }
     },
   };
+}
+
+// --- Online-eval judge scoring helpers (item 6) ----------------------------
+
+/** Pulls a text field from a step's input/output record, else stringifies it. */
+function deriveText(record: Record<string, unknown>, keys: string[]): string {
+  for (const key of keys) {
+    const value = record[key];
+    if (typeof value === 'string' && value.length > 0) return value;
+  }
+  return JSON.stringify(record);
+}
+
+/** Renders an Answer envelope's citations for the judge (doc_id + snippet). */
+function extractCitations(output: Record<string, unknown> | null): string[] {
+  if (output === null) return [];
+  const citations = output.citations;
+  if (!Array.isArray(citations)) return [];
+  return citations.map((c) => {
+    if (typeof c !== 'object' || c === null) return String(c);
+    const { doc_id, snippet } = c as { doc_id?: unknown; snippet?: unknown };
+    const id = typeof doc_id === 'string' ? doc_id : 'unknown';
+    return typeof snippet === 'string' ? `${id}: ${snippet}` : id;
+  });
+}
+
+/** A uuid-shaped idempotency key derived from a stable seed (retries dedupe). */
+function deterministicUuid(seed: string): string {
+  const h = createHash('sha256').update(seed).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
+
+interface EvalScoreParams {
+  tenant: string;
+  artifacts: { agent_id: string; agent_version: string; model?: string };
+  reason: { task_id: string; step_id: string };
+  rubricName: string;
+  inputsDigest: string;
+  outputsDigest?: string;
+  details: Record<string, unknown>;
+}
+
+/** Emits an eval.score audit (R0 alarm-continue; digests only, never the raw text). */
+async function emitEvalScore(deps: ControlDeps, params: EvalScoreParams): Promise<void> {
+  await deps.audit.publish({
+    event_id: randomUUID(),
+    occurred_at: new Date().toISOString(),
+    tenant: params.tenant,
+    event_type: 'eval.score',
+    actor: {
+      principal: 'svc:orchestrator',
+      delegation_chain: [{ sub: 'svc:orchestrator' }],
+    },
+    action: {
+      name: `judge:${params.rubricName}`,
+      inputs_digest: params.inputsDigest,
+      ...(params.outputsDigest !== undefined ? { outputs_digest: params.outputsDigest } : {}),
+    },
+    reason: params.reason,
+    artifacts: params.artifacts,
+    details: params.details,
+  });
 }

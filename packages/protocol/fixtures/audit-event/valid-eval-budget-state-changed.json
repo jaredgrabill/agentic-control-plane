@@ -1,0 +1,22 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e5004",
+  "occurred_at": "2026-07-11T10:06:15Z",
+  "tenant": "platform",
+  "event_type": "eval.budget_state_changed",
+  "actor": {
+    "principal": "svc:evaluation",
+    "delegation_chain": [{ "sub": "svc:evaluation" }]
+  },
+  "action": { "name": "eval.budget_state_changed" },
+  "artifacts": {
+    "agent_id": "knowledge-agent"
+  },
+  "details": {
+    "from": "ok",
+    "to": "exhausted",
+    "burn_ratio": 1.4,
+    "slo": 0.9,
+    "owner": "team:knowledge",
+    "page": true
+  }
+}

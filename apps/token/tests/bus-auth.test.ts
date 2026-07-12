@@ -46,7 +46,7 @@ function reset() {
 
 async function busToken(
   overrides: Record<string, unknown> = {},
-  audience = 'acp:bus',
+  audience: string | string[] = 'acp:bus',
   expiration: string | number = '10m',
 ): Promise<string> {
   return new SignJWT({
@@ -122,6 +122,17 @@ describe('BusAuthCore deny matrix (fail closed)', () => {
     const decision = await core.evaluate({ authToken: token, userNkey: USER_NKEY });
     expect(decision.ok).toBe(false);
     if (!decision.ok) expect(decision.principal).toBeUndefined();
+  });
+
+  it('refuses a multi-audience token even when it contains acp:bus', async () => {
+    reset();
+    const token = await busToken({}, ['acp:bus', 'acp:gateway']);
+    const decision = await core.evaluate({ authToken: token, userNkey: USER_NKEY });
+    expect(decision.ok).toBe(false);
+    if (!decision.ok) {
+      expect(decision.error).toContain('single string');
+      expect(decision.principal).toBeUndefined(); // aud rejected pre-claims → not audited
+    }
   });
 
   it('refuses an expired token', async () => {

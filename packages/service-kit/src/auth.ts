@@ -208,6 +208,14 @@ export function assertPlatformClaims(payload: JWTPayload): PlatformClaims {
   if (typeof scope !== 'string') {
     throw new AuthError(`token for ${sub} has no scope claim`);
   }
+  // A malformed act chain (non-string sub) would otherwise flow into
+  // delegationChain() and land in an audit record as a non-string principal —
+  // or throw deep in a consumer as a 500. Reject it here as a clean 401.
+  for (let act = (payload as Partial<PlatformClaims>).act; act !== undefined; act = act.act) {
+    if (typeof act !== 'object' || typeof act.sub !== 'string' || act.sub === '') {
+      throw new AuthError(`token for ${sub} has a malformed act claim (act.sub must be a string)`);
+    }
+  }
   return payload as PlatformClaims;
 }
 

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
 /**
  * Evaluation Service v0 CLI:
- *   run      --manifest <agents.json>                      run every roster agent's suite and gate it
- *   gate     --report <f> --baseline <f> [--gates <f>]     gate one report against one baseline
- *   baseline --report <f> --out <f>                        distill an accepted report into a baseline
- *   record   --baseline <f> --registry <url> --token-url <url> --client-id <id> --client-secret <s>
+ *   run       --manifest <agents.json>                     run every roster agent's suite and gate it
+ *   gate      --report <f> --baseline <f> [--gates <f>]    gate one report against one baseline
+ *   baseline  --report <f> --out <f>                       distill an accepted report into a baseline
+ *   record    --baseline <f> --registry <url> --token-url <url> --client-id <id> --client-secret <s>
+ *   calibrate --rubric <id> --model-class <c> --gateway <url> --token-url <url> --client-id <id> --client-secret <s> [--out <f>] [--dev]
+ *   serve                                                  boot the online-eval scores service (port 7108)
  *
  * Exit 0 on pass; exit 1 with one violation per stderr line.
  */
@@ -14,17 +16,22 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
+import { DEFAULT_MIN_AGREEMENT } from '@acp/judge';
 import { evalBaseline, evalReport } from '@acp/protocol';
 import { baselineFromReport } from './baseline.js';
 import { applyGate, loadGateConfig } from './gate.js';
 import { recordBaseline } from './registry-client.js';
 import { runAll, type Exec } from './runner.js';
+import { calibrate } from './service/calibrate.js';
+import { mintLlmToken } from './service/token.js';
 
 const USAGE = [
   'usage: main.js run --manifest <agents.json>',
   '     | main.js gate --report <file> --baseline <file> [--gates <file>]',
   '     | main.js baseline --report <file> --out <file>',
   '     | main.js record --baseline <file> --registry <url> --token-url <url> --client-id <id> --client-secret <secret>',
+  '     | main.js calibrate --rubric <id> --model-class <class> --gateway <url> --token-url <url> --client-id <id> --client-secret <secret> [--out <file>] [--dev]',
+  '     | main.js serve',
 ].join('\n');
 
 const exec: Exec = (argv, cwd) =>
@@ -137,6 +144,82 @@ async function main(argv: string[]): Promise<number> {
     process.stdout.write(
       `recorded baseline for ${baseline.agent_id}@${baseline.agent_version} ` +
         `(card updated_at ${card.updated_at})\n`,
+    );
+    return 0;
+  }
+
+  if (command === 'serve') {
+    // Long-running: startEvalService listens and installs signal handlers; the
+    // process stays alive on the open server/NATS handles.
+    const { startEvalService } = await import('./service/serve.js');
+    await startEvalService();
+    return 0;
+  }
+
+  if (command === 'calibrate') {
+    const { values } = parseArgs({
+      args: rest,
+      options: {
+        rubric: { type: 'string' },
+        'model-class': { type: 'string' },
+        gateway: { type: 'string' },
+        'token-url': { type: 'string' },
+        'client-id': { type: 'string' },
+        'client-secret': { type: 'string' },
+        'min-agreement': { type: 'string' },
+        out: { type: 'string' },
+        dev: { type: 'boolean' },
+      },
+    });
+    const { dev: _dev, ...stringValues } = values;
+    if (
+      required(stringValues, [
+        'rubric',
+        'model-class',
+        'gateway',
+        'token-url',
+        'client-id',
+        'client-secret',
+      ]).length > 0
+    ) {
+      return 2;
+    }
+    const token = await mintLlmToken({
+      tokenUrl: values['token-url'] ?? '',
+      clientId: values['client-id'] ?? '',
+      clientSecret: values['client-secret'] ?? '',
+    });
+    const minAgreement =
+      values['min-agreement'] === undefined
+        ? DEFAULT_MIN_AGREEMENT
+        : Number(values['min-agreement']);
+    const result = await calibrate({
+      rubricId: values.rubric ?? '',
+      modelClass: values['model-class'] ?? '',
+      minAgreement,
+      gatewayUrl: values.gateway ?? '',
+      token,
+      dev: values.dev === true,
+    });
+    for (const c of result.perCase) {
+      process.stdout.write(`  case ${c.name}: label=${c.label} score=${c.score} (${c.outcome})\n`);
+    }
+    if (values.out !== undefined) {
+      writeFileSync(
+        values.out,
+        `${JSON.stringify({ records: [result.record] }, null, 2)}\n`,
+        'utf-8',
+      );
+      process.stdout.write(`wrote ${values.out}\n`);
+    }
+    if (!result.passed) {
+      process.stderr.write(
+        `calibration FAILED: agreement ${result.record.agreement} < floor ${minAgreement}\n`,
+      );
+      return 1;
+    }
+    process.stdout.write(
+      `calibrated ${result.record.rubric} on ${result.record.model_class}: agreement ${result.record.agreement}\n`,
     );
     return 0;
   }
