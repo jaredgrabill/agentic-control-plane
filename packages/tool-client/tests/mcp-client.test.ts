@@ -3,7 +3,7 @@ import { CapabilityError } from '@acp/agent-sdk';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { McpToolClient, type ServerBinding, type ToolEnvelope } from '../src/index.js';
 
 type ToolResult = CallToolResult;
@@ -198,32 +198,72 @@ describe('McpToolClient error mapping (normative table)', () => {
   });
 });
 
-describe('McpToolClient HTTP auth statuses', () => {
+describe('McpToolClient HTTP auth statuses and header forwarding', () => {
   let httpServer: Server;
+  interface SeenHeaders {
+    'x-acp-test'?: string | undefined;
+    authorization?: string | undefined;
+    'x-acp-task-id'?: string | undefined;
+    'x-acp-step-id'?: string | undefined;
+  }
+  const seen: SeenHeaders[] = [];
+  let url: string;
 
-  afterAll(() => {
-    httpServer.close();
-  });
-
-  it('HTTP 401/403 → policy_denied refused', async () => {
-    const seenHeaders: (string | undefined)[] = [];
+  beforeAll(async () => {
     httpServer = createServer((req, res) => {
-      seenHeaders.push(req.headers['x-acp-test'] as string | undefined);
+      seen.push({
+        'x-acp-test': req.headers['x-acp-test'] as string | undefined,
+        authorization: req.headers.authorization,
+        'x-acp-task-id': req.headers['x-acp-task-id'] as string | undefined,
+        'x-acp-step-id': req.headers['x-acp-step-id'] as string | undefined,
+      });
       res.writeHead(401, { 'content-type': 'text/plain' });
       res.end('who are you?');
     });
     await new Promise<void>((resolve) => httpServer.listen(0, resolve));
     const address = httpServer.address();
     const port = typeof address === 'object' && address !== null ? address.port : 0;
+    url = `http://127.0.0.1:${port}/mcp`;
+  });
 
+  afterAll(() => {
+    httpServer.close();
+  });
+
+  it('HTTP 401/403 → policy_denied refused, binding headers sent', async () => {
+    seen.length = 0;
     const client = new McpToolClient({
-      servers: {
-        cloud: { url: `http://127.0.0.1:${port}/mcp`, headers: { 'x-acp-test': 'yes' } },
-      },
+      servers: { cloud: { url, headers: { 'x-acp-test': 'yes' } } },
     });
     const err = await failureOf(client.call('cloud', 't', {}));
     expect(err.errorClass).toBe('policy_denied');
     expect(err.message).toBe('tool server cloud refused the call (401)');
-    expect(seenHeaders).toContain('yes');
+    expect(seen.map((h) => h['x-acp-test'])).toContain('yes');
+    // No CallOptions → no identity or correlation headers fabricated.
+    expect(seen.every((h) => h.authorization === undefined)).toBe(true);
+    expect(seen.every((h) => h['x-acp-task-id'] === undefined)).toBe(true);
+  });
+
+  it('forwards the delegated token and correlation ids from CallOptions', async () => {
+    seen.length = 0;
+    const client = new McpToolClient({
+      servers: { cloud: { url, headers: { 'x-acp-test': 'yes' } } },
+    });
+    await failureOf(
+      client.call(
+        'cloud',
+        't',
+        {},
+        { delegatedToken: 'tok-123', taskId: 'task-1', stepId: 'step-1' },
+      ),
+    );
+    expect(seen.length).toBeGreaterThan(0);
+    for (const headers of seen) {
+      expect(headers.authorization).toBe('Bearer tok-123');
+      expect(headers['x-acp-task-id']).toBe('task-1');
+      expect(headers['x-acp-step-id']).toBe('step-1');
+      // Binding headers still ride along.
+      expect(headers['x-acp-test']).toBe('yes');
+    }
   });
 });

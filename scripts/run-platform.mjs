@@ -36,6 +36,18 @@ const services = [
   ['registry', 'node', ['apps/registry/dist/main.js'], {}],
   ['policy', 'node', ['apps/policy/dist/main.js'], {}],
   ['knowledge', 'node', ['apps/knowledge/dist/main.js'], {}],
+  [
+    'tool-gateway',
+    'node',
+    ['apps/tool-gateway/dist/main.js'],
+    {
+      ACP_TOOL_GATEWAY_CLIENT_ID: 'svc-tool-gateway',
+      ACP_TOOL_GATEWAY_CLIENT_SECRET: 'tool-gateway-dev-secret',
+      ACP_NATS_SERVICE_USER: 'tool-gateway',
+      ACP_NATS_SERVICE_PASSWORD: 'tool-gateway-dev-password',
+      ACP_TOOL_SERVERS: join(repoRoot, 'deploy', 'dev', 'tool-servers.json'),
+    },
+  ],
   ['gateway', 'node', ['apps/gateway/dist/main.js'], {}],
   [
     'orchestrator',
@@ -72,17 +84,19 @@ const services = [
     ['deploy/mocks/dist/forge/main.js'],
     { ACP_MOCK_FORGE_PORT: '7302', ACP_MOCK_FIXTURES: join(repoRoot, 'fixtures', 'acme-corp') },
   ],
+  // Item 5: agent tool calls traverse the Tool Gateway PEP; the mocks stay
+  // reachable on 7301/7302 as the gateway's upstreams only.
   [
     'cloud-agent',
     'node',
     ['agents/cloud/dist/main.js'],
-    { ACP_TOOL_SERVER_CLOUD_ESTATE_URL: 'http://localhost:7301/mcp' },
+    { ACP_TOOL_SERVER_CLOUD_ESTATE_URL: 'http://localhost:7106/mcp/cloud-estate' },
   ],
   [
     'code-agent',
     'node',
     ['agents/code/dist/main.js'],
-    { ACP_TOOL_SERVER_CODE_FORGE_URL: 'http://localhost:7302/mcp' },
+    { ACP_TOOL_SERVER_CODE_FORGE_URL: 'http://localhost:7106/mcp/code-forge' },
   ],
 ];
 
@@ -135,7 +149,7 @@ process.on('SIGTERM', () => shutdown(0));
 
 // Readiness gate: every HTTP door answers /healthz. The mocks (7301/7302)
 // have one; the agents are Temporal workers with no HTTP door.
-const healthPorts = [7101, 7102, 7103, 7104, 7105, 7100, 7301, 7302];
+const healthPorts = [7101, 7102, 7103, 7104, 7105, 7106, 7100, 7301, 7302];
 const deadline = Date.now() + 120_000;
 for (const port of healthPorts) {
   for (;;) {

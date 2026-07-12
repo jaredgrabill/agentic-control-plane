@@ -91,6 +91,7 @@
     { "file": "audit-event/valid-policy-decision.json", "schema": "audit-event", "valid": true },
     { "file": "audit-event/valid-corpus-mutation.json", "schema": "audit-event", "valid": true },
     { "file": "audit-event/valid-retrieval-served.json", "schema": "audit-event", "valid": true },
+    { "file": "audit-event/valid-tool-called.json", "schema": "audit-event", "valid": true },
     {
       "file": "audit-event/invalid-unknown-event-type.json",
       "schema": "audit-event",

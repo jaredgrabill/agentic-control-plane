@@ -11,13 +11,16 @@ import {
 
 const ISSUER = 'https://token.test.local';
 
-async function makeToken(claims: Record<string, unknown>, opts?: { issuer?: string }) {
+async function makeToken(
+  claims: Record<string, unknown>,
+  opts?: { issuer?: string; audience?: string | string[] },
+) {
   const pair = await generateKeyPair('EdDSA');
   const jwk = await exportJWK(pair.publicKey);
   const token = await new SignJWT(claims)
     .setProtectedHeader({ alg: 'EdDSA' })
     .setIssuer(opts?.issuer ?? ISSUER)
-    .setAudience('acp:test')
+    .setAudience(opts?.audience ?? 'acp:test')
     .setIssuedAt()
     .setExpirationTime('5m')
     .sign(pair.privateKey);
@@ -58,6 +61,51 @@ describe('JwtVerifier', () => {
     await expect(new JwtVerifier({ jwks }, ISSUER).verify(token, 'acp:test')).rejects.toThrow(
       /tenant/,
     );
+  });
+});
+
+describe('JwtVerifier.verifyWithAudience', () => {
+  const acceptTools = (aud: string) => aud === 'acp:tools' || aud.startsWith('acp:agent:');
+
+  it('accepts any audience the predicate accepts', async () => {
+    const { token, jwks } = await makeToken(GOOD_CLAIMS); // aud acp:test
+    const verifier = new JwtVerifier({ jwks }, ISSUER);
+    const claims = await verifier.verifyWithAudience(
+      token,
+      (aud) => aud === 'acp:test',
+      'acp:test',
+    );
+    expect(claims.sub).toBe('user:jane.doe');
+    await expect(
+      verifier.verifyWithAudience(token, acceptTools, 'acp:tools or acp:agent:{id}'),
+    ).rejects.toThrow(/token audience not accepted: acp:tools or acp:agent:\{id\}/);
+  });
+
+  it('rejects predicate-refused, multi-audience, wrong-issuer, and expired tokens', async () => {
+    const multi = await makeToken(GOOD_CLAIMS, { audience: ['acp:test', 'acp:tools'] });
+    await expect(
+      new JwtVerifier({ jwks: multi.jwks }, ISSUER).verifyWithAudience(
+        multi.token,
+        () => true,
+        'anything',
+      ),
+    ).rejects.toThrow(/token audience not accepted/);
+
+    const { token, jwks } = await makeToken(GOOD_CLAIMS);
+    await expect(
+      new JwtVerifier({ jwks }, 'https://someone-else').verifyWithAudience(
+        token,
+        () => true,
+        'anything',
+      ),
+    ).rejects.toThrow(/token verification failed/);
+  });
+
+  it('still enforces the platform claim shape after the audience passes', async () => {
+    const { token, jwks } = await makeToken({ sub: 'user:jane.doe' });
+    await expect(
+      new JwtVerifier({ jwks }, ISSUER).verifyWithAudience(token, () => true, 'anything'),
+    ).rejects.toThrow(/tenant/);
   });
 });
 

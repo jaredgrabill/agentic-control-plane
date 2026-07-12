@@ -138,11 +138,17 @@ export class TokenIssuer {
     }
     // Idempotent actor: re-exchanging under the same acting party (e.g. an
     // agent narrowing its own token toward a tool audience) must not
-    // duplicate links in the delegation chain.
-    const act: ActClaim =
+    // duplicate links in the delegation chain. And when the requested actor
+    // IS the subject with no chain at all (the tool gateway re-scoping a
+    // plain user token toward acp:knowledge), no delegation happened — the
+    // exchange must not fabricate an act link, or downstream PEPs would
+    // record a bogus [user, user] chain.
+    const act: ActClaim | undefined =
       subject.act?.sub === actor
         ? subject.act
-        : { sub: actor, ...(subject.act !== undefined ? { act: subject.act } : {}) };
+        : actor === subject.sub && subject.act === undefined
+          ? undefined
+          : { sub: actor, ...(subject.act !== undefined ? { act: subject.act } : {}) };
 
     return this.sign(
       {
@@ -151,7 +157,7 @@ export class TokenIssuer {
         tenant: subject.tenant,
         roles: subject.roles,
         scope: scopes.join(' '),
-        act,
+        ...(act !== undefined ? { act } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );

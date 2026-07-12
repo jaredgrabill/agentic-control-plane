@@ -1,0 +1,35 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f60",
+  "occurred_at": "2026-07-11T14:03:27Z",
+  "tenant": "acme",
+  "event_type": "tool.called",
+  "actor": {
+    "principal": "agent:cloud-agent@0.1.0",
+    "delegation_chain": [
+      { "sub": "user:jane.doe", "role": "tenant-user" },
+      { "sub": "svc:orchestrator", "role": "platform" },
+      { "sub": "agent:cloud-agent@0.1.0", "role": "agent" }
+    ]
+  },
+  "action": {
+    "name": "tool:cloud-estate:inventory_search",
+    "inputs_digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  },
+  "reason": {
+    "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+    "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44",
+    "policy": {
+      "decision": "allow",
+      "bundle_version": "2026.07+0123456789ab",
+      "determining_policies": ["allow-tool-cloud-estate-inventory"]
+    }
+  },
+  "artifacts": {
+    "lineage_ids": ["01981c00-0000-7000-8000-0000000000a1"]
+  },
+  "details": {
+    "server": "cloud-estate",
+    "tool": "inventory_search",
+    "outcome": "ok"
+  }
+}

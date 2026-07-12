@@ -1,0 +1,49 @@
+{
+  "schema": "acp-tool-servers/v1",
+  "servers": [
+    {
+      "id": "cloud-estate",
+      "url": "http://localhost:7301/mcp",
+      "auth": {
+        "mode": "static-headers",
+        "headers": {
+          "x-acp-broker-credential": "${ACP_TOOL_CRED_CLOUD_ESTATE:-cloud-estate-dev-broker}"
+        }
+      },
+      "tools": {
+        "inventory_search": { "scope": "cloud:inventory:read" },
+        "cost_report": { "scope": "cloud:cost:read" }
+      },
+      "rate_limit": { "per_minute": 60, "burst": 20 },
+      "timeout_ms": 15000
+    },
+    {
+      "id": "code-forge",
+      "url": "http://localhost:7302/mcp",
+      "auth": {
+        "mode": "static-headers",
+        "headers": {
+          "x-acp-broker-credential": "${ACP_TOOL_CRED_CODE_FORGE:-code-forge-dev-broker}"
+        }
+      },
+      "tools": {
+        "repo_dependencies": { "scope": "code:repo:read" },
+        "ci_runs": { "scope": "code:ci:read" }
+      },
+      "rate_limit": { "per_minute": 60, "burst": 20 }
+    },
+    {
+      "id": "knowledge",
+      "url": "http://localhost:7105/mcp",
+      "auth": {
+        "mode": "token-exchange",
+        "audience": "acp:knowledge",
+        "scope": ["knowledge:search:read"]
+      },
+      "tools": {
+        "knowledge_search": { "scope": "knowledge:search:read" }
+      },
+      "rate_limit": { "per_minute": 60, "burst": 5 }
+    }
+  ]
+}

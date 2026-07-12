@@ -7,7 +7,7 @@
 
 import { CapabilityError, ErrorClass, type Agent } from '@acp/agent-sdk';
 import type { ToolClient } from '@acp/tool-client';
-import { CLOUD_ESTATE, primaryProvenance } from '../tools.js';
+import { callOptions, CLOUD_ESTATE, primaryProvenance } from '../tools.js';
 
 interface InventoryInput {
   service?: string | undefined;
@@ -55,7 +55,7 @@ export function formatResource(resource: InventoryResource): string {
 }
 
 export function registerInventoryQuery(agent: Agent, tools: ToolClient): void {
-  agent.capability('cloud.inventory_query', async (_ctx, rawInput) => {
+  agent.capability('cloud.inventory_query', async (ctx, rawInput) => {
     const input = rawInput as InventoryInput;
     if (FILTER_KEYS.every((key) => input[key] === undefined)) {
       throw new CapabilityError(
@@ -70,7 +70,12 @@ export function registerInventoryQuery(agent: Agent, tools: ToolClient): void {
       throw new CapabilityError(ErrorClass.NeedsInput, 'limit must be an integer between 1 and 50');
     }
 
-    const response = await tools.call(CLOUD_ESTATE, 'inventory_search', { ...input });
+    const response = await tools.call(
+      CLOUD_ESTATE,
+      'inventory_search',
+      { ...input },
+      callOptions(ctx),
+    );
     const data = response.data as {
       as_of: string;
       resources: InventoryResource[];

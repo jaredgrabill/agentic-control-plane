@@ -129,7 +129,22 @@
       }
     },
     {
-      "name": "agent-to-tool calls have no permit yet — Item 5's gateway flips this consciously",
+      "name": "cloud agent calls inventory_search through the gateway PEP (the Item 3 deny pin, flipped consciously)",
+      "expect": "allow",
+      "determined_by": "allow-tool-cloud-estate-inventory",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:inventory_search",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": { "scopes": ["cloud:inventory:read", "cloud:cost:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "agent calling a tool outside its manifest scopes is denied — cloud scopes open no code-forge door",
       "expect": "deny",
       "request": {
         "principal": {
@@ -137,9 +152,100 @@
           "id": "agent:cloud-agent@0.1.0",
           "attrs": { "tenant": "acme" }
         },
-        "action": "cloud.inventory_query",
-        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": { "tenant": "acme" } },
-        "context": { "scopes": ["cloud:inventory:read"] }
+        "action": "tool:code-forge:repo_dependencies",
+        "resource": { "type": "Service", "id": "svc:code-forge", "attrs": {} },
+        "context": { "scopes": ["cloud:inventory:read", "cloud:cost:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "cloud agent calls cost_report through the gateway PEP",
+      "expect": "allow",
+      "determined_by": "allow-tool-cloud-estate-cost",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:cost_report",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": { "scopes": ["cloud:inventory:read", "cloud:cost:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "code agent calls repo_dependencies through the gateway PEP",
+      "expect": "allow",
+      "determined_by": "allow-tool-code-forge-repo",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:code-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:code-forge:repo_dependencies",
+        "resource": { "type": "Service", "id": "svc:code-forge", "attrs": {} },
+        "context": { "scopes": ["code:repo:read", "code:ci:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "code agent calls ci_runs through the gateway PEP",
+      "expect": "allow",
+      "determined_by": "allow-tool-code-forge-ci",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:code-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:code-forge:ci_runs",
+        "resource": { "type": "Service", "id": "svc:code-forge", "attrs": {} },
+        "context": { "scopes": ["code:repo:read", "code:ci:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "tenant user calls knowledge_search through the gateway PEP (IDE-shaped access)",
+      "expect": "allow",
+      "determined_by": "allow-tool-knowledge-search",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "tool:knowledge:knowledge_search",
+        "resource": { "type": "Service", "id": "svc:knowledge", "attrs": {} },
+        "context": { "scopes": ["knowledge:search:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "tenant user searches the corpus at the inner knowledge PEP",
+      "expect": "allow",
+      "determined_by": "allow-knowledge-user-read",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "knowledge.search",
+        "resource": { "type": "Corpus", "id": "acme", "attrs": { "tenant": "acme" } },
+        "context": { "scopes": ["knowledge:search:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "agent with an empty delegated scope set cannot call inventory_search",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:cloud-estate:inventory_search",
+        "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
+        "context": { "scopes": [], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "user without the knowledge-read scope cannot call knowledge_search",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "tool:knowledge:knowledge_search",
+        "resource": { "type": "Service", "id": "svc:knowledge", "attrs": {} },
+        "context": { "scopes": ["task:submit"], "tenant": "acme" }
       }
     },
     {

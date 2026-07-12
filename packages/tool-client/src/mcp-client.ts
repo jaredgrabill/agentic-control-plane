@@ -31,7 +31,8 @@ import {
 import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { CapabilityError, ErrorClass } from '@acp/agent-sdk';
-import type { ToolClient, ToolEnvelope, ToolResponse } from './types.js';
+import { parseToolEnvelope } from './envelope.js';
+import type { CallOptions, ToolClient, ToolResponse } from './types.js';
 
 /**
  * How to reach a named tool server: an HTTP URL (the `/mcp` endpoint), or a
@@ -59,8 +60,17 @@ export class McpToolClient implements ToolClient {
    * One MCP client + transport per call: connect, call, close. The per-call
    * handshake is acceptable against the dev mocks; connection pooling is the
    * Tool Gateway's job (Item 5), not this seam's.
+   *
+   * URL bindings forward the per-call identity: the delegated token as the
+   * Authorization bearer, task/step ids as x-acp-* correlation headers.
+   * Transport-factory bindings (hermetic in-memory tests) ignore headers.
    */
-  async call(server: string, tool: string, args: Record<string, unknown>): Promise<ToolResponse> {
+  async call(
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+    options?: CallOptions,
+  ): Promise<ToolResponse> {
     const binding = this.servers[server];
     if (binding === undefined) {
       throw new CapabilityError(
@@ -74,12 +84,9 @@ export class McpToolClient implements ToolClient {
         ? // The SDK types sessionId as `string | undefined` where Transport
           // declares `sessionId?: string`; the cast bridges the
           // exactOptionalPropertyTypes mismatch, nothing more.
-          (new StreamableHTTPClientTransport(
-            new URL(binding.url),
-            binding.headers === undefined
-              ? undefined
-              : { requestInit: { headers: binding.headers } },
-          ) as Transport)
+          (new StreamableHTTPClientTransport(new URL(binding.url), {
+            requestInit: { headers: callHeaders(binding.headers, options) },
+          }) as Transport)
         : binding.transport();
     try {
       let result: unknown;
@@ -131,7 +138,7 @@ export class McpToolClient implements ToolClient {
         ErrorClass.Permanent,
         `tool ${server}.${tool} returned a malformed result`,
       );
-    const envelope = extractEnvelope(result);
+    const envelope = parseToolEnvelope(result);
     if (envelope === undefined) throw malformed();
 
     if (!envelope.ok) {
@@ -156,14 +163,9 @@ export class McpToolClient implements ToolClient {
           throw new CapabilityError(ErrorClass.Permanent, error.message);
         case 'not_found':
           throw new CapabilityError(ErrorClass.NeedsInput, error.message);
-        default:
-          throw malformed();
       }
     }
 
-    if (!isRecord(envelope.data) || !Array.isArray(envelope.provenance)) {
-      throw malformed();
-    }
     const response: ToolResponse = {
       data: envelope.data,
       provenance: envelope.provenance,
@@ -174,38 +176,17 @@ export class McpToolClient implements ToolClient {
   }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-/**
- * Pulls the ToolEnvelope out of an MCP CallToolResult: `structuredContent`
- * first, envelope JSON in `content[0].text` as the fallback.
- */
-function extractEnvelope(result: unknown): ToolEnvelope | undefined {
-  if (!isRecord(result)) return undefined;
-  const candidate = isRecord(result.structuredContent)
-    ? result.structuredContent
-    : parseTextContent(result.content);
-  if (candidate === undefined) return undefined;
-  if (candidate.ok === true) return candidate as ToolEnvelope;
-  if (candidate.ok === false && isRecord(candidate.error)) {
-    if (typeof candidate.error.code !== 'string' || typeof candidate.error.message !== 'string') {
-      return undefined;
-    }
-    return candidate as ToolEnvelope;
-  }
-  return undefined;
-}
-
-function parseTextContent(content: unknown): Record<string, unknown> | undefined {
-  if (!Array.isArray(content)) return undefined;
-  const first: unknown = content[0];
-  if (!isRecord(first) || typeof first.text !== 'string') return undefined;
-  try {
-    const parsed: unknown = JSON.parse(first.text);
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
+/** Static binding headers + per-call identity/correlation headers. */
+function callHeaders(
+  bindingHeaders: Record<string, string> | undefined,
+  options: CallOptions | undefined,
+): Record<string, string> {
+  return {
+    ...bindingHeaders,
+    ...(options?.delegatedToken !== undefined
+      ? { authorization: `Bearer ${options.delegatedToken}` }
+      : {}),
+    ...(options?.taskId !== undefined ? { 'x-acp-task-id': options.taskId } : {}),
+    ...(options?.stepId !== undefined ? { 'x-acp-step-id': options.stepId } : {}),
+  };
 }

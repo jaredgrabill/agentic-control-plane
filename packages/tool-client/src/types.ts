@@ -26,10 +26,31 @@ export interface ToolResponse {
   gaps?: string[];
 }
 
+/**
+ * Per-call options: the step's delegated identity and correlation ids. The
+ * Tool Gateway (Item 5) authenticates the delegated token and stamps the
+ * task/step ids into its tool.called audit events; servers reached without
+ * a gateway ignore them.
+ */
+export interface CallOptions {
+  delegatedToken?: string | undefined;
+  taskId?: string | undefined;
+  stepId?: string | undefined;
+}
+
 /** The only door from a capability handler to a tool server. */
 export interface ToolClient {
-  call(server: string, tool: string, args: Record<string, unknown>): Promise<ToolResponse>;
+  call(
+    server: string,
+    tool: string,
+    args: Record<string, unknown>,
+    options?: CallOptions,
+  ): Promise<ToolResponse>;
 }
+
+/** Typed wire error codes — the closed vocabulary the client maps onto CapabilityError. */
+export type ToolErrorCode =
+  'rate_limited' | 'unavailable' | 'invalid_input' | 'not_found' | 'upstream_auth';
 
 /**
  * The wire envelope every ACP tool result rides in (inside MCP
@@ -48,7 +69,7 @@ export type ToolEnvelope =
   | {
       ok: false;
       error: {
-        code: 'rate_limited' | 'unavailable' | 'invalid_input' | 'not_found' | 'upstream_auth';
+        code: ToolErrorCode;
         message: string;
         retry_after_s?: number;
       };

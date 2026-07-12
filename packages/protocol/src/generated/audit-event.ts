@@ -22,6 +22,7 @@ export type EventType =
   | 'agent.baseline_recorded'
   | 'corpus.mutation'
   | 'retrieval.served'
+  | 'tool.called'
   | 'killswitch.activated'
   | 'killswitch.cleared';
 export type Digest = string;

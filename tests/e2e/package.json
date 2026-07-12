@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@acp/protocol": "workspace:*",
+    "@acp/tool-client": "workspace:*",
     "@types/node": "^22.15.0",
     "vitest": "^3.2.4",
     "yaml": "^2.8.0"
