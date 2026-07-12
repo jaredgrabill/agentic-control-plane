@@ -942,7 +942,7 @@ async function runApproval(
       workflowId: `approval-${gate.subject.approval_id}`,
       args: [gate],
     });
-    await drive(handle as never);
+    await drive(handle);
     return handle.result();
   });
 }
@@ -960,9 +960,7 @@ async function waitForApprovalId(): Promise<string> {
 function scriptGated(plan = gatedPlan): void {
   vi.mocked(control.planTask).mockResolvedValue({ plan, planDigest: DIGEST });
   vi.mocked(control.discoverAgent).mockImplementation((capability: string) =>
-    Promise.resolve(
-      capability === 'gov.test_write' ? gatedCard : (CARDS[capability] ?? null),
-    ),
+    Promise.resolve(capability === 'gov.test_write' ? gatedCard : (CARDS[capability] ?? null)),
   );
   vi.mocked(control.authorizeDelegation).mockImplementation((input) =>
     Promise.resolve(
@@ -972,7 +970,11 @@ function scriptGated(plan = gatedPlan): void {
             bundle_version: '2026.07+abc',
             determining_policies: ['gate-r2-delegation'],
           }
-        : { decision: 'allow', bundle_version: '2026.07+abc', determining_policies: ['allow-r0-delegation'] },
+        : {
+            decision: 'allow',
+            bundle_version: '2026.07+abc',
+            determining_policies: ['allow-r0-delegation'],
+          },
     ),
   );
   govExec.mockImplementation((req) =>
@@ -1010,7 +1012,10 @@ describe('ApprovalWorkflow (durable human gate)', () => {
   it('(B) deny → not granted, approval.denied recorded', async () => {
     const gate = gateInput();
     const outcome = await runApproval(gate, async (h) => {
-      await h.signal(approvalDecisionSignal, decisionSignal('deny', SUBJECT_DIGEST, { note: 'too risky' }));
+      await h.signal(
+        approvalDecisionSignal,
+        decisionSignal('deny', SUBJECT_DIGEST, { note: 'too risky' }),
+      );
     });
     expect(outcome).toMatchObject({ granted: false, reason: 'denied' });
     expect(audited.some((e) => e.event_type === 'approval.denied')).toBe(true);

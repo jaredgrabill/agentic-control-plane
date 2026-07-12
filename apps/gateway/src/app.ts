@@ -254,7 +254,8 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
     if (claims.sub === view.subject.principal) {
       return reply.status(403).send({
         error: {
-          message: `separation of duties: ${claims.sub} is the subject of approval ${approvalId} ` +
+          message:
+            `separation of duties: ${claims.sub} is the subject of approval ${approvalId} ` +
             'and may not decide it',
           status: 403,
         },
@@ -264,7 +265,8 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
     if (body.subject_digest !== view.subject_digest) {
       return reply.status(409).send({
         error: {
-          message: `stale approval context: the subject changed since it was shown (digest mismatch) ` +
+          message:
+            `stale approval context: the subject changed since it was shown (digest mismatch) ` +
             `for approval ${approvalId}`,
           status: 409,
         },

@@ -72,11 +72,7 @@ beforeAll(async () => {
     approvals: {
       // Mirrors TemporalApprovalGateway: cross-tenant reads as absent.
       status: (_id, tenant) =>
-        Promise.resolve(
-          approvalView !== undefined && approvalView.subject.tenant === tenant
-            ? approvalView
-            : undefined,
-        ),
+        Promise.resolve(approvalView?.subject.tenant === tenant ? approvalView : undefined),
       decide: (approvalId, signal) => {
         decideCalls.push({ approvalId, signal });
         return Promise.resolve();
@@ -346,7 +342,10 @@ describe('approval API', () => {
     it('returns the full context to a scoped approver', async () => {
       const res = await getApproval(await approverToken());
       expect(res.statusCode).toBe(200);
-      const body = res.json<{ subject: { plan: unknown; capability: string }; subject_digest: string }>();
+      const body = res.json<{
+        subject: { plan: unknown; capability: string };
+        subject_digest: string;
+      }>();
       expect(body.subject.capability).toBe('gov.test_write');
       expect(body.subject.plan).toBeDefined();
       expect(body.subject_digest).toBe(SUBJECT_DIGEST);
@@ -421,10 +420,16 @@ describe('approval API', () => {
     });
 
     it('400 for a bad decision value or a missing subject_digest', async () => {
-      expect((await decide(await approverToken(), { decision: 'maybe', subject_digest: SUBJECT_DIGEST })).statusCode).toBe(400);
+      expect(
+        (await decide(await approverToken(), { decision: 'maybe', subject_digest: SUBJECT_DIGEST }))
+          .statusCode,
+      ).toBe(400);
       expect((await decide(await approverToken(), { decision: 'approve' })).statusCode).toBe(400);
       // deny requires a note
-      expect((await decide(await approverToken(), { decision: 'deny', subject_digest: SUBJECT_DIGEST })).statusCode).toBe(400);
+      expect(
+        (await decide(await approverToken(), { decision: 'deny', subject_digest: SUBJECT_DIGEST }))
+          .statusCode,
+      ).toBe(400);
     });
 
     it('404 for a cross-tenant approval', async () => {
@@ -469,10 +474,14 @@ describe('approval API', () => {
     });
 
     it('400 for a non-uuid approval id (never interpolated into a workflow id)', async () => {
-      const res = await decide(await approverToken(), {
-        decision: 'approve',
-        subject_digest: SUBJECT_DIGEST,
-      }, 'not-a-uuid');
+      const res = await decide(
+        await approverToken(),
+        {
+          decision: 'approve',
+          subject_digest: SUBJECT_DIGEST,
+        },
+        'not-a-uuid',
+      );
       expect(res.statusCode).toBe(400);
       expect(decideCalls).toHaveLength(0);
     });

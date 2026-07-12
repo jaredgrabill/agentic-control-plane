@@ -212,7 +212,11 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
         // refuses self-approval before it ever signs the claim.
         ...(body.approval === undefined
           ? {}
-          : { approval: body.approval as NonNullable<Parameters<typeof issuerSvc.delegate>[0]['approval']> }),
+          : {
+              approval: body.approval as NonNullable<
+                Parameters<typeof issuerSvc.delegate>[0]['approval']
+              >,
+            }),
         ttlSeconds: parseTtl(body.requested_ttl),
       }),
     );

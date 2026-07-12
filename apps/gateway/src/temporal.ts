@@ -35,7 +35,10 @@ export async function connectTemporal(): Promise<{
     // from HTTP intake through the agent's activities.
     interceptors: { workflow: [new OpenTelemetryWorkflowClientInterceptor()] },
   });
-  return { starter: new TemporalTaskStarter(client), approvals: new TemporalApprovalGateway(client) };
+  return {
+    starter: new TemporalTaskStarter(client),
+    approvals: new TemporalApprovalGateway(client),
+  };
 }
 
 export class TemporalTaskStarter implements TaskStarter {
@@ -115,7 +118,7 @@ export class TemporalApprovalGateway implements ApprovalGateway {
     }
     let view: ApprovalStatusQueryResult;
     try {
-      view = await handle.query<ApprovalStatusQueryResult, []>(APPROVAL_STATUS_QUERY);
+      view = await handle.query<ApprovalStatusQueryResult>(APPROVAL_STATUS_QUERY);
     } catch (err) {
       if (err instanceof WorkflowNotFoundError) return undefined;
       throw err;

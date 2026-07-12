@@ -493,11 +493,7 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
     // still stop traffic. If the agent is gone or its active version moved,
     // the approval no longer applies to what would run — fail permanent.
     const current = await control.discoverAgent(planStep.capability, dispatch.tenant);
-    if (
-      current === null ||
-      current.manifest.id !== card.manifest.id ||
-      current.version !== card.version
-    ) {
+    if (current?.manifest.id !== card.manifest.id || current.version !== card.version) {
       return failed({
         class: 'permanent',
         message:
@@ -506,10 +502,18 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
       });
     }
 
+    // A granted outcome always carries decision metadata; guard defensively so
+    // the token grounds are never built from a partial outcome.
+    if (outcome.decision_id === undefined || outcome.approver === undefined) {
+      return failed({
+        class: 'permanent',
+        message: `approval ${approvalId} granted without decision metadata — refusing to broker`,
+      });
+    }
     approvalGrounds = {
       approval_id: approvalId,
-      decision_id: outcome.decision_id!,
-      approver: outcome.approver!,
+      decision_id: outcome.decision_id,
+      approver: outcome.approver,
       step_id: planStep.step_id,
       capability: planStep.capability,
       subject_digest,
@@ -608,7 +612,10 @@ export async function ApprovalWorkflow(input: ApprovalGateInput): Promise<Approv
       rejectedSignals += 1; // already decided
       return;
     }
-    if (signal.decision !== 'approve' && signal.decision !== 'deny') {
+    // Defensive against raw Temporal signal access: the value is typed but the
+    // wire is not, so validate as a string.
+    const kind: string = signal.decision;
+    if (kind !== 'approve' && kind !== 'deny') {
       rejectedSignals += 1; // bad decision value
       return;
     }
@@ -627,22 +634,15 @@ export async function ApprovalWorkflow(input: ApprovalGateInput): Promise<Approv
     decision = signal;
   });
 
-  setHandler(
-    approvalStatusQuery,
-    (): ApprovalStatus => ({
-      status:
-        decision === undefined
-          ? 'pending'
-          : decision.decision === 'approve'
-            ? 'granted'
-            : 'denied',
-      subject,
-      subject_digest,
-      requested_at: requestedAt,
-      escalated,
-      rejected_signals: rejectedSignals,
-    }),
-  );
+  setHandler(approvalStatusQuery, (): ApprovalStatus => ({
+    status:
+      decision === undefined ? 'pending' : decision.decision === 'approve' ? 'granted' : 'denied',
+    subject,
+    subject_digest,
+    requested_at: requestedAt,
+    escalated,
+    rejected_signals: rejectedSignals,
+  }));
 
   await emitApprovalAudit(subject, subject_digest, 'approval.requested', {
     approval_id: subject.approval_id,

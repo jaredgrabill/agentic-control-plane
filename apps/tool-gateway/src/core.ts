@@ -231,7 +231,7 @@ export class ToolGatewayCore {
     // alone.
     if (decision.decision === 'require-approval') {
       await audit('denied', {
-        ...(approval.granted === false && approval.approval_id !== undefined
+        ...(!approval.granted && approval.approval_id !== undefined
           ? { approvalId: approval.approval_id }
           : {}),
       });

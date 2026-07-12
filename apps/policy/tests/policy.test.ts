@@ -179,8 +179,9 @@ describe('three-way lift (annotation-gated permits)', () => {
 });
 
 describe('bundle annotation loading', () => {
-  const write = (dir: string, name: string, text: string) =>
+  const write = (dir: string, name: string, text: string) => {
     writeFileSync(join(dir, `${name}.cedar`), text);
+  };
 
   it('collects @decision("require-approval") permits into approvalPolicies', () => {
     const dir = mkdtempSync(join(tmpdir(), 'acp-gate-'));

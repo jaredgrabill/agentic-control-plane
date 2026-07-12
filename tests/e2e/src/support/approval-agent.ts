@@ -33,21 +33,20 @@ export async function startApprovalAgent(): Promise<RunningAgent> {
   // Canned handlers: return a valid Answer envelope so the task synthesizes to
   // completed. The point under test is that the write only runs AFTER a human
   // approval — the content is incidental.
-  const canned =
-    (verb: string) => (_ctx: unknown, input: Record<string, unknown>) => {
-      const target = typeof input.target === 'string' ? input.target : 'record';
-      return Promise.resolve({
-        text: `${verb} applied to ${target} [1]`,
-        citations: [
-          {
-            doc_id: 'gov/change-log',
-            version: '1',
-            lineage_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3faa',
-          },
-        ],
-        confidence: 0.95,
-      });
-    };
+  const canned = (verb: string) => (_ctx: unknown, input: Record<string, unknown>) => {
+    const target = typeof input.target === 'string' ? input.target : 'record';
+    return Promise.resolve({
+      text: `${verb} applied to ${target} [1]`,
+      citations: [
+        {
+          doc_id: 'gov/change-log',
+          version: '1',
+          lineage_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3faa',
+        },
+      ],
+      confidence: 0.95,
+    });
+  };
   agent.capability('gov.test_write', canned('write'));
   agent.capability('gov.test_undo', canned('undo'));
 

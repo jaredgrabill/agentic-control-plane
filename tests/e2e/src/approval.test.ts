@@ -56,7 +56,10 @@ async function submitWrite(target: string): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/v1/tasks`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${await janeToken()}` },
-    body: JSON.stringify({ text: `apply governed write to ${target}`, capability: 'gov.test_write' }),
+    body: JSON.stringify({
+      text: `apply governed write to ${target}`,
+      capability: 'gov.test_write',
+    }),
   });
   expect(res.status, await res.clone().text()).toBe(202);
   return ((await res.json()) as { task_id: string }).task_id;
@@ -163,7 +166,8 @@ describe('governed approval slice', () => {
     const events = await auditEvents(taskId);
     const type = (t: string) => events.find((e) => e.event_type === t);
     const policyGate = events.find(
-      (e) => e.event_type === 'policy.decision' && e.reason?.policy?.decision === 'require-approval',
+      (e) =>
+        e.event_type === 'policy.decision' && e.reason?.policy?.decision === 'require-approval',
     );
     expect(policyGate, 'a require-approval policy.decision').toBeDefined();
     expect(type('approval.requested')).toBeDefined();

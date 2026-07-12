@@ -473,12 +473,15 @@ function clampTtl(requested: number): number {
  * the approver is a non-empty principal that is NOT the subject — structural
  * separation of duties enforced independently of the gateway's own check.
  */
-function buildApprovalClaim(grounds: ApprovalGrounds, subjectSub: string): ApprovalClaim {
+function buildApprovalClaim(raw: unknown, subjectSub: string): ApprovalClaim {
   const bad = (msg: string): never => {
     throw new AuthError(`approval grounds rejected: ${msg}`, 400);
   };
-  if (typeof grounds !== 'object' || grounds === null) bad('must be an object');
-  if (!UUID_RE.test(grounds.approval_id)) bad('approval_id must be a uuid');
+  if (typeof raw !== 'object' || raw === null) bad('must be an object');
+  const grounds = raw as ApprovalGrounds;
+  if (typeof grounds.approval_id !== 'string' || !UUID_RE.test(grounds.approval_id)) {
+    bad('approval_id must be a uuid');
+  }
   if (!UUID_RE.test(grounds.decision_id)) bad('decision_id must be a uuid');
   if (!UUID_RE.test(grounds.step_id)) bad('step_id must be a uuid');
   if (typeof grounds.capability !== 'string' || grounds.capability === '') {

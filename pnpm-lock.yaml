@@ -699,6 +699,9 @@ importers:
 
   tests/e2e:
     devDependencies:
+      '@acp/agent-sdk':
+        specifier: workspace:*
+        version: link:../../packages/agent-sdk
       '@acp/cost-meter':
         specifier: workspace:*
         version: link:../../packages/cost-meter
@@ -711,6 +714,9 @@ importers:
       '@acp/tool-client':
         specifier: workspace:*
         version: link:../../packages/tool-client
+      '@temporalio/worker':
+        specifier: ^1.13.0
+        version: 1.20.2(tslib@2.8.1)
       '@types/node':
         specifier: ^22.15.0
         version: 22.20.1

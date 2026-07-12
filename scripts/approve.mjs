@@ -80,9 +80,7 @@ function printApproval(view) {
   console.log(`Approval ${view.approval_id}   status: ${view.status}`);
   console.log('='.repeat(64));
   if (s.irreversible === true) {
-    console.log(
-      `${RED}${BOLD}  !!! IRREVERSIBLE WRITE — no compensator declared !!!  ${RESET}`,
-    );
+    console.log(`${RED}${BOLD}  !!! IRREVERSIBLE WRITE — no compensator declared !!!  ${RESET}`);
   }
   console.log(`  capability:   ${s.capability}   (risk ${s.risk})`);
   console.log(`  agent:        ${s.agent_id}@${s.agent_version}`);
@@ -133,7 +131,9 @@ async function decide(approvalId, decision, note) {
     process.exit(1);
   }
   const { decision_id } = JSON.parse(body);
-  console.log(`\n${decision === 'approve' ? 'APPROVED' : 'DENIED'} ${approvalId} (decision ${decision_id})`);
+  console.log(
+    `\n${decision === 'approve' ? 'APPROVED' : 'DENIED'} ${approvalId} (decision ${decision_id})`,
+  );
 }
 
 async function list(tenant) {
