@@ -20,6 +20,7 @@ import {
   approvalDecisionSignal,
   approvalStatusQuery,
 } from '../src/workflows.js';
+import { buildPlanSteps } from '../src/planner.js';
 import {
   APPROVAL_DENY_AFTER_S,
   APPROVAL_ESCALATE_AFTER_S,
@@ -481,17 +482,19 @@ describe('TaskWorkflow v1', () => {
       plan: fanOutPlan,
       planDigest: DIGEST,
     };
-    const result = await withWorkers([], () =>
+    const execution = await withWorkers([], () =>
       env.client.workflow.execute(AgentStepWorkflow, {
         taskQueue: CONTROL_TASK_QUEUE,
         workflowId: workflowId(),
         args: [dispatch],
       }),
     );
+    const result = execution.result;
     expect(result.status).toBe('failed');
     expect(result.error?.class).toBe('permanent');
     expect(result.error?.message).toContain('delegation depth 4 exceeds the platform cap 3');
     expect(result.error?.message).toContain('planning failure, not a retry');
+    expect(execution.executed).toBeUndefined();
     expect(control.discoverAgent).not.toHaveBeenCalled();
     expect(control.brokerToken).not.toHaveBeenCalled();
   });
@@ -1206,5 +1209,522 @@ describe('approval gate integration (AgentStepWorkflow)', () => {
     expect(result.status).toBe('completed');
     expect(audited.some((e) => e.event_type === 'approval.requested')).toBe(false);
     expect(control.digestApprovalSubject).not.toHaveBeenCalled();
+  });
+});
+
+// ------------------------------------------------------ compensation (saga)
+
+const COMP_STEP_IDS = [
+  '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f60',
+  '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f61',
+  '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f62',
+  '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f63',
+  '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f64',
+] as const;
+
+type CapSpec = { name: string; risk: string; compensator?: string; irreversible?: boolean };
+const SAGA_CAPS: CapSpec[] = [
+  { name: 'gov.write_a', risk: 'R2', compensator: 'gov.undo_a' },
+  { name: 'gov.undo_a', risk: 'R2', compensator: 'gov.write_a' },
+  { name: 'gov.write_b', risk: 'R2', compensator: 'gov.undo_b' },
+  { name: 'gov.undo_b', risk: 'R2', compensator: 'gov.write_b' },
+  { name: 'gov.write_c', risk: 'R2', compensator: 'gov.undo_c' },
+  { name: 'gov.undo_c', risk: 'R2', compensator: 'gov.write_c' },
+  { name: 'gov.write_irr', risk: 'R2', irreversible: true },
+  { name: 'gov.read', risk: 'R0' },
+];
+
+const sagaCard: AgentCard = {
+  manifest: {
+    id: 'saga-agent',
+    name: 'saga-agent',
+    owner: 'team-platform',
+    description: 'Multi-capability write agent for saga tests.',
+    capabilities: SAGA_CAPS.map((c) => ({
+      name: c.name,
+      description: 'A saga capability.',
+      risk: c.risk as 'R0' | 'R1' | 'R2' | 'R3',
+      input_schema: { type: 'object' },
+      output_schema: { type: 'object' },
+      examples: [{ input: {} }, { input: {} }, { input: {} }],
+      sla: { p95_latency_s: 5 },
+      ...(c.compensator === undefined ? {} : { compensator: c.compensator }),
+      ...(c.irreversible === undefined ? {} : { irreversible: c.irreversible }),
+    })),
+    tools: [{ server: 'saga-tools', scopes: ['gov:test:write'] }],
+  },
+  version: '0.1.0',
+  lifecycle_state: 'active',
+  registered_at: '2026-07-10T08:00:00Z',
+  updated_at: '2026-07-10T08:00:00Z',
+  card_signature: 'sig',
+};
+
+const sagaExec = vi.fn<Handler>();
+HANDLERS['saga-agent'] = sagaExec;
+
+/** A chained plan: each capability depends on the previous (sequential). */
+function chainPlan(capabilities: string[]): Plan {
+  const steps = capabilities.map((capability, i) => ({
+    step_id: COMP_STEP_IDS[i]!,
+    capability,
+    input: { target: `rec-${i}` },
+    ...(i === 0 ? {} : { depends_on: [COMP_STEP_IDS[i - 1]!] }),
+  }));
+  return {
+    plan_id: PLAN_ID,
+    task_id: TASK_ID,
+    tenant: 'acme',
+    planner: 'rule-planner@1',
+    steps: steps as Plan['steps'],
+    created_at: '2026-07-11T09:00:00Z',
+  };
+}
+
+/** A parallel plan: all capabilities independent (one wave). */
+function parallelPlan(capabilities: string[]): Plan {
+  const steps = capabilities.map((capability, i) => ({
+    step_id: COMP_STEP_IDS[i]!,
+    capability,
+    input: { target: `rec-${i}` },
+  }));
+  return {
+    plan_id: PLAN_ID,
+    task_id: TASK_ID,
+    tenant: 'acme',
+    planner: 'rule-planner@1',
+    steps: steps as Plan['steps'],
+    created_at: '2026-07-11T09:00:00Z',
+  };
+}
+
+interface Deferred {
+  promise: Promise<void>;
+  resolve: () => void;
+}
+function deferred(): Deferred {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
+
+/** Discovery + allow decisions for the saga agent; per-capability handler behavior. */
+function scriptSaga(opts: { discoverNull?: string[]; requireApprovalOnComp?: boolean } = {}): void {
+  vi.mocked(control.discoverAgent).mockImplementation((capability: string) => {
+    if (opts.discoverNull?.includes(capability)) return Promise.resolve(null);
+    if (capability.startsWith('gov.')) return Promise.resolve(sagaCard);
+    return Promise.resolve(CARDS[capability] ?? null);
+  });
+  vi.mocked(control.authorizeDelegation).mockImplementation((input) => {
+    if (opts.requireApprovalOnComp === true && input.compensation !== undefined) {
+      return Promise.resolve({
+        decision: 'require-approval',
+        bundle_version: '2026.07+abc',
+        determining_policies: ['gate-r2-delegation'],
+      });
+    }
+    return Promise.resolve({
+      decision: 'allow',
+      bundle_version: '2026.07+abc',
+      determining_policies: input.compensation === undefined ? ['allow'] : ['permit-compensation'],
+    });
+  });
+  sagaExec.mockImplementation((req) => {
+    if (req.capability === 'gov.read' || req.capability === 'gov.fail') {
+      return Promise.resolve(failedStep(req, { class: 'permanent', message: 'planned failure' }));
+    }
+    return Promise.resolve(
+      completedStep(
+        req,
+        answerOutput(`${req.capability} applied [1]`, ['gov/rec'], 0.9),
+        { input_tokens: 10, output_tokens: 0, llm_calls: 0 },
+      ),
+    );
+  });
+}
+
+describe('TaskWorkflow compensation (saga stack)', () => {
+  beforeEach(() => {
+    sagaExec.mockReset();
+  });
+
+  const compEvents = () => audited.filter((e) => String(e.event_type).startsWith('compensation.'));
+  const compDetails = (t: string) =>
+    audited.find((e) => e.event_type === t)?.details as Record<string, unknown> | undefined;
+
+  it('(1) LIFO: three completed writes then a failure unwind in exact reverse order', async () => {
+    scriptSaga();
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: chainPlan(['gov.write_a', 'gov.write_b', 'gov.write_c', 'gov.read']),
+      planDigest: DIGEST,
+    });
+    const order: string[] = [];
+    sagaExec.mockImplementation((req) => {
+      order.push(req.capability);
+      if (req.capability === 'gov.read') {
+        return Promise.resolve(failedStep(req, { class: 'permanent', message: 'planned failure' }));
+      }
+      return Promise.resolve(
+        completedStep(req, answerOutput(`${req.capability} [1]`, ['gov/rec'], 0.9), {
+          input_tokens: 10,
+          output_tokens: 0,
+          llm_calls: 0,
+        }),
+      );
+    });
+
+    const result = await runTask(task, ['saga-agent']);
+    // Writes ran a,b,c then the failing read; compensators ran c,b,a (LIFO).
+    expect(order).toEqual([
+      'gov.write_a',
+      'gov.write_b',
+      'gov.write_c',
+      'gov.read',
+      'gov.undo_c',
+      'gov.undo_b',
+      'gov.undo_a',
+    ]);
+    expect(result.compensation?.status).toBe('complete');
+    expect(result.compensation?.trigger).toBe('step_failure');
+    expect(result.compensation?.compensated.map((c) => c.compensator)).toEqual([
+      'gov.undo_c',
+      'gov.undo_b',
+      'gov.undo_a',
+    ]);
+    // Audit: started (entries in unwind order, stack_depth 3) → completed.
+    const started = compDetails('compensation.started') as { stack_depth: number; entries: unknown[] };
+    expect(started.stack_depth).toBe(3);
+    expect((started.entries as { compensator: string }[]).map((e) => e.compensator)).toEqual([
+      'gov.undo_c',
+      'gov.undo_b',
+      'gov.undo_a',
+    ]);
+    expect(audited.some((e) => e.event_type === 'compensation.completed')).toBe(true);
+  });
+
+  it('(2) no compensables: all completed → zero compensation events (fast path)', async () => {
+    scriptSaga();
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: chainPlan(['gov.write_a', 'gov.write_b']),
+      planDigest: DIGEST,
+    });
+    const result = await runTask(task, ['saga-agent']);
+    expect(result.status).toBe('completed');
+    expect(result.compensation).toBeUndefined();
+    expect(compEvents()).toHaveLength(0);
+    // Writes ran, but no undo.
+    expect(sagaExec.mock.calls.map((c) => c[0].capability)).toEqual(['gov.write_a', 'gov.write_b']);
+  });
+
+  it('(3) compensator failure mid-unwind: remaining still compensated; step_failed; incomplete', async () => {
+    scriptSaga();
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: chainPlan(['gov.write_a', 'gov.write_b', 'gov.read']),
+      planDigest: DIGEST,
+    });
+    sagaExec.mockImplementation((req) => {
+      if (req.capability === 'gov.read') {
+        return Promise.resolve(failedStep(req, { class: 'permanent', message: 'planned failure' }));
+      }
+      // The first compensator to run (undo_b) fails; undo_a still runs.
+      if (req.capability === 'gov.undo_b') {
+        return Promise.resolve(failedStep(req, { class: 'permanent', message: 'undo rejected' }));
+      }
+      return Promise.resolve(
+        completedStep(req, answerOutput(`${req.capability} [1]`, ['gov/rec'], 0.9), {
+          input_tokens: 10,
+          output_tokens: 0,
+          llm_calls: 0,
+        }),
+      );
+    });
+
+    const result = await runTask(task, ['saga-agent']);
+    expect(result.compensation?.status).toBe('incomplete');
+    expect(result.compensation?.failed.map((f) => f.compensator)).toEqual(['gov.undo_b']);
+    expect(result.compensation?.compensated.map((c) => c.compensator)).toEqual(['gov.undo_a']);
+    const failedAudit = compDetails('compensation.step_failed') as { effect: string };
+    expect(failedAudit.effect).toContain('remains in effect');
+    expect(result.gaps?.some((g) => g.includes('remains in effect'))).toBe(true);
+  });
+
+  it('(4) compensator agent unavailable: incomplete, honest', async () => {
+    scriptSaga({ discoverNull: ['gov.undo_a'] });
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: chainPlan(['gov.write_a', 'gov.read']),
+      planDigest: DIGEST,
+    });
+    const result = await runTask(task, ['saga-agent']);
+    expect(result.compensation?.status).toBe('incomplete');
+    expect(result.compensation?.failed.map((f) => f.compensator)).toEqual(['gov.undo_a']);
+    expect(result.gaps?.some((g) => g.includes('gov.undo_a'))).toBe(true);
+  });
+
+  it('(5) cancellation mid-step: shield lets the write finish, then unwind → cancelled', async () => {
+    scriptSaga();
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: chainPlan(['gov.write_a', 'gov.write_b']),
+      planDigest: DIGEST,
+    });
+    const writeStarted = deferred();
+    const releaseWrite = deferred();
+    let started = false;
+    sagaExec.mockImplementation(async (req) => {
+      if (req.capability === 'gov.write_a') {
+        started = true;
+        writeStarted.resolve();
+        // Block until the test cancels the task, then complete under the shield.
+        await releaseWrite.promise;
+      }
+      return completedStep(req, answerOutput(`${req.capability} [1]`, ['gov/rec'], 0.9), {
+        input_tokens: 10,
+        output_tokens: 0,
+        llm_calls: 0,
+      });
+    });
+
+    const result = await withWorkers(['saga-agent'], async () => {
+      const handle = await env.client.workflow.start(TaskWorkflow, {
+        taskQueue: CONTROL_TASK_QUEUE,
+        workflowId: workflowId(),
+        args: [task],
+      });
+      await writeStarted.promise;
+      expect(started).toBe(true);
+      await handle.cancel();
+      // The write is shielded: releasing it lets it complete despite the cancel.
+      releaseWrite.resolve();
+      return handle.result();
+    });
+
+    expect(result.status).toBe('cancelled');
+    // The shielded write completed and was compensated.
+    expect(result.compensation?.trigger).toBe('cancellation');
+    expect(result.compensation?.compensated.map((c) => c.compensator)).toEqual(['gov.undo_a']);
+    // gov.write_b never dispatched (cancelled before its wave) → cancelled gap.
+    expect(result.gaps?.some((g) => g.includes('gov.write_b') && g.includes('cancelled'))).toBe(
+      true,
+    );
+    expect(sagaExec.mock.calls.some((c) => c[0].capability === 'gov.undo_a')).toBe(true);
+  }, 30_000);
+
+  it('(6) cancellation during approval wait: nothing executed, no compensation, cancelled', async () => {
+    scriptSaga();
+    // The single write requires approval; we cancel before granting.
+    vi.mocked(control.authorizeDelegation).mockResolvedValue({
+      decision: 'require-approval',
+      bundle_version: '2026.07+abc',
+      determining_policies: ['gate-r2-delegation'],
+    });
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: chainPlan(['gov.write_a']),
+      planDigest: DIGEST,
+    });
+
+    const result = await withWorkers(['saga-agent'], async () => {
+      const handle = await env.client.workflow.start(TaskWorkflow, {
+        taskQueue: CONTROL_TASK_QUEUE,
+        workflowId: workflowId(),
+        args: [task],
+      });
+      // Wait for the approval to be requested, then cancel without deciding.
+      for (let i = 0; i < 500; i += 1) {
+        if (audited.some((e) => e.event_type === 'approval.requested')) break;
+        await new Promise((r) => setTimeout(r, 10));
+      }
+      await handle.cancel();
+      return handle.result();
+    });
+
+    expect(result.status).toBe('cancelled');
+    expect(result.compensation).toBeUndefined();
+    expect(compEvents()).toHaveLength(0);
+    expect(sagaExec).not.toHaveBeenCalled();
+  }, 30_000);
+
+  it('(7) kill-switch-shaped: write completes, next discovery null → auto-unwind', async () => {
+    scriptSaga({ discoverNull: ['gov.write_b'] });
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: chainPlan(['gov.write_a', 'gov.write_b']),
+      planDigest: DIGEST,
+    });
+    const result = await runTask(task, ['saga-agent']);
+    expect(result.compensation?.trigger).toBe('step_failure');
+    expect(result.compensation?.status).toBe('complete');
+    expect(result.compensation?.compensated.map((c) => c.compensator)).toEqual(['gov.undo_a']);
+
+    // Variant: the compensator itself can't be discovered → incomplete.
+    scriptSaga({ discoverNull: ['gov.write_b', 'gov.undo_a'] });
+    const result2 = await runTask(task, ['saga-agent']);
+    expect(result2.compensation?.status).toBe('incomplete');
+  });
+
+  it('(8) irreversible completed write: no dispatch, listed, "was not undone" gap', async () => {
+    scriptSaga();
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: chainPlan(['gov.write_irr', 'gov.read']),
+      planDigest: DIGEST,
+    });
+    const result = await runTask(task, ['saga-agent']);
+    expect(result.compensation?.irreversible).toEqual([
+      { step_id: COMP_STEP_IDS[0], capability: 'gov.write_irr' },
+    ]);
+    expect(result.compensation?.compensated).toEqual([]);
+    // No compensator dispatched for the irreversible write.
+    expect(sagaExec.mock.calls.some((c) => String(c[0].capability).startsWith('gov.undo'))).toBe(
+      false,
+    );
+    expect(result.gaps?.some((g) => g.includes('irreversible') && g.includes('not undone'))).toBe(
+      true,
+    );
+  });
+
+  it('(9) budget trigger: max_steps stops the plan; the completed write is still compensated', async () => {
+    scriptSaga();
+    // Two independent writes; max_steps=1 dispatches only the first, then stops.
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: parallelPlan(['gov.write_a', 'gov.write_b']),
+      planDigest: DIGEST,
+    });
+    const result = await runTask({ ...task, budget: { max_steps: 1 } }, ['saga-agent']);
+    expect(result.compensation?.trigger).toBe('budget_exhausted');
+    // The compensator runs despite budget exhaustion (no budget gate on unwind).
+    expect(result.compensation?.compensated.map((c) => c.compensator)).toEqual(['gov.undo_a']);
+    expect(sagaExec.mock.calls.some((c) => c[0].capability === 'gov.undo_a')).toBe(true);
+  });
+
+  it('(10) require-approval on a compensation dispatch: fails closed, NO approval workflow', async () => {
+    scriptSaga({ requireApprovalOnComp: true });
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: chainPlan(['gov.write_a', 'gov.read']),
+      planDigest: DIGEST,
+    });
+    const result = await runTask(task, ['saga-agent']);
+    expect(result.compensation?.status).toBe('incomplete');
+    expect(result.compensation?.failed.map((f) => f.compensator)).toEqual(['gov.undo_a']);
+    // The security invariant: a compensation dispatch NEVER spawns an approval.
+    expect(audited.some((e) => e.event_type === 'approval.requested')).toBe(false);
+    const stepFailed = compDetails('compensation.step_failed') as { error: string };
+    expect(stepFailed.error).toContain('pre-authorized');
+  });
+
+  it('(11) push-order determinism: a parallel wave pushes in plan order', async () => {
+    scriptSaga();
+    // Two writes in one wave, then a dependent failing read forces unwind.
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: {
+        plan_id: PLAN_ID,
+        task_id: TASK_ID,
+        tenant: 'acme',
+        planner: 'rule-planner@1',
+        steps: [
+          { step_id: COMP_STEP_IDS[0]!, capability: 'gov.write_a', input: {} },
+          { step_id: COMP_STEP_IDS[1]!, capability: 'gov.write_b', input: {} },
+          {
+            step_id: COMP_STEP_IDS[2]!,
+            capability: 'gov.read',
+            input: {},
+            depends_on: [COMP_STEP_IDS[0]!, COMP_STEP_IDS[1]!],
+          },
+        ] as Plan['steps'],
+        created_at: '2026-07-11T09:00:00Z',
+      },
+      planDigest: DIGEST,
+    });
+    const result = await runTask(task, ['saga-agent']);
+    // Pushed in plan order [a, b] → unwound LIFO [b, a].
+    expect(result.compensation?.compensated.map((c) => c.compensator)).toEqual([
+      'gov.undo_b',
+      'gov.undo_a',
+    ]);
+  });
+
+  it('(12) compensator input carries the original write context and grounds', async () => {
+    scriptSaga();
+    vi.mocked(control.planTask).mockResolvedValue({
+      plan: chainPlan(['gov.write_a', 'gov.read']),
+      planDigest: DIGEST,
+    });
+    let writeOutput: Record<string, unknown> | undefined;
+    sagaExec.mockImplementation((req) => {
+      if (req.capability === 'gov.read') {
+        return Promise.resolve(failedStep(req, { class: 'permanent', message: 'planned failure' }));
+      }
+      const out = answerOutput(`${req.capability} [1]`, ['gov/rec'], 0.9);
+      if (req.capability === 'gov.write_a') writeOutput = out;
+      return Promise.resolve(
+        completedStep(req, out, { input_tokens: 10, output_tokens: 0, llm_calls: 0 }),
+      );
+    });
+
+    await runTask(task, ['saga-agent']);
+    // The compensator's StepRequest carries {original: {step_id, capability, input, output}}.
+    const undoCall = sagaExec.mock.calls.find((c) => c[0].capability === 'gov.undo_a');
+    expect(undoCall).toBeDefined();
+    const original = (undoCall![0].input as { original: Record<string, unknown> }).original;
+    expect(original.step_id).toBe(COMP_STEP_IDS[0]);
+    expect(original.capability).toBe('gov.write_a');
+    expect(original.input).toEqual({ target: 'rec-0' });
+    expect(original.output).toEqual(writeOutput);
+    // brokerToken minted the compensator with compensation grounds (not approval).
+    const compBroker = vi
+      .mocked(control.brokerToken)
+      .mock.calls.map((c) => c[0])
+      .find((a) => a.compensation !== undefined);
+    expect(compBroker?.compensation).toMatchObject({
+      original_step_id: COMP_STEP_IDS[0],
+      original_capability: 'gov.write_a',
+    });
+    expect(compBroker?.approval).toBeUndefined();
+    // The compensation delegation was authorized with compensation context.
+    const compAuth = vi
+      .mocked(control.authorizeDelegation)
+      .mock.calls.map((c) => c[0])
+      .find((a) => a.compensation !== undefined);
+    expect(compAuth?.compensation?.originalCapability).toBe('gov.write_a');
+  });
+});
+
+describe('planner sequence shape', () => {
+  it('builds a sequential depends_on chain from context.sequence with positional inputs', () => {
+    const servable = new Set(['gov.write_a', 'gov.undo_a']);
+    const specs = buildPlanSteps(
+      {
+        kind: 'task_request',
+        task_id: TASK_ID,
+        tenant: 'acme',
+        principal: 'user:jane.doe',
+        input: {
+          text: 'run the sequence',
+          context: {
+            sequence: ['gov.write_a', 'gov.undo_a'],
+            inputs: [{ target: 'rec-1' }, { target: 'rec-2' }],
+          },
+        },
+      } as TaskRequest,
+      servable,
+    );
+    expect(specs.map((s) => s.capability)).toEqual(['gov.write_a', 'gov.undo_a']);
+    expect(specs[0]!.dependsOnIndex).toBeUndefined();
+    expect(specs[1]!.dependsOnIndex).toEqual([0]);
+    expect(specs[0]!.input).toEqual({ target: 'rec-1' });
+    expect(specs[1]!.input).toEqual({ target: 'rec-2' });
+  });
+
+  it('ignores a malformed sequence (falls through to the default shape)', () => {
+    const specs = buildPlanSteps(
+      {
+        kind: 'task_request',
+        task_id: TASK_ID,
+        tenant: 'acme',
+        principal: 'user:jane.doe',
+        input: { text: 'hi', context: { sequence: ['only-one'] } },
+      } as TaskRequest,
+      new Set(),
+    );
+    expect(specs).toHaveLength(1);
+    expect(specs[0]!.capability).toBe('knowledge.answer_with_citations');
   });
 });

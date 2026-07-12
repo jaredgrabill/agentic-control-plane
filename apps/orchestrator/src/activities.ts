@@ -179,6 +179,17 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
             requested_scopes: input.requestedScopes,
             tenant: input.tenant,
             capability: input.capability,
+            // Compensator dispatch: permit-compensation decides (not the R2
+            // gate), so the unwind is never re-suspended on a human approval.
+            ...(input.compensation === undefined
+              ? {}
+              : {
+                  compensation: {
+                    active: true,
+                    original_step_id: input.compensation.originalStepId,
+                    original_capability: input.compensation.originalCapability,
+                  },
+                }),
           },
           reason: { task_id: input.taskId, step_id: input.stepId, tenant: input.tenant },
         }),
@@ -219,6 +230,10 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
           // approval gate. The token service shape-validates and refuses
           // self-approval before it signs the claim.
           ...(input.approval === undefined ? {} : { approval: input.approval }),
+          // Signed compensation grounds — present only for a compensator
+          // dispatched during a saga unwind. The token service refuses an
+          // approval+compensation contradiction before it signs.
+          ...(input.compensation === undefined ? {} : { compensation: input.compensation }),
         }),
       });
       if (!res.ok) {

@@ -41,6 +41,29 @@ export function buildPlanSteps(task: TaskRequest, servable: ReadonlySet<string>)
     return [{ capability: explicit, input: explicitInput(task, explicit) }];
   }
 
+  // 1.5 Explicit sequence — the caller named an ordered list of 2-5
+  // capabilities in context.sequence; each depends on the previous (a
+  // sequential chain), input taken positionally from context.inputs. Every
+  // step still clears the Plan schema and the per-step delegation policy — the
+  // sequence grants no new authority, it only shapes the plan (needed for
+  // change-then-verify flows and the compensation E2E slice).
+  const sequence = sequenceOf(task);
+  if (sequence !== undefined) {
+    const inputs = (task.input.context as Record<string, unknown> | undefined)?.inputs;
+    const inputAt = (i: number): Record<string, unknown> => {
+      const supplied = Array.isArray(inputs) ? (inputs[i] as unknown) : undefined;
+      return typeof supplied === 'object' && supplied !== null
+        ? (supplied as Record<string, unknown>)
+        : { text: task.input.text };
+    };
+    return sequence.map((capability, i) => ({
+      capability,
+      input: inputAt(i),
+      ...(i === 0 ? {} : { dependsOnIndex: [i - 1] }),
+      rationale: `sequence step ${i + 1} of ${sequence.length}: ${capability}`,
+    }));
+  }
+
   const text = task.input.text.toLowerCase();
   if (SPEND_WORDS.test(text) && ANOMALY_WORDS.test(text) && servable.has('cloud.cost_analysis')) {
     const steps: PlanStepSpec[] = [
@@ -66,6 +89,16 @@ export function buildPlanSteps(task: TaskRequest, servable: ReadonlySet<string>)
   }
 
   return [{ capability: DEFAULT_CAPABILITY, input: { question: task.input.text } }];
+}
+
+/** A well-formed context.sequence: 2-5 capability-shaped strings, else undefined. */
+function sequenceOf(task: TaskRequest): string[] | undefined {
+  const raw = (task.input.context as Record<string, unknown> | undefined)?.sequence;
+  if (!Array.isArray(raw) || raw.length < 2 || raw.length > 5) return undefined;
+  if (!raw.every((c) => typeof c === 'string' && /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/.test(c))) {
+    return undefined;
+  }
+  return raw as string[];
 }
 
 /** The v0 input mapping for an explicitly routed capability — byte for byte. */
