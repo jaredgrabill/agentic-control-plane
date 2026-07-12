@@ -1,0 +1,113 @@
+{
+  "document": {
+    "doc_id": "netsec/firewall-ruleset",
+    "version": "2026-07-10",
+    "effective_date": "2026-07-10",
+    "url": "https://netsec.acme.example/firewall/2026-07-10",
+    "lineage_id": "01981c00-0000-7000-8000-0000000000d1"
+  },
+  "as_of": "2026-07-10",
+  "tenant": "acme",
+  "rules": [
+    {
+      "rule_id": "FW-1001",
+      "ruleset": "prod-edge",
+      "service": "payments-api",
+      "direction": "ingress",
+      "port": 443,
+      "source_cidr": "0.0.0.0/0",
+      "action": "allow",
+      "description": "Public HTTPS for the payments API edge."
+    },
+    {
+      "rule_id": "FW-1002",
+      "ruleset": "prod-edge",
+      "service": "payments-api",
+      "direction": "ingress",
+      "port": 8443,
+      "source_cidr": "10.0.0.0/8",
+      "action": "allow",
+      "description": "Internal admin plane for payments-api."
+    },
+    {
+      "rule_id": "FW-1003",
+      "ruleset": "prod-internal",
+      "service": "ledger-core",
+      "direction": "ingress",
+      "port": 5432,
+      "source_cidr": "10.0.0.0/8",
+      "action": "allow",
+      "description": "Postgres access to ledger-core from the internal network."
+    },
+    {
+      "rule_id": "FW-1004",
+      "ruleset": "prod-internal",
+      "service": "ledger-core",
+      "direction": "egress",
+      "port": 5432,
+      "source_cidr": "10.0.0.0/8",
+      "action": "allow",
+      "description": "ledger-core replication egress within the internal network."
+    },
+    {
+      "rule_id": "FW-1005",
+      "ruleset": "prod-edge",
+      "service": "payments-api",
+      "direction": "egress",
+      "port": 443,
+      "source_cidr": "0.0.0.0/0",
+      "action": "allow",
+      "description": "Outbound HTTPS from payments-api to card networks."
+    },
+    {
+      "rule_id": "FW-1006",
+      "ruleset": "prod-edge",
+      "service": "payments-api",
+      "direction": "ingress",
+      "port": 22,
+      "source_cidr": "0.0.0.0/0",
+      "action": "deny",
+      "description": "SSH to payments-api from the internet is blocked."
+    },
+    {
+      "rule_id": "FW-1007",
+      "ruleset": "prod-edge",
+      "service": "checkout-web",
+      "direction": "ingress",
+      "port": 443,
+      "source_cidr": "0.0.0.0/0",
+      "action": "allow",
+      "description": "Public HTTPS for the checkout storefront."
+    },
+    {
+      "rule_id": "FW-1008",
+      "ruleset": "prod-internal",
+      "service": "ledger-core",
+      "direction": "ingress",
+      "port": 22,
+      "source_cidr": "10.1.2.0/24",
+      "action": "allow",
+      "description": "SSH to ledger-core from the bastion subnet only."
+    },
+    {
+      "rule_id": "FW-1009",
+      "ruleset": "prod-partner",
+      "service": "partner-gateway",
+      "direction": "ingress",
+      "port": 8443,
+      "source_cidr": "203.0.113.0/24",
+      "action": "allow",
+      "description": "Partner VPN range to the partner gateway."
+    },
+    {
+      "rule_id": "FW-1010",
+      "ruleset": "prod-internal",
+      "service": "ledger-core",
+      "direction": "ingress",
+      "port": 5432,
+      "source_cidr": "0.0.0.0/0",
+      "action": "deny",
+      "description": "Postgres on ledger-core is never reachable from the internet."
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "document": {
+    "doc_id": "netsec/vuln-scan",
+    "version": "2026-07-09",
+    "effective_date": "2026-07-09",
+    "url": "https://netsec.acme.example/vuln-scans/2026-07-09",
+    "lineage_id": "01981c00-0000-7000-8000-0000000000d4"
+  },
+  "as_of": "2026-07-09",
+  "tenant": "acme",
+  "findings": [
+    {
+      "image": "acme/payments-api:2.4.1",
+      "service": "payments-api",
+      "cve": "CVE-2026-31337",
+      "severity": "critical",
+      "fixed_version": "2.4.2"
+    },
+    {
+      "image": "acme/payments-api:2.4.1",
+      "service": "payments-api",
+      "cve": "CVE-2026-20481",
+      "severity": "medium",
+      "fixed_version": "2.4.2"
+    },
+    {
+      "image": "acme/ledger-core:3.1.0",
+      "service": "ledger-core",
+      "cve": "CVE-2026-11204",
+      "severity": "low",
+      "fixed_version": "3.1.1"
+    },
+    {
+      "image": "acme/checkout-web:5.0.2",
+      "service": "checkout-web",
+      "cve": "CVE-2026-40417",
+      "severity": "high",
+      "fixed_version": "5.0.3"
+    }
+  ]
+}

@@ -40,6 +40,22 @@ export {
 export { ItsmStore, type ItsmOutcome } from './itsm/store.js';
 export { createItsmServer } from './itsm/server.js';
 export {
+  loadNetsecFixtures,
+  type FirewallRule,
+  type IpamAllocation,
+  type NetsecFixtures,
+  type SecurityGroup,
+  type SecurityGroupRule,
+  type VulnFinding,
+} from './netsec/fixtures.js';
+export {
+  firewallRulesSearch,
+  ipamLookup,
+  securityGroupGet,
+  vulnScanReport,
+} from './netsec/queries.js';
+export { createNetsecServer } from './netsec/server.js';
+export {
   argsDigest,
   DEFAULT_LEDGER_CAP,
   IdempotencyLedger,
