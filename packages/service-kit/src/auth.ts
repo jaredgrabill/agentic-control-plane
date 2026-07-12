@@ -46,6 +46,28 @@ export interface ApprovalClaim {
   subject_digest: string;
 }
 
+/**
+ * Signed compensation grounds (Phase 3 item 2). Only
+ * `TokenIssuer.delegate()` sets it — the orchestrator brokering a compensator
+ * step token during a saga unwind. Rides verbatim across the agent's
+ * same-actor acp:tools exchange (SPRINT cross-item contract) so item 3's
+ * tool-gateway risk-class PEP reads it as `context.compensation` and does not
+ * re-gate the compensator's R2 tool call. The compensator is pre-authorized by
+ * the original write's approval; this claim is the token-layer defense-in-depth
+ * proving the call is an unwind, not agent-elected. `approval_id`/`approver`
+ * (when present) join the compensator to that original approval for auditors.
+ */
+export interface CompensationClaim {
+  /** The step_id of the original write this dispatch compensates. */
+  original_step_id: string;
+  /** The capability of the original write (e.g. change.submit). */
+  original_capability: string;
+  /** The approval that authorized the original write, if it was gated. */
+  approval_id?: string;
+  /** The approver of the original write, if it was gated. */
+  approver?: string;
+}
+
 export interface PlatformClaims extends JWTPayload {
   sub: string;
   tenant: string;
@@ -57,6 +79,8 @@ export interface PlatformClaims extends JWTPayload {
   brokered?: BrokeredClaim;
   /** Present only on broker-delegated tokens minted after an approval, and their same-actor exchanges. */
   approval?: ApprovalClaim;
+  /** Present only on broker-delegated compensator tokens, and their same-actor exchanges. */
+  compensation?: CompensationClaim;
 }
 
 export class AuthError extends Error {

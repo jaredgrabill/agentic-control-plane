@@ -6,6 +6,7 @@ import {
   scopesOf,
   type ActClaim,
   type ApprovalClaim,
+  type CompensationClaim,
   type PlatformClaims,
 } from '@acp/service-kit';
 import { SignJWT, createLocalJWKSet, jwtVerify } from 'jose';
@@ -57,6 +58,7 @@ export class TokenDeniedError extends AuthError {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DIGEST_RE = /^sha256:[0-9a-f]{64}$/;
+const CAPABILITY_RE = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
 
 /**
  * Human-approval grounds a broker asserts when minting a step token AFTER an
@@ -70,6 +72,21 @@ export interface ApprovalGrounds {
   step_id: string;
   capability: string;
   subject_digest: string;
+}
+
+/**
+ * Compensation grounds a broker asserts when minting a compensator step token
+ * during a saga unwind (Phase 3 item 2). Shape-validated at mint; the signed
+ * `compensation` claim is what item 3's tool-gateway PEP reads as
+ * `context.compensation` so a compensator's R2 tool call is not re-gated.
+ * Mutually exclusive with approval grounds: a single mint is either the
+ * gated write (approval) or its compensator (compensation), never both.
+ */
+export interface CompensationGrounds {
+  original_step_id: string;
+  original_capability: string;
+  approval_id?: string;
+  approver?: string;
 }
 
 /** `agent:{id}@{version}` (or `agent:{id}`) → the bare kill-switch id; undefined for non-agents. */
@@ -125,6 +142,13 @@ export interface DelegateRequest {
    * exact step before permitting the write.
    */
   approval?: ApprovalGrounds | undefined;
+  /**
+   * Compensation grounds — present only when the orchestrator brokers a
+   * compensator step token during a saga unwind. Signed into the token as the
+   * `compensation` claim; item 3's tool gateway reads it as
+   * `context.compensation`. Mutually exclusive with `approval` (400 if both).
+   */
+  compensation?: CompensationGrounds | undefined;
   ttlSeconds?: number | undefined;
 }
 
@@ -323,6 +347,15 @@ export class TokenIssuer {
     // claim. No injection path: the claim can only come from the verified
     // subject token; the exchange endpoint accepts no body-supplied approval.
     const approval = sameActor ? subject.approval : undefined;
+    // Item 2: the compensation claim rides the SAME same-actor branch as
+    // `brokered` and `approval`. A compensator agent presents an exchanged
+    // acp:tools token; item 3's tool gateway reads `compensation` from that
+    // exchanged token, which only works because it propagates here. A new
+    // actor (actor-appending exchange) or a chain-free rescope inherits none
+    // of the three claims. No injection path: the claim can only come from the
+    // verified subject token; the exchange endpoint accepts no body-supplied
+    // compensation.
+    const compensation = sameActor ? subject.compensation : undefined;
 
     return this.sign(
       {
@@ -334,6 +367,7 @@ export class TokenIssuer {
         ...(act !== undefined ? { act } : {}),
         ...(brokered !== undefined ? { brokered } : {}),
         ...(approval !== undefined ? { approval } : {}),
+        ...(compensation !== undefined ? { compensation } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
@@ -370,10 +404,23 @@ export class TokenIssuer {
       );
     }
     this.assertFreshGrounds(request.grounds);
+    // A single mint is either the gated write (approval) or its compensator
+    // (compensation) — never both. Refuse the contradiction before signing.
+    if (request.approval !== undefined && request.compensation !== undefined) {
+      throw new AuthError(
+        'a mint may carry approval grounds OR compensation grounds, not both — the gated write ' +
+          'and its compensator are distinct dispatches',
+        400,
+      );
+    }
     const approvalClaim =
       request.approval === undefined
         ? undefined
         : buildApprovalClaim(request.approval, subject.sub);
+    const compensationClaim =
+      request.compensation === undefined
+        ? undefined
+        : buildCompensationClaim(request.compensation);
 
     // Explicit-or-nothing: no "default to the snapshot" branch. A toolless
     // agent (requested = []) mints a token with zero scopes, keeping the
@@ -415,6 +462,7 @@ export class TokenIssuer {
           verified_at: request.grounds.verified_at,
         },
         ...(approvalClaim !== undefined ? { approval: approvalClaim } : {}),
+        ...(compensationClaim !== undefined ? { compensation: compensationClaim } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
@@ -504,5 +552,44 @@ function buildApprovalClaim(raw: unknown, subjectSub: string): ApprovalClaim {
     step_id: grounds.step_id,
     capability: grounds.capability,
     subject_digest: grounds.subject_digest,
+  };
+}
+
+/**
+ * Validates compensation grounds and shapes the signed `compensation` claim.
+ * Every field is checked at the mint: the original step is a uuid, the
+ * original capability matches the capability pattern, and the optional
+ * approval_id/approver (present when the original write was gated) are a uuid
+ * and a non-empty principal. A malformed field never becomes a signed claim.
+ */
+function buildCompensationClaim(raw: unknown): CompensationClaim {
+  const bad = (msg: string): never => {
+    throw new AuthError(`compensation grounds rejected: ${msg}`, 400);
+  };
+  if (typeof raw !== 'object' || raw === null) bad('must be an object');
+  const grounds = raw as CompensationGrounds;
+  if (typeof grounds.original_step_id !== 'string' || !UUID_RE.test(grounds.original_step_id)) {
+    bad('original_step_id must be a uuid');
+  }
+  if (
+    typeof grounds.original_capability !== 'string' ||
+    !CAPABILITY_RE.test(grounds.original_capability)
+  ) {
+    bad('original_capability must be a capability name (e.g. change.submit)');
+  }
+  if (grounds.approval_id !== undefined && !UUID_RE.test(grounds.approval_id)) {
+    bad('approval_id, when present, must be a uuid');
+  }
+  if (
+    grounds.approver !== undefined &&
+    (typeof grounds.approver !== 'string' || grounds.approver === '')
+  ) {
+    bad('approver, when present, must be a non-empty principal');
+  }
+  return {
+    original_step_id: grounds.original_step_id,
+    original_capability: grounds.original_capability,
+    ...(grounds.approval_id === undefined ? {} : { approval_id: grounds.approval_id }),
+    ...(grounds.approver === undefined ? {} : { approver: grounds.approver }),
   };
 }

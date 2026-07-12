@@ -59,6 +59,17 @@ interface TokenBody {
     capability?: string;
     subject_digest?: string;
   };
+  /**
+   * Compensation grounds. Legal ONLY on the broker delegation grant — the
+   * issue and exchange routes refuse a body-supplied compensation so no client
+   * can inject a compensation claim into a token it mints for itself.
+   */
+  compensation?: {
+    original_step_id?: string;
+    original_capability?: string;
+    approval_id?: string;
+    approver?: string;
+  };
 }
 
 export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance> {
@@ -107,6 +118,7 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
       throw new AuthError('audience is required — platform tokens are always audience-bound', 400);
     }
     rejectApproval(body, 'client_credentials issuance');
+    rejectCompensation(body, 'client_credentials issuance');
     const audience = body.audience;
     const issued = await guarded('client_credentials', audience, client, () =>
       issuerSvc.issue({
@@ -142,6 +154,7 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
       throw new AuthError('audience is required — exchange rebinds the token to its target', 400);
     }
     rejectApproval(body, 'token exchange');
+    rejectCompensation(body, 'token exchange');
     const audience = body.audience;
     const subjectToken = body.subject_token;
     const issued = await guarded(TOKEN_EXCHANGE_GRANT, audience, client, () =>
@@ -217,13 +230,26 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
                 Parameters<typeof issuerSvc.delegate>[0]['approval']
               >,
             }),
+        // Passed through verbatim; delegate() shape-validates every field and
+        // refuses an approval+compensation contradiction before it signs.
+        ...(body.compensation === undefined
+          ? {}
+          : {
+              compensation: body.compensation as NonNullable<
+                Parameters<typeof issuerSvc.delegate>[0]['compensation']
+              >,
+            }),
         ttlSeconds: parseTtl(body.requested_ttl),
       }),
     );
     await emitAudit(deps, 'token.brokered', client, issued, {
       reason: {
         task_id: body.grounds.task_id,
-        ...(body.approval?.step_id === undefined ? {} : { step_id: body.approval.step_id }),
+        ...(body.approval?.step_id === undefined
+          ? body.compensation?.original_step_id === undefined
+            ? {}
+            : { step_id: body.compensation.original_step_id }
+          : { step_id: body.approval.step_id }),
       },
       details: {
         ...(body.actor === undefined ? {} : { actor: body.actor }),
@@ -231,6 +257,10 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
         // The approval grounds bound into the minted token — auditors see the
         // decision, decider, and subject digest that authorized this write.
         ...(body.approval === undefined ? {} : { approval: body.approval }),
+        // The compensation grounds bound into a compensator's token — auditors
+        // see which write this dispatch unwinds, and the approval that
+        // pre-authorized it.
+        ...(body.compensation === undefined ? {} : { compensation: body.compensation }),
       },
     });
     return reply.send({
@@ -271,6 +301,22 @@ function rejectApproval(body: TokenBody, grant: string): void {
     throw new AuthError(
       `approval grounds are not accepted on ${grant} — only the broker delegation grant may ` +
         'assert an approval, and only after an ApprovalWorkflow granted it',
+      400,
+    );
+  }
+}
+
+/**
+ * Compensation grounds may ONLY be asserted on the broker delegation grant. A
+ * body-supplied compensation on the issue or exchange route is refused (400)
+ * so no client can forge a compensation claim into a token it mints for
+ * itself — the only legitimate source is delegate() during a saga unwind.
+ */
+function rejectCompensation(body: TokenBody, grant: string): void {
+  if (body.compensation !== undefined) {
+    throw new AuthError(
+      `compensation grounds are not accepted on ${grant} — only the broker delegation grant may ` +
+        'assert a compensation, and only from the orchestrator unwind loop',
       400,
     );
   }
