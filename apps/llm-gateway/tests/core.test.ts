@@ -140,7 +140,11 @@ function harness(
         return Promise.resolve();
       },
     },
-    killSwitch: overrides.killSwitch,
+    // Required dep (fail-closed wiring); the default stub has no active switch.
+    killSwitch: overrides.killSwitch ?? {
+      fleetHalt: () => undefined,
+      agentSuspension: () => undefined,
+    },
     logger,
     sleep: (ms) => {
       sleeps.push(ms);
@@ -264,7 +268,7 @@ describe('kill switch and unknown classes (pre-decision refusals, no audit)', ()
     expect(service.status).toBe(200);
   });
 
-  it('an unknown model class is a 400 naming the registry version and known classes', async () => {
+  it('an unknown model class is a 400 naming the registry version, NOT the catalog', async () => {
     const { core, audits } = harness({});
     const result = await core.complete(
       serviceCaller(),
@@ -273,8 +277,11 @@ describe('kill switch and unknown classes (pre-decision refusals, no audit)', ()
     );
     expect(result.status).toBe(400);
     expect(errorOf(result.body).class).toBe('model_class_unknown');
+    expect(errorOf(result.body).message).toContain('quantum-tier');
     expect(errorOf(result.body).message).toContain('2026.07');
-    expect(errorOf(result.body).message).toContain('default-tier');
+    // The configured class names must NOT be enumerated to an arbitrary
+    // authenticated caller — modelClasses() is the discovery surface.
+    expect(errorOf(result.body).message).not.toContain('default-tier');
     expect(audits).toHaveLength(0);
   });
 });

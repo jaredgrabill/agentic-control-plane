@@ -101,6 +101,14 @@ beforeAll(async () => {
         return Promise.resolve();
       },
     },
+    // Required dep (fail-closed wiring); no active switch in these tests.
+    killSwitch: {
+      fleetHalt: () => undefined,
+      agentSuspension: () => undefined,
+      principalDenied: () => undefined,
+      capabilitySuspension: () => undefined,
+      riskClassSuspension: () => undefined,
+    },
     logger,
   });
   app = buildToolGatewayApp({

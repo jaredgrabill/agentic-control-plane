@@ -58,6 +58,7 @@ beforeAll(async () => {
         return Promise.resolve();
       },
     },
+    killSwitch: { fleetHalt: () => undefined, agentSuspension: () => undefined },
     logger,
   });
   app = buildLlmGatewayApp({

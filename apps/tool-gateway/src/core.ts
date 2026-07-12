@@ -61,7 +61,8 @@ export interface CoreDeps {
   broker: CredentialBroker;
   limiter: RateLimiter;
   audit: AuditSink;
-  killSwitch?: KillSwitch | undefined;
+  /** Required — an absent watcher would silently fail OPEN on every refusal tier. */
+  killSwitch: KillSwitch;
   logger: Logger;
   now?: (() => Date) | undefined;
 }
@@ -164,14 +165,14 @@ export class ToolGatewayCore {
     const executingCap = caller.claims.capability;
 
     // (1) kill switch — fleet, agent, principal denylist, then tier-2 flags.
-    if (ks?.fleetHalt() !== undefined && !compensationBound) {
+    if (ks.fleetHalt() !== undefined && !compensationBound) {
       return killSwitchRefuse(
         'fleet',
         'fleet',
         'platform fleet halt is active — tool calls are refused',
       );
     }
-    if (caller.agentId !== undefined && ks?.agentSuspension(caller.agentId) !== undefined) {
+    if (caller.agentId !== undefined && ks.agentSuspension(caller.agentId) !== undefined) {
       // Agent tier blocks even a compensator (design-2 honest-incomplete).
       return killSwitchRefuse(
         'agent',
@@ -188,13 +189,13 @@ export class ToolGatewayCore {
     // denylist; the watcher applies the KV key encoding symmetrically. Blocks
     // even a compensator (a denylisted identity is revoked outright).
     for (const sub of new Set([caller.principal, caller.sub])) {
-      if (ks?.principalDenied(sub) !== undefined) {
+      if (ks.principalDenied(sub) !== undefined) {
         return killSwitchRefuse('principal', sub, `principal ${sub} is denylisted (kill switch)`);
       }
     }
     // Tier-2 named capability flag vs the VERIFIED executing capability claim —
     // blocks EVEN a bound compensator (surgical intent wins).
-    if (executingCap !== undefined && ks?.capabilitySuspension(executingCap.name) !== undefined) {
+    if (executingCap !== undefined && ks.capabilitySuspension(executingCap.name) !== undefined) {
       return killSwitchRefuse(
         'capability',
         executingCap.name,
@@ -206,7 +207,7 @@ export class ToolGatewayCore {
     if (
       executingCap !== undefined &&
       !compensationBound &&
-      ks?.riskClassSuspension(executingCap.risk) !== undefined
+      ks.riskClassSuspension(executingCap.risk) !== undefined
     ) {
       return killSwitchRefuse(
         'risk',
@@ -234,7 +235,7 @@ export class ToolGatewayCore {
     // risk-vs-claim check above could not see it). Exempt for a bound
     // compensator. Precedes shadow suppression and Cedar; audited as a
     // kill-switch refusal.
-    if (!compensationBound && ks?.riskClassSuspension(spec.risk) !== undefined) {
+    if (!compensationBound && ks.riskClassSuspension(spec.risk) !== undefined) {
       return killSwitchRefuse(
         'risk',
         spec.risk,

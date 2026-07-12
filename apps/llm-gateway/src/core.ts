@@ -56,7 +56,8 @@ export interface CoreDeps {
   providers: Map<string, ProviderAdapter>;
   allowlist: Allowlist;
   audit: AuditSink;
-  killSwitch?: KillSwitch | undefined;
+  /** Required — an absent watcher would silently fail OPEN on every refusal tier. */
+  killSwitch: KillSwitch;
   logger: Logger;
   now?: (() => Date) | undefined;
   /** Injectable backoff sleep — the failover tests pin delays without waiting. */
@@ -162,7 +163,7 @@ export class LlmGatewayCore {
     span: ReturnType<typeof tracer.startSpan>,
   ): Promise<CompleteResult> {
     // (1) kill switch — refused before anything else runs or is recorded.
-    const halt = this.deps.killSwitch?.fleetHalt();
+    const halt = this.deps.killSwitch.fleetHalt();
     if (halt !== undefined) {
       return errorBody(
         'killswitch',
@@ -171,7 +172,7 @@ export class LlmGatewayCore {
       );
     }
     if (caller.agentId !== undefined) {
-      const suspension = this.deps.killSwitch?.agentSuspension(caller.agentId);
+      const suspension = this.deps.killSwitch.agentSuspension(caller.agentId);
       if (suspension !== undefined) {
         return errorBody('killswitch', `agent ${caller.agentId} is suspended (kill switch)`, 503);
       }
@@ -180,10 +181,13 @@ export class LlmGatewayCore {
     // (2) model-class lookup — the config registry IS the class surface.
     const entry = this.deps.config.classes.get(request.model_class);
     if (entry === undefined) {
+      // Deliberately does NOT enumerate the configured classes: modelClasses()
+      // is the legitimate discovery surface; an error reachable by any
+      // authenticated caller should not leak the full catalog.
       return errorBody(
         'model_class_unknown',
-        `unknown model class ${request.model_class} — registry version ` +
-          `${this.deps.config.version} defines: ${[...this.deps.config.classes.keys()].sort().join(', ')}`,
+        `unknown model class ${request.model_class} ` +
+          `(model classes registry version ${this.deps.config.version})`,
         400,
       );
     }

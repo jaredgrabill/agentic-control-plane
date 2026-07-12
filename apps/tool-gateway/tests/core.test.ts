@@ -144,6 +144,17 @@ class FakeLimiter implements RateLimiter {
   }
 }
 
+/** killSwitch is a REQUIRED dep (fail-closed); the inert stub has no active flag. */
+function inertKillSwitch(): KillSwitch {
+  return {
+    fleetHalt: () => undefined,
+    agentSuspension: () => undefined,
+    principalDenied: () => undefined,
+    capabilitySuspension: () => undefined,
+    riskClassSuspension: () => undefined,
+  };
+}
+
 interface Harness {
   core: ToolGatewayCore;
   policy: FakePolicy;
@@ -648,6 +659,7 @@ describe('static headers over real HTTP: broker credential in, caller Authorizat
           return Promise.resolve();
         },
       },
+      killSwitch: inertKillSwitch(),
       logger,
     });
 

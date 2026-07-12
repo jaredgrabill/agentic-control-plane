@@ -206,6 +206,52 @@ class TestComplete:
             await model.complete("q")
         assert exc.value.error_class is ErrorClass.RETRYABLE
 
+    @pytest.mark.parametrize(
+        "mutate",
+        [
+            # Ajv-parity vectors: each mutation makes a body the TS client's
+            # completionResponseSchema would refuse — Python must refuse it too.
+            pytest.param(lambda b: b.pop("model_class"), id="missing-model_class"),
+            pytest.param(lambda b: b.pop("provider"), id="missing-provider"),
+            pytest.param(
+                lambda b: b.pop("model_classes_version"), id="missing-model_classes_version"
+            ),
+            pytest.param(lambda b: b.pop("attempts"), id="missing-attempts"),
+            pytest.param(lambda b: b.update(surprise="extra"), id="unknown-top-level-key"),
+            pytest.param(lambda b: b.update(provider=""), id="empty-provider"),
+            pytest.param(lambda b: b.update(text=42), id="non-string-text"),
+            pytest.param(
+                lambda b: b["usage"].pop("cache_read_input_tokens"), id="missing-usage-key"
+            ),
+            pytest.param(lambda b: b["usage"].update(input_tokens="10"), id="string-usage-count"),
+            pytest.param(lambda b: b["usage"].update(output_tokens=True), id="bool-usage-count"),
+            pytest.param(lambda b: b["usage"].update(input_tokens=-1), id="negative-usage-count"),
+            pytest.param(lambda b: b["usage"].update(spend_usd=1), id="unknown-usage-key"),
+            pytest.param(lambda b: b.update(attempts=[]), id="empty-attempts"),
+            pytest.param(
+                lambda b: b["attempts"][0].pop("duration_ms"), id="attempt-missing-duration"
+            ),
+            pytest.param(
+                lambda b: b["attempts"][0].update(duration_ms=-1), id="attempt-negative-duration"
+            ),
+            pytest.param(lambda b: b["attempts"][0].update(note="x"), id="attempt-unknown-key"),
+            pytest.param(lambda b: b["attempts"][0].update(outcome=""), id="attempt-empty-outcome"),
+        ],
+    )
+    async def test_rejects_bodies_the_ts_ajv_schema_rejects(self, mutate: Any) -> None:
+        body = gateway_response()
+        mutate(body)
+        model = bound_model(transport_returning(200, body))
+        with pytest.raises(CapabilityError, match="malformed completion response") as exc:
+            await model.complete("q")
+        assert exc.value.error_class is ErrorClass.RETRYABLE
+
+    async def test_accepts_float_duration_ms_like_ajv_number(self) -> None:
+        body = gateway_response()
+        body["attempts"][0]["duration_ms"] = 2.5
+        response = await bound_model(transport_returning(200, body)).complete("q")
+        assert response.text == "gateway says hi"
+
     async def test_network_failure_is_retryable(self) -> None:
         def explode(request: httpx.Request) -> httpx.Response:
             raise httpx.ConnectError("ECONNREFUSED", request=request)
