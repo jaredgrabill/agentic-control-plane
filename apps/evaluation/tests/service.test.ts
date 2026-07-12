@@ -310,6 +310,27 @@ describe('quality endpoint', () => {
     expect(aggregate.statusCode).toBe(400);
   });
 
+  it('400s a malformed tenant on the budget route, not 500 (B5)', async () => {
+    // A platform caller naming a malformed tenant (e.g. "foo.bar") must get a
+    // client-error 400, never a 500 from budgetStatus's internal assertTenantId.
+    const { app } = harness();
+    const bad = await app.inject({
+      method: 'GET',
+      url: '/v1/tenants/foo.bar/budget',
+      headers: AUTH,
+    });
+    expect(bad.statusCode).toBe(400);
+    // A well-formed tenant passes the shape gate (here it 404s only because no
+    // budget ledger is wired into this harness) — proving 400 is the format,
+    // not a missing dependency.
+    const wellFormed = await app.inject({
+      method: 'GET',
+      url: '/v1/tenants/globex/budget',
+      headers: AUTH,
+    });
+    expect(wellFormed.statusCode).toBe(404);
+  });
+
   it('binds the tenant param to the verified claims for non-platform callers', async () => {
     // A tenant-scoped caller may read ONLY its own tenant's quality.
     const { app } = harness({

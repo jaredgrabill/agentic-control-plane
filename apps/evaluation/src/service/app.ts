@@ -173,6 +173,12 @@ export function buildEvalService(deps: EvalServiceDeps): FastifyInstance {
     if (typeof tenant !== 'string' || tenant === '') {
       throw new AuthError('tenant is required', 400);
     }
+    // Validate the tenant SHAPE here (400 for a malformed id like "foo.bar")
+    // so a platform caller cannot trip budgetStatus's internal assertTenantId
+    // into a 500 — a bad path parameter is a client error, not a server fault.
+    if (!/^[a-z0-9-]+$/.test(tenant)) {
+      throw new AuthError('tenant must match /^[a-z0-9-]+$/', 400);
+    }
     assertTenantAccess(claims, tenant);
     if (deps.budget === undefined) {
       return reply
