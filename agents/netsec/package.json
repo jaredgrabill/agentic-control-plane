@@ -1,0 +1,25 @@
+{
+  "name": "@acp/netsec-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Network security agent v0: rule search, exposure analysis, change impact, and a side-effect-free rule draft over the mock netsec MCP server (read-only R0/R1)",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run --coverage"
+  },
+  "dependencies": {
+    "@acp/agent-sdk": "workspace:*",
+    "@acp/tool-client": "workspace:*"
+  },
+  "devDependencies": {
+    "@acp/mock-tools": "workspace:*",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/node": "^22.15.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "vitest": "^3.2.4"
+  }
+}
