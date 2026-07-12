@@ -167,6 +167,27 @@ describe('buildProviders', () => {
     ).toThrow(/TEST_MISSING_KEY is not set/);
   });
 
+  it('refuses to construct the dev provider under NODE_ENV=production', () => {
+    expect(() =>
+      buildProviders(config({ dev: { type: 'dev' } }), { NODE_ENV: 'production' }),
+    ).toThrow(/dev provider must not be constructed under NODE_ENV=production/);
+  });
+
+  it('allows the dev provider in production only with ACP_ALLOW_DEV_PROVIDER set', () => {
+    const providers = buildProviders(config({ dev: { type: 'dev' } }), {
+      NODE_ENV: 'production',
+      ACP_ALLOW_DEV_PROVIDER: '1',
+    });
+    expect(providers.get('dev')).toBeInstanceOf(DevProvider);
+  });
+
+  it('builds the dev provider outside production without any override', () => {
+    const providers = buildProviders(config({ dev: { type: 'dev' } }), {
+      NODE_ENV: 'development',
+    });
+    expect(providers.get('dev')).toBeInstanceOf(DevProvider);
+  });
+
   it('wraps the adapter in an rpm bucket only when the config names one', () => {
     const providers = buildProviders(
       config({

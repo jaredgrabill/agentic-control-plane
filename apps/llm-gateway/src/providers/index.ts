@@ -23,6 +23,20 @@ export function buildProviders(
   const providers = new Map<string, ProviderAdapter>();
   for (const [name, spec] of config.providers) {
     if (spec.type === 'dev') {
+      // The dev-echo provider honours a `[[dev-llm]]` directive that scripts
+      // its output verbatim. Reachable in production it would let an agent
+      // forge its own judge score (online-eval self-inflation). Refuse to
+      // construct it under NODE_ENV=production unless a sandbox explicitly
+      // opts in with ACP_ALLOW_DEV_PROVIDER — fail closed at boot, never at
+      // request time.
+      if (env.NODE_ENV === 'production' && !isTruthyFlag(env.ACP_ALLOW_DEV_PROVIDER)) {
+        throw new Error(
+          `provider ${name}: the dev provider must not be constructed under ` +
+            'NODE_ENV=production — its scripted-output directive lets a caller forge ' +
+            'completions (and self-score the judge). Set ACP_ALLOW_DEV_PROVIDER=1 only ' +
+            'in a non-production sandbox to override.',
+        );
+      }
       providers.set(name, new DevProvider());
       continue;
     }
@@ -40,6 +54,11 @@ export function buildProviders(
     );
   }
   return providers;
+}
+
+/** A flag is "set" when it carries any value other than empty / 0 / false. */
+function isTruthyFlag(value: string | undefined): boolean {
+  return value !== undefined && value !== '' && value !== '0' && value !== 'false';
 }
 
 /**
