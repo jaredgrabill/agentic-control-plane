@@ -37,16 +37,37 @@ export interface AuditSink {
   publish(event: AuditEvent): Promise<void>;
 }
 
+/**
+ * The write side of the tier-2/3 kill switch (capability/risk/fleet). The
+ * registry owns the audited flip surface; this seam flips the fast-path control
+ * KV (structurally KillSwitchControl) so routers react within the <10s SLO. The
+ * agent tier keeps its own /state route (announcer.setSuspended); this is only
+ * the platform-wide capability/risk/fleet flags.
+ */
+export interface KillSwitchControlLike {
+  suspendCapability(name: string, reason: string, activatedBy: string): Promise<void>;
+  reinstateCapability(name: string): Promise<void>;
+  suspendRiskClass(riskClass: string, reason: string, activatedBy: string): Promise<void>;
+  reinstateRiskClass(riskClass: string): Promise<void>;
+  haltFleet(reason: string, activatedBy: string): Promise<void>;
+  resumeFleet(): Promise<void>;
+}
+
 export interface RegistryDeps {
   verifier: JwtVerifier;
   store: RegistryStore;
   signingKey: { kid: string; privateKey: CryptoKey };
   jwks: JSONWebKeySet;
   announcer: RegistryAnnouncer;
+  /** Tier-2/3 kill-switch flip surface (capability/risk/fleet flags). */
+  control: KillSwitchControlLike;
   audit: AuditSink;
   logger: Logger;
   now?: () => Date;
 }
+
+const CAPABILITY_NAME_RE = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
+const RISK_CLASS_TARGETS = new Set(['R1', 'R2', 'R3']);
 
 /**
  * The full lifecycle transition table (agent-lifecycle.md), split by the scope
@@ -354,7 +375,110 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
     return reply.send(updated);
   });
 
+  // --- Tier-2/3 kill-switch flip surface (capability / risk class / fleet) ---
+  // Every flip is registry:admin, requires a reason, and flips the fast-path
+  // control KV BEFORE emitting the killswitch.activated/cleared audit — so by
+  // the time consumers see the event the flag already answers correctly (<10s
+  // SLO). The agent tier keeps its own /state route; these are platform-wide.
+
+  // Tier 2 (capability): suspend/reinstate a single capability by name. Blocks
+  // even compensators (surgical intent wins — exemption matrix).
+  app.post('/v1/killswitch/capability/:name', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:admin');
+    const { name } = request.params as { name: string };
+    if (!CAPABILITY_NAME_RE.test(name)) {
+      throw new AuthError(
+        `capability name ${JSON.stringify(name)} is not a valid capability (e.g. change.submit)`,
+        400,
+      );
+    }
+    const { active, reason } = parseFlipBody(request);
+    if (active) {
+      await deps.control.suspendCapability(name, reason, claims.sub);
+    } else {
+      await deps.control.reinstateCapability(name);
+    }
+    await emitKillSwitchAudit(deps, claims, active, 'capability', name, reason);
+    return reply.status(202).send({ tier: 'capability', target: name, active });
+  });
+
+  // Tier 2 (risk class): suspend/reinstate a whole risk class. A flag on class C
+  // blocks every executing risk with rank >= rank(C). R0 is refused (400) — a
+  // read-only class is never worth flagging; halt the fleet instead.
+  app.post('/v1/killswitch/risk/:class', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:admin');
+    const { class: riskClass } = request.params as { class: string };
+    if (!RISK_CLASS_TARGETS.has(riskClass)) {
+      throw new AuthError(
+        `risk class ${JSON.stringify(riskClass)} cannot be kill-switched — only R1, R2, R3 ` +
+          '(R0 is read-only; halt the fleet instead)',
+        400,
+      );
+    }
+    const { active, reason } = parseFlipBody(request);
+    if (active) {
+      await deps.control.suspendRiskClass(riskClass, reason, claims.sub);
+    } else {
+      await deps.control.reinstateRiskClass(riskClass);
+    }
+    await emitKillSwitchAudit(deps, claims, active, 'risk', riskClass, reason);
+    return reply.status(202).send({ tier: 'risk', target: riskClass, active });
+  });
+
+  // Tier 3 (fleet): halt/resume all task dispatch + intake. The gateway's fleet
+  // auto-canceller reacts to the flip and drains in-flight TaskWorkflows.
+  app.post('/v1/killswitch/fleet', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:admin');
+    const { active, reason } = parseFlipBody(request);
+    if (active) {
+      await deps.control.haltFleet(reason, claims.sub);
+    } else {
+      await deps.control.resumeFleet();
+    }
+    await emitKillSwitchAudit(deps, claims, active, 'fleet', 'fleet', reason);
+    return reply.status(202).send({ tier: 'fleet', active });
+  });
+
   return app;
+}
+
+/** Parses and validates a kill-switch flip body: {active: boolean, reason: string (mandatory)}. */
+function parseFlipBody(request: FastifyRequest): { active: boolean; reason: string } {
+  const body = (request.body ?? {}) as { active?: unknown; reason?: unknown };
+  if (typeof body.active !== 'boolean') {
+    throw new AuthError('active (boolean) is required — true to suspend, false to reinstate', 400);
+  }
+  if (typeof body.reason !== 'string' || body.reason.trim() === '') {
+    throw new AuthError('reason is required — it lands in the audit record and the control state', 400);
+  }
+  return { active: body.active, reason: body.reason };
+}
+
+/**
+ * Emits the tier-2/3 kill-switch activation/clear audit. Platform-tenant
+ * (killswitch is platform infrastructure), actor is the verified operator, and
+ * details carry the open {tier, target, reason} vocabulary (no protocol touch).
+ */
+async function emitKillSwitchAudit(
+  deps: RegistryDeps,
+  claims: PlatformClaims,
+  active: boolean,
+  tier: 'capability' | 'risk' | 'fleet',
+  target: string,
+  reason: string,
+): Promise<void> {
+  await deps.audit.publish({
+    event_id: randomUUID(),
+    occurred_at: (deps.now?.() ?? new Date()).toISOString(),
+    tenant: 'platform',
+    event_type: active ? 'killswitch.activated' : 'killswitch.cleared',
+    actor: { principal: claims.sub, delegation_chain: delegationChain(claims) },
+    action: { name: active ? 'killswitch.activated' : 'killswitch.cleared' },
+    details: { tier, target, reason },
+  });
 }
 
 /** Options for a lifecycle transition shared by the legacy and versioned routes. */

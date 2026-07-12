@@ -195,6 +195,7 @@ let registryJwks: JSONWebKeySet;
 const announcements: { verb: string; card: AgentCard }[] = [];
 const suspensions: { agentId: string; suspended: boolean; reason: string }[] = [];
 const auditEvents: AuditEvent[] = [];
+const flips: { op: string; target: string; reason?: string; by?: string }[] = [];
 
 beforeAll(async () => {
   const tokenPair = await generateKeyPair('EdDSA');
@@ -222,6 +223,24 @@ beforeAll(async () => {
         return Promise.resolve();
       },
     },
+    control: {
+      suspendCapability: (name, reason, by) => (
+        flips.push({ op: 'suspendCapability', target: name, reason, by }), Promise.resolve()
+      ),
+      reinstateCapability: (name) => (
+        flips.push({ op: 'reinstateCapability', target: name }), Promise.resolve()
+      ),
+      suspendRiskClass: (cls, reason, by) => (
+        flips.push({ op: 'suspendRiskClass', target: cls, reason, by }), Promise.resolve()
+      ),
+      reinstateRiskClass: (cls) => (
+        flips.push({ op: 'reinstateRiskClass', target: cls }), Promise.resolve()
+      ),
+      haltFleet: (reason, by) => (
+        flips.push({ op: 'haltFleet', target: 'fleet', reason, by }), Promise.resolve()
+      ),
+      resumeFleet: () => (flips.push({ op: 'resumeFleet', target: 'fleet' }), Promise.resolve()),
+    },
     audit: {
       publish: (e) => {
         auditEvents.push(e);
@@ -237,6 +256,7 @@ beforeEach(() => {
   announcements.length = 0;
   suspensions.length = 0;
   auditEvents.length = 0;
+  flips.length = 0;
 });
 
 async function makeToken(scope: string): Promise<string> {
@@ -875,6 +895,95 @@ describe('baseline recording (version-aware)', () => {
   it('requires the registry:write scope', async () => {
     const res = await putBaseline('knowledge-agent', baseline(), 'registry:read');
     expect(res.statusCode).toBe(403);
+  });
+});
+
+describe('tier-2/3 kill-switch flip routes', () => {
+  async function flip(
+    path: string,
+    body: unknown,
+    scope = 'registry:admin',
+  ): Promise<ReturnType<typeof app.inject>> {
+    return app.inject({
+      method: 'POST',
+      url: path,
+      headers: { authorization: `Bearer ${await makeToken(scope)}` },
+      payload: body,
+    });
+  }
+
+  it('suspends a capability: KV flip before an audited killswitch.activated', async () => {
+    const res = await flip('/v1/killswitch/capability/change.submit', {
+      active: true,
+      reason: 'bad drafts',
+    });
+    expect(res.statusCode).toBe(202);
+    expect(res.json()).toMatchObject({ tier: 'capability', target: 'change.submit', active: true });
+    // Flip happened before the audit (KV first, event second).
+    expect(flips).toEqual([
+      { op: 'suspendCapability', target: 'change.submit', reason: 'bad drafts', by: 'svc:agent-ci' },
+    ]);
+    const audit = auditEvents.at(-1)!;
+    expect(audit.event_type).toBe('killswitch.activated');
+    expect(audit.tenant).toBe('platform');
+    expect(audit.actor.principal).toBe('svc:agent-ci');
+    expect(audit.details).toMatchObject({
+      tier: 'capability',
+      target: 'change.submit',
+      reason: 'bad drafts',
+    });
+  });
+
+  it('reinstates a capability with killswitch.cleared', async () => {
+    const res = await flip('/v1/killswitch/capability/change.submit', {
+      active: false,
+      reason: 'drill complete',
+    });
+    expect(res.statusCode).toBe(202);
+    expect(flips).toEqual([{ op: 'reinstateCapability', target: 'change.submit' }]);
+    expect(auditEvents.at(-1)!.event_type).toBe('killswitch.cleared');
+  });
+
+  it('suspends a risk class but refuses R0 (halt the fleet instead)', async () => {
+    const ok = await flip('/v1/killswitch/risk/R2', { active: true, reason: 'estate incident' });
+    expect(ok.statusCode).toBe(202);
+    expect(flips.at(-1)).toMatchObject({ op: 'suspendRiskClass', target: 'R2' });
+
+    const r0 = await flip('/v1/killswitch/risk/R0', { active: true, reason: 'x' });
+    expect(r0.statusCode).toBe(400);
+  });
+
+  it('halts and resumes the fleet', async () => {
+    expect((await flip('/v1/killswitch/fleet', { active: true, reason: 'p1' })).statusCode).toBe(202);
+    expect(flips.at(-1)).toMatchObject({ op: 'haltFleet', reason: 'p1' });
+    expect((await flip('/v1/killswitch/fleet', { active: false, reason: 'recovered' })).statusCode).toBe(
+      202,
+    );
+    expect(flips.at(-1)).toMatchObject({ op: 'resumeFleet' });
+  });
+
+  it('rejects a bad capability name, a missing reason, and a missing active flag', async () => {
+    expect((await flip('/v1/killswitch/capability/NotACap', { active: true, reason: 'x' })).statusCode).toBe(
+      400,
+    );
+    expect((await flip('/v1/killswitch/fleet', { active: true })).statusCode).toBe(400);
+    expect((await flip('/v1/killswitch/fleet', { reason: 'x' })).statusCode).toBe(400);
+  });
+
+  it('requires authentication and the registry:admin scope', async () => {
+    const noauth = await app.inject({
+      method: 'POST',
+      url: '/v1/killswitch/fleet',
+      payload: { active: true, reason: 'x' },
+    });
+    expect(noauth.statusCode).toBe(401);
+    const wrongScope = await flip(
+      '/v1/killswitch/fleet',
+      { active: true, reason: 'x' },
+      'registry:deploy',
+    );
+    expect(wrongScope.statusCode).toBe(403);
+    expect(flips).toHaveLength(0);
   });
 });
 
