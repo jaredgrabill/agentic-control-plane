@@ -31,6 +31,13 @@ import { env } from '@acp/service-kit';
 import pg from 'pg';
 import type { BudgetAdmission, BudgetReserveOutcome } from './app.js';
 
+/**
+ * Advisory-lock key serializing the budget DDL across services (gateway +
+ * evaluation service create the same tables at boot). Arbitrary but SHARED —
+ * keep in lockstep with apps/evaluation/src/service/store.ts.
+ */
+export const BUDGET_DDL_LOCK = 72710401;
+
 /** The first day of the CURRENT calendar month, UTC — the budget period key. */
 export function currentPeriodStart(now: Date = new Date()): string {
   const y = now.getUTCFullYear();
@@ -55,32 +62,49 @@ export class PgBudgetAdmission implements BudgetAdmission {
 
   private readonly now: () => Date;
 
-  /** Idempotent DDL (lockstep with the evaluation service's migrate). */
+  /**
+   * Idempotent DDL (lockstep with the evaluation service's migrate). The
+   * gateway and the evaluation service both create these tables at boot;
+   * concurrent CREATE TABLE IF NOT EXISTS races into a pg_type unique
+   * violation, so the whole set runs in one transaction under a shared
+   * advisory lock (BUDGET_DDL_LOCK — same key on both sides).
+   */
   async migrate(): Promise<void> {
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS tenant_budget (
-        tenant           text NOT NULL,
-        period_start     date NOT NULL,
-        cap_micros       bigint NOT NULL,
-        committed_micros bigint NOT NULL DEFAULT 0,
-        reserved_micros  bigint NOT NULL DEFAULT 0,
-        PRIMARY KEY (tenant, period_start)
-      )
-    `);
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS tenant_budget_reservation (
-        task_id      uuid PRIMARY KEY,
-        tenant       text NOT NULL,
-        period_start date NOT NULL,
-        est_micros   bigint NOT NULL,
-        created_at   timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS tenant_budget_charge (
-        task_id uuid PRIMARY KEY
-      )
-    `);
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1)', [BUDGET_DDL_LOCK]);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tenant_budget (
+          tenant           text NOT NULL,
+          period_start     date NOT NULL,
+          cap_micros       bigint NOT NULL,
+          committed_micros bigint NOT NULL DEFAULT 0,
+          reserved_micros  bigint NOT NULL DEFAULT 0,
+          PRIMARY KEY (tenant, period_start)
+        )
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tenant_budget_reservation (
+          task_id      uuid PRIMARY KEY,
+          tenant       text NOT NULL,
+          period_start date NOT NULL,
+          est_micros   bigint NOT NULL,
+          created_at   timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tenant_budget_charge (
+          task_id uuid PRIMARY KEY
+        )
+      `);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**

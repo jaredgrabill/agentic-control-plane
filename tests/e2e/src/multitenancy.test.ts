@@ -48,7 +48,7 @@ const GLOBEX_CAP_MICROS = 500_000; // $0.50
 
 let platform: ChildProcess | undefined;
 let control: NatsConnection | undefined;
-let pool: pg.Pool;
+let pool: pg.Pool | undefined;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -185,7 +185,7 @@ afterAll(async () => {
     // best effort
   }
   await control?.close();
-  await pool.end();
+  await pool?.end();
   stopPlatform(platform);
 });
 
@@ -331,7 +331,7 @@ describe('3. per-tenant budget enforcement', () => {
     // The durable consumer moves reserved → committed keyed by task_id.
     const deadline = Date.now() + 60_000;
     for (;;) {
-      const res = await pool.query(
+      const res = await pool!.query(
         `SELECT (SELECT count(*) FROM tenant_budget_reservation WHERE task_id = $1) AS reservations,
                 (SELECT count(*) FROM tenant_budget_charge WHERE task_id = $1) AS charges`,
         [firstGlobexTask],
@@ -346,7 +346,7 @@ describe('3. per-tenant budget enforcement', () => {
       await sleep(1_000);
     }
     // Invariant: committed + reserved never exceeds the cap.
-    const budget = await pool.query(
+    const budget = await pool!.query(
       `SELECT cap_micros, committed_micros, reserved_micros FROM tenant_budget
         WHERE tenant='globex' ORDER BY period_start DESC LIMIT 1`,
     );

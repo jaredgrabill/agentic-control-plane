@@ -115,30 +115,44 @@ export class PgScoresStore {
     // tenant_budget_charge dedups redeliveries. The gateway creates the same
     // tables idempotently at boot (apps/gateway/src/budget.ts) so neither
     // service depends on the other's start order — keep the DDL in lockstep.
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS tenant_budget (
-        tenant           text NOT NULL,
-        period_start     date NOT NULL,
-        cap_micros       bigint NOT NULL,
-        committed_micros bigint NOT NULL DEFAULT 0,
-        reserved_micros  bigint NOT NULL DEFAULT 0,
-        PRIMARY KEY (tenant, period_start)
-      )
-    `);
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS tenant_budget_reservation (
-        task_id      uuid PRIMARY KEY,
-        tenant       text NOT NULL,
-        period_start date NOT NULL,
-        est_micros   bigint NOT NULL,
-        created_at   timestamptz NOT NULL DEFAULT now()
-      )
-    `);
-    await this.pool.query(`
-      CREATE TABLE IF NOT EXISTS tenant_budget_charge (
-        task_id uuid PRIMARY KEY
-      )
-    `);
+    // Concurrent CREATE TABLE IF NOT EXISTS races into a pg_type unique
+    // violation, so both sides serialize on the SAME advisory lock
+    // (BUDGET_DDL_LOCK in apps/gateway/src/budget.ts).
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query('SELECT pg_advisory_xact_lock($1)', [72710401]);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tenant_budget (
+          tenant           text NOT NULL,
+          period_start     date NOT NULL,
+          cap_micros       bigint NOT NULL,
+          committed_micros bigint NOT NULL DEFAULT 0,
+          reserved_micros  bigint NOT NULL DEFAULT 0,
+          PRIMARY KEY (tenant, period_start)
+        )
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tenant_budget_reservation (
+          task_id      uuid PRIMARY KEY,
+          tenant       text NOT NULL,
+          period_start date NOT NULL,
+          est_micros   bigint NOT NULL,
+          created_at   timestamptz NOT NULL DEFAULT now()
+        )
+      `);
+      await client.query(`
+        CREATE TABLE IF NOT EXISTS tenant_budget_charge (
+          task_id uuid PRIMARY KEY
+        )
+      `);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /** Idempotent insert (ON CONFLICT DO NOTHING). Returns true iff a row was written. */
