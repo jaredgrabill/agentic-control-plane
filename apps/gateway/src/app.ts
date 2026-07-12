@@ -158,6 +158,8 @@ export interface ApprovalGateway {
 
 export interface KillSwitchReader {
   fleetHalt(): KillSwitchState | undefined;
+  /** Per-tenant halt (Phase 4 item 1) — a fleet halt scoped to one tenant. */
+  tenantHalt(tenant: string): KillSwitchState | undefined;
 }
 
 export interface AuditSink {
@@ -195,6 +197,20 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
       return reply.status(503).send({
         error: {
           message: `task intake halted by fleet kill switch: ${halt.reason ?? 'no reason recorded'}`,
+          status: 503,
+        },
+      });
+    }
+    // Per-tenant halt: keyed by the VERIFIED claims.tenant — never a request
+    // parameter — so a halt blocks exactly one tenant's intake and a caller
+    // cannot dodge (or probe) it by naming another tenant.
+    const tenantHalt = deps.killSwitch.tenantHalt(claims.tenant);
+    if (tenantHalt !== undefined) {
+      return reply.status(503).send({
+        error: {
+          message:
+            `task intake halted for tenant ${claims.tenant} by kill switch: ` +
+            (tenantHalt.reason ?? 'no reason recorded'),
           status: 503,
         },
       });

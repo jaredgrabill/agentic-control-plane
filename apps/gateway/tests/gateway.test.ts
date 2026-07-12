@@ -25,6 +25,8 @@ let publicJwk: JWK;
 const started: TaskRequest[] = [];
 const auditEvents: AuditEvent[] = [];
 let fleetHalt: KillSwitchState | undefined;
+/** Tenants with an active per-tenant halt (the stubbed kill-switch read side). */
+const haltedTenants = new Map<string, KillSwitchState>();
 let statusResponse: Awaited<ReturnType<Parameters<typeof buildGatewayApp>[0]['starter']['status']>>;
 let cancelResponse: Awaited<ReturnType<Parameters<typeof buildGatewayApp>[0]['starter']['cancel']>>;
 const cancelCalls: { tenant: string; taskId: string }[] = [];
@@ -100,7 +102,7 @@ beforeAll(async () => {
       status: () => Promise.resolve(deployStatusResponse),
       abort: () => Promise.resolve(deployAbortResult),
     },
-    killSwitch: { fleetHalt: () => fleetHalt },
+    killSwitch: { fleetHalt: () => fleetHalt, tenantHalt: (t) => haltedTenants.get(t) },
     audit: {
       publish: (e) => {
         auditEvents.push(e);
@@ -115,6 +117,7 @@ beforeEach(() => {
   started.length = 0;
   auditEvents.length = 0;
   fleetHalt = undefined;
+  haltedTenants.clear();
   statusResponse = { status: 'running' };
   cancelResponse = { outcome: 'cancelling' };
   cancelCalls.length = 0;
@@ -240,6 +243,29 @@ describe('POST /v1/tasks', () => {
     expect(recovered.statusCode).toBe(202);
   });
 
+  it('503s intake for a HALTED tenant only, keyed by the verified token tenant', async () => {
+    haltedTenants.set('acme', { active: true, reason: 'tenant incident' });
+
+    // The halted tenant's caller is refused — the tenant comes from the
+    // verified token; a body-supplied tenant cannot dodge the halt.
+    const halted = await submit(await makeToken(), { text: QUESTION, tenant: 'globex' });
+    expect(halted.statusCode).toBe(503);
+    expect(halted.json<{ error: { message: string } }>().error.message).toContain(
+      'tenant acme',
+    );
+    expect(started).toHaveLength(0);
+
+    // Another tenant's caller is untouched by acme's halt.
+    const other = await submit(await makeToken({ tenant: 'globex' }), { text: QUESTION });
+    expect(other.statusCode).toBe(202);
+    expect(started[0]!.tenant).toBe('globex');
+
+    // Resume → acme intake recovers.
+    haltedTenants.clear();
+    const recovered = await submit(await makeToken(), { text: QUESTION });
+    expect(recovered.statusCode).toBe(202);
+  });
+
   it('emits task.submitted audit with the delegation chain and input digest', async () => {
     await submit(await makeToken(), { text: QUESTION });
     expect(auditEvents).toHaveLength(1);
@@ -297,7 +323,7 @@ describe('POST /v1/tasks', () => {
         status: () => Promise.resolve(undefined),
         abort: () => Promise.resolve({ outcome: 'not_found' }),
       },
-      killSwitch: { fleetHalt: () => undefined },
+      killSwitch: { fleetHalt: () => undefined, tenantHalt: () => undefined },
       audit: { publish: () => Promise.reject(new Error('stream down')) },
       logger: createLogger('gateway-test'),
     });
