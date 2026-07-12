@@ -1,4 +1,8 @@
 import type { AgentCard, AgentManifest } from '@acp/protocol';
+// stableStringify now lives in @acp/service-kit (three consumers: this card
+// signature, the approval subject digest, audit canonicalization). Re-exported
+// so existing importers of ./signing keep working.
+import { stableStringify } from '@acp/service-kit';
 import {
   CompactSign,
   compactVerify,
@@ -7,24 +11,7 @@ import {
   type CryptoKey,
 } from 'jose';
 
-/**
- * Deterministic JSON: object keys sorted recursively. Signature payloads
- * must not depend on property insertion order, or verification breaks the
- * moment a card round-trips through a different runtime.
- */
-export function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(stableStringify).join(',')}]`;
-  }
-  if (value !== null && typeof value === 'object') {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, v]) => v !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : 1))
-      .map(([k, v]) => `${JSON.stringify(k)}:${stableStringify(v)}`);
-    return `{${entries.join(',')}}`;
-  }
-  return JSON.stringify(value);
-}
+export { stableStringify } from '@acp/service-kit';
 
 /** The signed identity content: what the agent IS, not its mutable lifecycle. */
 export function cardSigningPayload(

@@ -4,7 +4,7 @@ import { createLogger, sha256Digest } from '@acp/service-kit';
 import { describe, expect, it, vi } from 'vitest';
 import { CURRENT_PRICE_BOOK_VERSION, defaultPriceBookPath } from '@acp/cost-meter';
 import { createControlActivities } from '../src/activities.js';
-import type { PrincipalSnapshot } from '../src/types.js';
+import type { ControlActivities, PrincipalSnapshot } from '../src/types.js';
 
 const card: AgentCard = {
   manifest: {
@@ -421,6 +421,99 @@ describe('brokerToken', () => {
         taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
       }),
     ).rejects.toThrow(/broker delegation for acp:agent:knowledge-agent failed: 403/);
+  });
+
+  it('forwards approval grounds into the broker request when the step was gated', async () => {
+    let body: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn((_u: string | URL, init?: RequestInit) => {
+      body = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return jsonResponse({ access_token: 'brokered.jwt' });
+    }) as unknown as typeof fetch;
+
+    const approval = {
+      approval_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90',
+      decision_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f91',
+      approver: 'user:approver.ops',
+      step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+      capability: 'gov.test_write',
+      subject_digest: `sha256:${'a'.repeat(64)}`,
+    };
+    await makeActivities(fetchImpl).brokerToken({
+      snapshot,
+      agent: card,
+      scopes: ['knowledge:search:read'],
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      approval,
+    });
+    expect(body!.approval).toEqual(approval);
+  });
+
+  it('omits approval from the broker request for an ungated step', async () => {
+    let body: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn((_u: string | URL, init?: RequestInit) => {
+      body = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return jsonResponse({ access_token: 'brokered.jwt' });
+    }) as unknown as typeof fetch;
+    await makeActivities(fetchImpl).brokerToken({
+      snapshot,
+      agent: card,
+      scopes: [],
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    });
+    expect(Object.hasOwn(body!, 'approval')).toBe(false);
+  });
+});
+
+describe('digestApprovalSubject', () => {
+  const subject = {
+    approval_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90',
+    task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+    tenant: 'acme',
+    principal: 'user:jane.doe',
+    agent_id: 'approval-test-agent',
+    agent_version: '0.1.0',
+    capability: 'gov.test_write',
+    risk: 'R2',
+    input: { target: 'record-42', mode: 'apply' },
+    requested_scopes: ['gov:test:write'],
+    plan: { plan_id: 'p', steps: [] } as unknown as Parameters<
+      ControlActivities['digestApprovalSubject']
+    >[0]['plan'],
+    plan_digest: `sha256:${'0'.repeat(64)}`,
+  };
+
+  it('is a sha256 digest, insensitive to key insertion order (stable canonicalization)', async () => {
+    const acts = makeActivities(vi.fn());
+    const a = await acts.digestApprovalSubject(subject);
+    // Same content, different key order and a reordered input object.
+    const reordered = {
+      plan_digest: subject.plan_digest,
+      plan: subject.plan,
+      requested_scopes: subject.requested_scopes,
+      input: { mode: 'apply', target: 'record-42' },
+      risk: subject.risk,
+      capability: subject.capability,
+      agent_version: subject.agent_version,
+      agent_id: subject.agent_id,
+      principal: subject.principal,
+      tenant: subject.tenant,
+      step_id: subject.step_id,
+      task_id: subject.task_id,
+      approval_id: subject.approval_id,
+    };
+    const b = await acts.digestApprovalSubject(reordered);
+    expect(a.subject_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(b.subject_digest).toBe(a.subject_digest);
+  });
+
+  it('changes when any bound field changes (binds the exact context)', async () => {
+    const acts = makeActivities(vi.fn());
+    const base = (await acts.digestApprovalSubject(subject)).subject_digest;
+    const mutated = (
+      await acts.digestApprovalSubject({ ...subject, input: { target: 'record-43' } })
+    ).subject_digest;
+    expect(mutated).not.toBe(base);
   });
 });
 

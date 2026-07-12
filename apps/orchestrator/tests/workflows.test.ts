@@ -12,10 +12,23 @@ import { ApplicationFailure } from '@temporalio/common';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker, bundleWorkflowCode, type WorkflowBundle } from '@temporalio/worker';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AgentStepWorkflow, TaskWorkflow } from '../src/workflows.js';
+import { randomUUID } from 'node:crypto';
 import {
+  AgentStepWorkflow,
+  ApprovalWorkflow,
+  TaskWorkflow,
+  approvalDecisionSignal,
+  approvalStatusQuery,
+} from '../src/workflows.js';
+import {
+  APPROVAL_DENY_AFTER_S,
+  APPROVAL_ESCALATE_AFTER_S,
   CONTROL_TASK_QUEUE,
   agentTaskQueue,
+  type ApprovalDecisionSignal,
+  type ApprovalGateInput,
+  type ApprovalOutcome,
+  type ApprovalSubject,
   type ControlActivities,
   type PrincipalSnapshot,
   type StepDispatch,
@@ -28,6 +41,7 @@ const STEP_IDS = [
 ] as const;
 const PLAN_ID = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f50';
 const DIGEST = `sha256:${'0'.repeat(64)}`;
+const SUBJECT_DIGEST = `sha256:${'a'.repeat(64)}`;
 
 function makeCard(id: string, capability: string, scopes: [string, ...string[]]): AgentCard {
   return {
@@ -133,6 +147,7 @@ const control: ControlActivities = {
   discoverAgent: vi.fn(),
   authorizeDelegation: vi.fn(),
   brokerToken: vi.fn(),
+  digestApprovalSubject: vi.fn(),
   emitAudit: vi.fn((e: Record<string, unknown>) => {
     audited.push(e);
     return Promise.resolve();
@@ -209,6 +224,9 @@ beforeEach(() => {
       determining_policies: ['allow-r0-delegation'],
     });
   vi.mocked(control.brokerToken).mockReset().mockResolvedValue({ token: 'brokered.jwt' });
+  vi.mocked(control.digestApprovalSubject)
+    .mockReset()
+    .mockResolvedValue({ subject_digest: SUBJECT_DIGEST });
   vi.mocked(control.getPriceBook).mockReset().mockResolvedValue(zeroBook);
   knowledgeExec.mockReset();
   cloudExec.mockReset();
@@ -460,6 +478,8 @@ describe('TaskWorkflow v1', () => {
       planStep: fanOutPlan.steps[0],
       planRef: { planId: PLAN_ID, index: 0, total: 2 },
       depth: 4,
+      plan: fanOutPlan,
+      planDigest: DIGEST,
     };
     const result = await withWorkers([], () =>
       env.client.workflow.execute(AgentStepWorkflow, {
@@ -817,5 +837,369 @@ describe('TaskWorkflow cost meter', () => {
     const details = completedAudit();
     expect(details.usage_totals.cost_usd).toBeNull();
     expect(details.price_book_version).toBeNull();
+  });
+});
+
+// -------------------------------------------------------------- approvals
+
+const APPROVER = 'user:approver.ops';
+
+const gatedCard: AgentCard = {
+  manifest: {
+    id: 'gov-agent',
+    name: 'gov-agent',
+    owner: 'team-platform',
+    description: 'Gated writes.',
+    capabilities: [
+      {
+        name: 'gov.test_write',
+        description: 'A governed write.',
+        risk: 'R2',
+        input_schema: { type: 'object' },
+        output_schema: { type: 'object' },
+        examples: [{ input: {} }, { input: {} }, { input: {} }],
+        sla: { p95_latency_s: 5 },
+        compensator: 'gov.test_undo',
+      },
+    ],
+    tools: [{ server: 'gov-tools', scopes: ['gov:test:write'] }],
+  },
+  version: '0.1.0',
+  lifecycle_state: 'active',
+  registered_at: '2026-07-10T08:00:00Z',
+  updated_at: '2026-07-10T08:00:00Z',
+  card_signature: 'sig',
+};
+
+const govExec = vi.fn<Handler>();
+// Register the gated agent's activity handler so withWorkers(['gov-agent'])
+// can stand up a real agent worker.
+HANDLERS['gov-agent'] = govExec;
+
+const gatedPlan = makePlan([{ capability: 'gov.test_write', input: { target: 'record-42' } }]);
+// A plan whose second step depends on the gated first — to prove a denied
+// gate gaps its dependents (honest partial).
+const gatedThenDependentPlan = makePlan([
+  { capability: 'gov.test_write', input: { target: 'record-42' } },
+  { capability: 'code.ci_health', input: { repo: 'acme/x' }, dependsOnIndex: [0] },
+]);
+
+function decisionSignal(
+  kind: 'approve' | 'deny',
+  digest: string,
+  over: Partial<ApprovalDecisionSignal> = {},
+): ApprovalDecisionSignal {
+  return {
+    decision: kind,
+    decision_id: randomUUID(),
+    approver: APPROVER,
+    approver_chain: [{ sub: APPROVER }],
+    subject_digest: digest,
+    ...over,
+  };
+}
+
+function makeSubject(over: Partial<ApprovalSubject> = {}): ApprovalSubject {
+  return {
+    approval_id: randomUUID(),
+    task_id: TASK_ID,
+    step_id: STEP_IDS[0],
+    tenant: 'acme',
+    principal: 'user:jane.doe',
+    agent_id: 'gov-agent',
+    agent_version: '0.1.0',
+    capability: 'gov.test_write',
+    risk: 'R2',
+    input: { target: 'record-42' },
+    requested_scopes: ['gov:test:write'],
+    compensator: 'gov.test_undo',
+    plan: gatedPlan,
+    plan_digest: DIGEST,
+    ...over,
+  };
+}
+
+function gateInput(over: Partial<ApprovalSubject> = {}): ApprovalGateInput {
+  return {
+    subject: makeSubject(over),
+    subject_digest: SUBJECT_DIGEST,
+    escalate_after_s: APPROVAL_ESCALATE_AFTER_S,
+    deny_after_s: APPROVAL_DENY_AFTER_S,
+  };
+}
+
+/** Runs ApprovalWorkflow directly; `drive` signals/sleeps against the handle. */
+async function runApproval(
+  gate: ApprovalGateInput,
+  drive: (handle: {
+    signal: (def: typeof approvalDecisionSignal, arg: ApprovalDecisionSignal) => Promise<void>;
+    query: (def: typeof approvalStatusQuery) => Promise<unknown>;
+  }) => Promise<void>,
+): Promise<ApprovalOutcome> {
+  return withWorkers([], async () => {
+    const handle = await env.client.workflow.start(ApprovalWorkflow, {
+      taskQueue: CONTROL_TASK_QUEUE,
+      workflowId: `approval-${gate.subject.approval_id}`,
+      args: [gate],
+    });
+    await drive(handle as never);
+    return handle.result();
+  });
+}
+
+async function waitForApprovalId(): Promise<string> {
+  for (let i = 0; i < 500; i += 1) {
+    const e = audited.find((ev) => ev.event_type === 'approval.requested');
+    if (e !== undefined) return (e.details as { approval_id: string }).approval_id;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  throw new Error('approval.requested was never emitted');
+}
+
+/** Sets up a gated R2 task: plan, discovery, require-approval decision. */
+function scriptGated(plan = gatedPlan): void {
+  vi.mocked(control.planTask).mockResolvedValue({ plan, planDigest: DIGEST });
+  vi.mocked(control.discoverAgent).mockImplementation((capability: string) =>
+    Promise.resolve(
+      capability === 'gov.test_write' ? gatedCard : (CARDS[capability] ?? null),
+    ),
+  );
+  vi.mocked(control.authorizeDelegation).mockImplementation((input) =>
+    Promise.resolve(
+      input.capability === 'gov.test_write'
+        ? {
+            decision: 'require-approval',
+            bundle_version: '2026.07+abc',
+            determining_policies: ['gate-r2-delegation'],
+          }
+        : { decision: 'allow', bundle_version: '2026.07+abc', determining_policies: ['allow-r0-delegation'] },
+    ),
+  );
+  govExec.mockImplementation((req) =>
+    Promise.resolve(
+      completedStep(req, answerOutput('write applied to record-42 [1]', ['gov/record-42'], 0.9), {
+        input_tokens: 10,
+        output_tokens: 0,
+        llm_calls: 0,
+      }),
+    ),
+  );
+}
+
+describe('ApprovalWorkflow (durable human gate)', () => {
+  beforeEach(() => {
+    govExec.mockReset();
+  });
+
+  it('(A) approve → granted, approver is the audit actor, no rubber-stamp flag on a slow decision', async () => {
+    const gate = gateInput();
+    const outcome = await runApproval(gate, async (h) => {
+      await h.signal(approvalDecisionSignal, decisionSignal('approve', SUBJECT_DIGEST));
+    });
+    expect(outcome).toMatchObject({ granted: true, reason: 'approved', approver: APPROVER });
+    expect(outcome.decision_id).toBeDefined();
+
+    const requested = audited.find((e) => e.event_type === 'approval.requested');
+    expect(requested).toBeDefined();
+    expect((requested!.action as { inputs_digest: string }).inputs_digest).toBe(SUBJECT_DIGEST);
+    const granted = audited.find((e) => e.event_type === 'approval.granted')!;
+    expect((granted.actor as { principal: string }).principal).toBe(APPROVER);
+    expect((granted.details as { rejected_signals: number }).rejected_signals).toBe(0);
+  });
+
+  it('(B) deny → not granted, approval.denied recorded', async () => {
+    const gate = gateInput();
+    const outcome = await runApproval(gate, async (h) => {
+      await h.signal(approvalDecisionSignal, decisionSignal('deny', SUBJECT_DIGEST, { note: 'too risky' }));
+    });
+    expect(outcome).toMatchObject({ granted: false, reason: 'denied' });
+    expect(audited.some((e) => e.event_type === 'approval.denied')).toBe(true);
+  });
+
+  it('(C) timeout → DENY by default (no signal), escalated first', async () => {
+    const gate = gateInput();
+    const outcome = await runApproval(gate, async () => {
+      // no decision — let the deadline pass (time-skipping)
+    });
+    expect(outcome).toMatchObject({ granted: false, reason: 'timeout' });
+    expect(audited.some((e) => e.event_type === 'approval.escalated')).toBe(true);
+    const timeout = audited.find((e) => e.event_type === 'approval.timeout')!;
+    expect((timeout.details as { escalated: boolean }).escalated).toBe(true);
+  });
+
+  it('(D) escalation then grant: a decision after T1 still wins; details.escalated true', async () => {
+    const gate = gateInput();
+    const outcome = await runApproval(gate, async (h) => {
+      await env.sleep(`${APPROVAL_ESCALATE_AFTER_S + 1} s`);
+      await h.signal(approvalDecisionSignal, decisionSignal('approve', SUBJECT_DIGEST));
+    });
+    expect(outcome.granted).toBe(true);
+    expect(audited.some((e) => e.event_type === 'approval.escalated')).toBe(true);
+    const granted = audited.find((e) => e.event_type === 'approval.granted')!;
+    expect((granted.details as { escalated: boolean }).escalated).toBe(true);
+  });
+
+  it('(E) digest-mismatch signal is rejected+counted; a later valid signal wins', async () => {
+    const gate = gateInput();
+    const staleDigest = `sha256:${'b'.repeat(64)}`;
+    const outcome = await runApproval(gate, async (h) => {
+      // Stale/forged context — the approver saw a different subject.
+      await h.signal(approvalDecisionSignal, decisionSignal('approve', staleDigest));
+      await h.signal(approvalDecisionSignal, decisionSignal('approve', SUBJECT_DIGEST));
+    });
+    expect(outcome.granted).toBe(true);
+    const granted = audited.find((e) => e.event_type === 'approval.granted')!;
+    expect((granted.details as { rejected_signals: number }).rejected_signals).toBe(1);
+  });
+
+  it('(F) first valid decision wins: a conflicting second signal is ignored', async () => {
+    const gate = gateInput();
+    const outcome = await runApproval(gate, async (h) => {
+      await h.signal(approvalDecisionSignal, decisionSignal('approve', SUBJECT_DIGEST));
+      await h.signal(approvalDecisionSignal, decisionSignal('deny', SUBJECT_DIGEST));
+    });
+    expect(outcome).toMatchObject({ granted: true, reason: 'approved' });
+    const granted = audited.find((e) => e.event_type === 'approval.granted')!;
+    expect((granted.details as { rejected_signals: number }).rejected_signals).toBe(1);
+  });
+
+  it('(G) self-approval is rejected structurally → times out (deny)', async () => {
+    const gate = gateInput();
+    const outcome = await runApproval(gate, async (h) => {
+      // The approver names the subject principal — separation of duties.
+      await h.signal(
+        approvalDecisionSignal,
+        decisionSignal('approve', SUBJECT_DIGEST, {
+          approver: 'user:jane.doe',
+          approver_chain: [{ sub: 'user:jane.doe' }],
+        }),
+      );
+    });
+    expect(outcome).toMatchObject({ granted: false, reason: 'timeout' });
+    const timeout = audited.find((e) => e.event_type === 'approval.timeout')!;
+    expect((timeout.details as { rejected_signals: number }).rejected_signals).toBe(1);
+  });
+
+  it('(H) status query reflects pending → granted', async () => {
+    const gate = gateInput();
+    await runApproval(gate, async (h) => {
+      const pending = (await h.query(approvalStatusQuery)) as { status: string };
+      expect(pending.status).toBe('pending');
+      await h.signal(approvalDecisionSignal, decisionSignal('approve', SUBJECT_DIGEST));
+    });
+  });
+});
+
+describe('approval gate integration (AgentStepWorkflow)', () => {
+  beforeEach(() => {
+    govExec.mockReset();
+  });
+
+  it('(1) approve → step executes with approval grounds in the mint and step.dispatched.approval_id', async () => {
+    scriptGated();
+    const result = await withWorkers(['gov-agent'], async () => {
+      const handle = await env.client.workflow.start(TaskWorkflow, {
+        taskQueue: CONTROL_TASK_QUEUE,
+        workflowId: workflowId(),
+        args: [task],
+      });
+      const approvalId = await waitForApprovalId();
+      await env.client.workflow
+        .getHandle(`approval-${approvalId}`)
+        .signal(approvalDecisionSignal, decisionSignal('approve', SUBJECT_DIGEST));
+      const r = await handle.result();
+      return { r, approvalId };
+    });
+
+    expect(result.r.status).toBe('completed');
+    expect(govExec).toHaveBeenCalledTimes(1);
+    const brokerArg = vi.mocked(control.brokerToken).mock.calls[0]![0];
+    expect(brokerArg.approval).toMatchObject({
+      approval_id: result.approvalId,
+      approver: APPROVER,
+      capability: 'gov.test_write',
+      step_id: STEP_IDS[0],
+      subject_digest: SUBJECT_DIGEST,
+    });
+    const dispatched = audited.find((e) => e.event_type === 'step.dispatched')!;
+    expect((dispatched.details as { approval_id: string }).approval_id).toBe(result.approvalId);
+    // Audit order: requested precedes granted precedes dispatch.
+    const types = audited.map((e) => e.event_type);
+    expect(types.indexOf('approval.requested')).toBeLessThan(types.indexOf('approval.granted'));
+    expect(types.indexOf('approval.granted')).toBeLessThan(types.indexOf('step.dispatched'));
+  });
+
+  it('(2) deny → step not executed, dependents gapped, honest partial', async () => {
+    scriptGated(gatedThenDependentPlan);
+    const result = await withWorkers(['gov-agent', 'code-agent'], async () => {
+      const handle = await env.client.workflow.start(TaskWorkflow, {
+        taskQueue: CONTROL_TASK_QUEUE,
+        workflowId: workflowId(),
+        args: [task],
+      });
+      const approvalId = await waitForApprovalId();
+      await env.client.workflow
+        .getHandle(`approval-${approvalId}`)
+        .signal(approvalDecisionSignal, decisionSignal('deny', SUBJECT_DIGEST, { note: 'no' }));
+      return handle.result();
+    });
+
+    expect(govExec).not.toHaveBeenCalled();
+    expect(codeExec).not.toHaveBeenCalled();
+    expect(result.status).toBe('failed');
+    expect(control.brokerToken).not.toHaveBeenCalled();
+    expect(audited.some((e) => e.event_type === 'approval.denied')).toBe(true);
+    // The dependent is gapped naming the unexecuted gated step.
+    expect(audited.some((e) => e.event_type === 'step.skipped')).toBe(true);
+  });
+
+  it('(3) timeout → step not executed (deny by default), no signal needed', async () => {
+    scriptGated();
+    const result = await runTask(task, ['gov-agent']);
+    expect(result.status).toBe('failed');
+    expect(govExec).not.toHaveBeenCalled();
+    expect(control.brokerToken).not.toHaveBeenCalled();
+    expect(audited.some((e) => e.event_type === 'approval.timeout')).toBe(true);
+  });
+
+  it('(9) re-discovery: agent gone during the wait → failed permanent, not executed', async () => {
+    scriptGated();
+    // Discovery returns the card first (for the gate), then null (suspended
+    // during the approval wait).
+    let calls = 0;
+    vi.mocked(control.discoverAgent).mockImplementation((capability: string) => {
+      if (capability !== 'gov.test_write') return Promise.resolve(CARDS[capability] ?? null);
+      calls += 1;
+      return Promise.resolve(calls === 1 ? gatedCard : null);
+    });
+
+    const result = await withWorkers(['gov-agent'], async () => {
+      const handle = await env.client.workflow.start(TaskWorkflow, {
+        taskQueue: CONTROL_TASK_QUEUE,
+        workflowId: workflowId(),
+        args: [task],
+      });
+      const approvalId = await waitForApprovalId();
+      await env.client.workflow
+        .getHandle(`approval-${approvalId}`)
+        .signal(approvalDecisionSignal, decisionSignal('approve', SUBJECT_DIGEST));
+      return handle.result();
+    });
+
+    expect(result.status).toBe('failed');
+    expect(govExec).not.toHaveBeenCalled();
+    expect(control.brokerToken).not.toHaveBeenCalled();
+    expect(audited.some((e) => e.event_type === 'approval.granted')).toBe(true);
+  });
+
+  it('(10) regression: an R0 delegation never spawns an approval gate', async () => {
+    // Default mocks: knowledge plan, allow decision.
+    knowledgeExec.mockImplementation((req) =>
+      Promise.resolve(completedStep(req, answerOutput('ok', ['knowledge/doc'], 0.9))),
+    );
+    const result = await runTask(task, ['knowledge-agent']);
+    expect(result.status).toBe('completed');
+    expect(audited.some((e) => e.event_type === 'approval.requested')).toBe(false);
+    expect(control.digestApprovalSubject).not.toHaveBeenCalled();
   });
 });

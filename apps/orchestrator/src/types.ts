@@ -47,6 +47,89 @@ export interface StepDispatch {
   depth: number;
   /** REMAINING task budget at dispatch time, not the whole task budget. */
   budget?: Budget;
+  /** The full plan and its digest — carried so the approval subject can show an approver the whole plan (blast radius). */
+  plan: Plan;
+  planDigest: string;
+}
+
+/** Timeouts governing an approval gate. No per-task override in v1. */
+export const APPROVAL_ESCALATE_AFTER_S = 3600;
+export const APPROVAL_DENY_AFTER_S = 86_400;
+
+/**
+ * The full context an approver must see before deciding (governance-and-policy:
+ * approvals carry plan, blast radius, compensator). Minted by AgentStepWorkflow
+ * from the card + planStep + dispatch when a delegation lifts to
+ * require-approval. Internal to the orchestrator — NOT a protocol type — but
+ * its sha256 (subject_digest) binds the whole thing to the decision and the
+ * eventual token.
+ */
+export interface ApprovalSubject {
+  /** uuid minted by AgentStepWorkflow — the ApprovalWorkflow instance id. */
+  approval_id: string;
+  task_id: string;
+  step_id: string;
+  tenant: string;
+  /** The task's principal — the party on whose behalf the write would run. */
+  principal: string;
+  agent_id: string;
+  agent_version: string;
+  capability: string;
+  risk: string;
+  /** The EXACT step input the approver sees and authorizes. */
+  input: Record<string, unknown>;
+  requested_scopes: string[];
+  /** The compensator capability declared for this write, if any (reversibility). */
+  compensator?: string;
+  /** True when the write is flagged irreversible — raises the approval bar (visibility v1). */
+  irreversible?: boolean;
+  plan: Plan;
+  plan_digest: string;
+}
+
+/** Input to the ApprovalWorkflow child. */
+export interface ApprovalGateInput {
+  subject: ApprovalSubject;
+  /** sha256 over stableStringify(subject), computed by an activity (no crypto in the isolate). */
+  subject_digest: string;
+  escalate_after_s: number;
+  deny_after_s: number;
+}
+
+/**
+ * A human decision entering the workflow via signal. Minted by the gateway
+ * route from a VERIFIED approver JWT — approver is claims.sub, never body.
+ * The workflow re-validates independently (defense in depth).
+ */
+export interface ApprovalDecisionSignal {
+  decision: 'approve' | 'deny';
+  decision_id: string;
+  approver: string;
+  approver_chain: { sub: string }[];
+  /** Echo of the subject_digest the approver was shown — mismatch is rejected as stale/forged. */
+  subject_digest: string;
+  note?: string;
+}
+
+/** The ApprovalWorkflow result AgentStepWorkflow acts on. */
+export interface ApprovalOutcome {
+  granted: boolean;
+  reason: 'approved' | 'denied' | 'timeout';
+  approval_id: string;
+  decision_id?: string;
+  approver?: string;
+  latency_ms: number;
+  subject_digest: string;
+}
+
+/** Signed approval grounds threaded into the broker mint (mirrors the token service's ApprovalGrounds). */
+export interface ApprovalTokenGrounds {
+  approval_id: string;
+  decision_id: string;
+  approver: string;
+  step_id: string;
+  capability: string;
+  subject_digest: string;
 }
 
 /** Control-plane activities implemented by the orchestrator's own worker. */
@@ -85,10 +168,16 @@ export interface ControlActivities {
     taskId: string;
     stepId: string;
   }): Promise<{
-    decision: 'allow' | 'deny';
+    decision: 'allow' | 'deny' | 'require-approval';
     bundle_version: string;
     determining_policies: string[];
   }>;
+  /**
+   * sha256 over stableStringify(subject) for an approval gate. Done in an
+   * activity because the workflow isolate has no crypto — the digest binds
+   * the exact subject the approver sees to the decision and the token.
+   */
+  digestApprovalSubject(subject: ApprovalSubject): Promise<{ subject_digest: string }>;
   /**
    * ADR-0007 broker grant: mints the step's delegated token at dispatch
    * time from the snapshot — audience-bound to the agent, scopes
@@ -99,6 +188,8 @@ export interface ControlActivities {
     agent: AgentCard;
     scopes: string[];
     taskId: string;
+    /** Signed into the token's approval claim when the step passed an approval gate. */
+    approval?: ApprovalTokenGrounds;
   }): Promise<{ token: string }>;
   /** Protocol-validated audit emission (JetStream-acked). */
   emitAudit(event: Record<string, unknown>): Promise<void>;
