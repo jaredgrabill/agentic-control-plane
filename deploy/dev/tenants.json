@@ -1,0 +1,4 @@
+[
+  { "tenant": "acme", "account": "TENANT_ACME" },
+  { "tenant": "globex", "account": "TENANT_GLOBEX" }
+]

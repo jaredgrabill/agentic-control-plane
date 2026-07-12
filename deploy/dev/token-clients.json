@@ -29,6 +29,22 @@
     "scopes": ["approvals:decide", "audit:read"]
   },
   {
+    "client_id": "cli-jane-globex",
+    "client_secret": "jane-globex-dev-secret",
+    "principal": "user:jane.globex",
+    "tenant": "globex",
+    "roles": ["tenant-user"],
+    "scopes": ["task:submit", "knowledge:search:read"]
+  },
+  {
+    "client_id": "cli-approver-globex",
+    "client_secret": "approver-globex-dev-secret",
+    "principal": "user:approver.globex",
+    "tenant": "globex",
+    "roles": ["tenant-approver"],
+    "scopes": ["approvals:decide", "audit:read"]
+  },
+  {
     "client_id": "svc-orchestrator",
     "client_secret": "orchestrator-dev-secret",
     "principal": "svc:orchestrator",
@@ -89,6 +105,14 @@
     "client_secret": "agent-knowledge-dev-secret",
     "principal": "agent:knowledge-agent@0.1.0",
     "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
+    "client_id": "agent-knowledge-agent-globex",
+    "client_secret": "agent-knowledge-globex-dev-secret",
+    "principal": "agent:knowledge-agent@0.1.0",
+    "tenant": "globex",
     "roles": ["agent"],
     "scopes": []
   },

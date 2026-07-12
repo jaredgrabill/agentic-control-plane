@@ -17,6 +17,15 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tokenClients = readFileSync(join(repoRoot, 'deploy', 'dev', 'token-clients.json'), 'utf8');
 
+// Phase 4 item 1: the tenant registry is the single source of truth for the
+// tenant → NATS account map. The NATS accounts block is generated from the
+// same file (scripts/gen-nats-accounts.mjs), so callout minting and the
+// server's account boundary can never drift apart.
+const tenants = JSON.parse(readFileSync(join(repoRoot, 'deploy', 'dev', 'tenants.json'), 'utf8'));
+const tenantAccounts = JSON.stringify(
+  Object.fromEntries(tenants.map(({ tenant, account }) => [tenant, account])),
+);
+
 const base = {
   ...process.env,
   ACP_TOKEN_CLIENTS: tokenClients,
@@ -33,6 +42,8 @@ const base = {
   ACP_ONLINE_EVAL: join(repoRoot, 'deploy', 'dev', 'online-eval.json'),
   // Flush spans quickly so traces are queryable moments after a task runs.
   OTEL_BSP_SCHEDULE_DELAY: '500',
+  // tenant claim → NATS account NAME, derived from deploy/dev/tenants.json.
+  ACP_BUS_TENANT_ACCOUNTS: tenantAccounts,
 };
 
 const services = [
@@ -114,6 +125,21 @@ const services = [
       // Version-qualifies this worker's task queue (item 4).
       ACP_AGENT_VERSION: '0.1.0',
       ACP_AGENT_CLIENT_SECRET: 'agent-knowledge-dev-secret',
+      ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+    },
+  ],
+  // Phase 4 item 1: a SECOND-tenant worker for the same agent binary. Its own
+  // token-service client carries tenant globex, so its callout-minted bus
+  // session lands in TENANT_GLOBEX — the E2E isolation proof exercises this
+  // identity. It polls the same agent-{id}@{version} Temporal queue.
+  [
+    'knowledge-agent-globex',
+    'uv',
+    ['run', '--directory', 'python', 'python', '-m', 'knowledge_agent.main'],
+    {
+      ACP_AGENT_CLIENT_ID: 'agent-knowledge-agent-globex',
+      ACP_AGENT_VERSION: '0.1.0',
+      ACP_AGENT_CLIENT_SECRET: 'agent-knowledge-globex-dev-secret',
       ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
     },
   ],

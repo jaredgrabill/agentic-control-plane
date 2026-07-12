@@ -66,6 +66,10 @@ const xkeySeed = process.env.ACP_NATS_AUTH_XKEY_SEED;
 if (issuerSeed !== undefined && xkeySeed !== undefined) {
   const issuerKp = accountFromSeed(issuerSeed);
   const xkeyKp = curveFromSeed(xkeySeed);
+  // tenant claim → NATS account NAME. Derived from the tenant registry
+  // (deploy/dev/tenants.json) by run-platform.mjs so the callout mints into
+  // exactly the accounts the generated server config defines; a tenant absent
+  // from this map is refused at evaluate step 4 (registered-tenants-only).
   const tenantAccounts = JSON.parse(
     env('ACP_BUS_TENANT_ACCOUNTS', '{"acme":"TENANT_ACME"}'),
   ) as Record<string, string>;
