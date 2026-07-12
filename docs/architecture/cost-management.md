@@ -17,6 +17,17 @@ Nothing can be optimized, budgeted, or charged until we know who spent what:
   a versioned price book (per model, including cache-read/write and batch
   rates). Prices change; the price book is versioned so historical costs
   stay honest.
+  *Status:* Cost Meter v0 (`@acp/cost-meter`) ships the versioned price
+  book and deterministic pricing math. The book (`pricebooks/<version>.json`,
+  format `acp-price-book/v1`) is keyed on concrete post-gateway model ids
+  with input/output/cache-read/cache-write USD-per-MTok rates plus a required
+  fallback for unknown/absent models; all pricing runs in integer micro-USD.
+  **Versioning policy:** books are immutable once merged — a price change is a
+  new dated file plus a bump of `CURRENT_PRICE_BOOK_VERSION`, and the version
+  used is recorded per task in `task.completed`. The orchestrator prices its
+  own ledger from usage (§Budget Enforcement); OTel span-at-close pricing,
+  hourly/daily rollups, batch rates, and eval/shadow cost centers are
+  deferred past v0.
 - Rollups: real-time (budget enforcement) → hourly (dashboards) → daily
   (chargeback source of truth, exportable to corporate FinOps tooling).
 
@@ -36,10 +47,18 @@ org → tenant → team/feature → agent → task
 - **Task-level:** every task carries a token/step budget in workflow state —
   the runaway-loop backstop. Exhaustion is a clean, reportable outcome
   ("budget exhausted after step 7"), not an OOM-style surprise.
-  *Status:* Orchestrator v1 enforces `max_steps` and `max_tokens` at
-  dispatch-gating (in-flight steps of a parallel wave complete and are
-  kept); `max_cost_usd` is accepted and recorded in the task audit but not
-  enforced until the Cost Meter's price book exists.
+  *Status:* Orchestrator v1 enforces `max_steps`, `max_tokens`, and
+  `max_cost_usd` at dispatch-gating (in-flight steps of a parallel wave
+  complete and are kept, so any budget can overshoot honestly by in-flight
+  usage). `max_cost_usd` is priced from the Cost Meter book: the orchestrator
+  fetches the book once per task, pins its version, prices each wave's usage
+  after it completes, and records `cost_usd` + `price_book_version` (and a
+  `cost_fallback_priced` flag) in `task.completed`. If the book is unavailable
+  it fails **closed** when `max_cost_usd` is set (the budget can't be honored)
+  and otherwise proceeds with cost recording disabled. v0 caveat: a step's
+  cost is priced on `usage.model` (last-write-wins across a step's completions
+  — no multi-model blending); cache tokens are priced at cache rates and do
+  not count toward `max_tokens`.
 - **Agent/tenant/org-level:** enforced at the Gateway and LLM gateway.
   Soft threshold (80%) → alerts; hard cap → structured rejection clients can
   degrade on gracefully. Caps auto-reset per window (monthly by default).
@@ -90,5 +109,9 @@ org → tenant → team/feature → agent → task
   that doubles token use pages before the invoice does).
 - Showback reports per team/tenant from day one; chargeback becomes a
   configuration choice once trust in the numbers is established.
+  *Status:* Cost Meter v0 ships `scripts/showback.mjs <tenant> [--since]`,
+  an audit-derived rollup (total cost, cost/task, per-capability breakdown,
+  fallback-priced count) read from the durable `task.completed` stream. Auto-
+  provisioned dashboards and anomaly detection are deferred past v0.
 - Canary gates include cost: a version that's 2× cost for 1% quality doesn't
   promote by default — that trade needs a human's signature.

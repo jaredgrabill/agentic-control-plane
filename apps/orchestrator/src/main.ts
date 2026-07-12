@@ -20,6 +20,7 @@ import { OTLPTraceExporter as LegacyOTLPTraceExporter } from 'otel-legacy-export
 import { Resource as LegacyResource } from 'otel-legacy-resources';
 import { BatchSpanProcessor as LegacyBatchSpanProcessor } from 'otel-legacy-trace-base';
 import { NativeConnection, Worker } from '@temporalio/worker';
+import { defaultPriceBookPath } from '@acp/cost-meter';
 import { createControlActivities } from './activities.js';
 import { CONTROL_TASK_QUEUE } from './types.js';
 
@@ -46,6 +47,7 @@ const activities = createControlActivities({
   ),
   audit: new AuditPublisher(nc, logger),
   logger,
+  priceBookPath: env('ACP_PRICE_BOOK_PATH', defaultPriceBookPath()),
 });
 
 const connection = await NativeConnection.connect({

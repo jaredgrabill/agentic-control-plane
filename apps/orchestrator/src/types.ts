@@ -7,6 +7,7 @@ import type {
   StepResult,
   TaskRequest,
 } from '@acp/protocol';
+import type { ResolvedPriceBook } from '@acp/cost-meter/pricing';
 
 /**
  * Delegation depth cap (agent-patterns.md): 1 = delegated directly from the
@@ -101,6 +102,14 @@ export interface ControlActivities {
   }): Promise<{ token: string }>;
   /** Protocol-validated audit emission (JetStream-acked). */
   emitAudit(event: Record<string, unknown>): Promise<void>;
+  /**
+   * Loads and resolves the current price book to integer micro-USD rates
+   * (Cost Meter). Called once per task; the resolved book is pinned into
+   * workflow state and its version recorded in the task audit. On failure
+   * the workflow fails closed only when max_cost_usd is set — otherwise cost
+   * recording is disabled and the task proceeds.
+   */
+  getPriceBook(): Promise<ResolvedPriceBook>;
 }
 
 /**

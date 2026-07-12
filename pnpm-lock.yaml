@@ -276,6 +276,9 @@ importers:
 
   apps/orchestrator:
     dependencies:
+      '@acp/cost-meter':
+        specifier: workspace:*
+        version: link:../../packages/cost-meter
       '@acp/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
@@ -542,6 +545,22 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
 
+  packages/cost-meter:
+    dependencies:
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
+
   packages/create-agent:
     devDependencies:
       '@acp/agent-sdk':
@@ -677,6 +696,9 @@ importers:
 
   tests/e2e:
     devDependencies:
+      '@acp/cost-meter':
+        specifier: workspace:*
+        version: link:../../packages/cost-meter
       '@acp/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

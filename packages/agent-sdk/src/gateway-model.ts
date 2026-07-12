@@ -70,12 +70,14 @@ export class GatewayModel implements ContextualModel {
       );
       return {
         text: response.text,
-        // Cache reads/writes are real processed input — the budget counts them.
-        inputTokens:
-          response.usage.input_tokens +
-          response.usage.cache_read_input_tokens +
-          response.usage.cache_creation_input_tokens,
+        // input_tokens is non-cached input only; cache reads/writes are
+        // reported separately and priced at their own (cheaper) rates. They
+        // do NOT count toward max_tokens — the orchestrator's tokensUsed()
+        // stays input+output (Cost Meter convention, coordinated with 0a).
+        inputTokens: response.usage.input_tokens,
         outputTokens: response.usage.output_tokens,
+        cacheReadTokens: response.usage.cache_read_input_tokens,
+        cacheWriteTokens: response.usage.cache_creation_input_tokens,
         model: response.model,
       };
     } catch (err) {

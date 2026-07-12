@@ -166,11 +166,12 @@ describe('phase 2 tool agents scenario', () => {
   });
 
   it('recorded the delegation and the zero-LLM usage in the audit trail', async () => {
-    // The audit consumer is asynchronous; give the stream a moment.
+    // The audit consumer is asynchronous; give the stream a moment. Wait for
+    // task.completed too — the Cost Meter assertion below reads its details.
     let events: AuditEvent[] = [];
     for (let i = 0; i < 20; i++) {
       events = await auditEvents(costTaskId);
-      if (events.length >= 4) break;
+      if (events.length >= 4 && events.some((e) => e.event_type === 'task.completed')) break;
       await new Promise((r) => setTimeout(r, 1000));
     }
     const types = events.map((e) => e.event_type);
@@ -199,6 +200,13 @@ describe('phase 2 tool agents scenario', () => {
     const usage = (completed.details as { usage?: { llm_calls?: number } }).usage;
     expect(usage, 'step.completed must carry usage').toBeDefined();
     expect(usage!.llm_calls, 'tool agents are zero-LLM in v0').toBe(0);
+
+    // Cost Meter v0: a zero-LLM task costs exactly $0 — no tokens, no charge,
+    // regardless of the price book's rates.
+    const taskCompleted = events.find((e) => e.event_type === 'task.completed')!;
+    const cost = (taskCompleted.details as { usage_totals?: { cost_usd?: number | null } })
+      .usage_totals?.cost_usd;
+    expect(cost, 'zero-LLM task cost is exactly 0').toBe(0);
   });
 
   it('recorded both gateway tool calls with the full chain, allow decisions, and lineage', async () => {

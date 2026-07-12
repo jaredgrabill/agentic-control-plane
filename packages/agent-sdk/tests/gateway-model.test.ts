@@ -103,9 +103,12 @@ describe('GatewayModel.complete', () => {
     });
 
     expect(response.text).toBe('gateway says hi');
-    // Cache reads/writes are real processed input — the budget counts them.
-    expect(response.inputTokens).toBe(45);
+    // input_tokens is non-cached input only; cache reads/writes are reported
+    // separately (priced at their own rates; excluded from max_tokens).
+    expect(response.inputTokens).toBe(10);
     expect(response.outputTokens).toBe(4);
+    expect(response.cacheReadTokens).toBe(30);
+    expect(response.cacheWriteTokens).toBe(5);
     expect(response.model).toBe('dev-echo@1');
   });
 
@@ -230,8 +233,17 @@ describe('Agent.execute binding', () => {
       capability: 'test.echo',
       purpose: 'agent',
     });
-    // Usage flowed through CountingModel from the gateway's counters.
-    expect(result.usage).toEqual({ llm_calls: 1, input_tokens: 45, output_tokens: 4 });
+    // Usage flowed through CountingModel from the gateway's counters: input
+    // is non-cached only, cache reads/writes and the resolved model land in
+    // their own fields for the Cost Meter to price.
+    expect(result.usage).toEqual({
+      llm_calls: 1,
+      input_tokens: 10,
+      output_tokens: 4,
+      cache_read_tokens: 30,
+      cache_write_tokens: 5,
+      model: 'dev-echo@1',
+    });
   });
 
   it('isContextualModel: GatewayModel yes, FakeModel no — the unit-test seam is untouched', () => {

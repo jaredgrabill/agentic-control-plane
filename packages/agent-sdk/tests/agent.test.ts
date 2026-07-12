@@ -165,6 +165,38 @@ describe('execute', () => {
     const result = await counted.execute(stepRequest());
     expect(result.usage?.llm_calls).toBe(2);
     expect(result.usage?.output_tokens).toBeGreaterThan(0);
+    // FakeModel reports no concrete model and no cache tokens: usage omits
+    // model/cache_* entirely, so the step is fallback-priced and zero-LLM
+    // usage stays byte-identical to before the cache fields existed.
+    expect(result.usage).not.toHaveProperty('model');
+    expect(result.usage).not.toHaveProperty('cache_read_tokens');
+    expect(result.usage).not.toHaveProperty('cache_write_tokens');
+  });
+
+  it('usage carries the model id and cache tokens when the model reports them', async () => {
+    const counted = new Agent({
+      manifest: MANIFEST,
+      model: new FakeModel([
+        { text: 'first', inputTokens: 100, outputTokens: 40, cacheReadTokens: 200, model: 'x@1' },
+        { text: 'second', inputTokens: 10, outputTokens: 5, cacheWriteTokens: 512, model: 'y@2' },
+      ]),
+    });
+    counted.capability('test.echo', async (ctx) => {
+      await ctx.model.complete('first');
+      await ctx.model.complete('second');
+      return goodOutput();
+    });
+
+    const result = await counted.execute(stepRequest());
+    expect(result.usage).toEqual({
+      llm_calls: 2,
+      input_tokens: 110,
+      output_tokens: 45,
+      cache_read_tokens: 200,
+      cache_write_tokens: 512,
+      // Last non-undefined model wins (v0 last-write-wins approximation).
+      model: 'y@2',
+    });
   });
 
   it('retrieval requires a configured retriever', async () => {

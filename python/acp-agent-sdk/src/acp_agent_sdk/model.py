@@ -14,9 +14,15 @@ from acp_agent_sdk.errors import CapabilityError, ErrorClass
 @dataclass
 class ModelResponse:
     text: str
+    # Non-cached input tokens only; cache reads/writes are reported separately.
     input_tokens: int = 0
     output_tokens: int = 0
-    model: str = "fake"
+    # Input tokens served from / written to the provider's prompt cache.
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    # None for the FakeModel test seam (no concrete model → fallback-priced),
+    # a concrete model id from the gateway. Mirrors the TS ModelResponse.model?.
+    model: str | None = None
 
 
 class ModelClient(Protocol):

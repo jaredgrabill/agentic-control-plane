@@ -1132,11 +1132,22 @@ export const taskContractSchema = {
       "properties": {
         "input_tokens": {
           "type": "integer",
-          "minimum": 0
+          "minimum": 0,
+          "description": "Non-cached input tokens only. Cache reads/writes are counted separately below and priced at their own rates; they do NOT count toward max_tokens."
         },
         "output_tokens": {
           "type": "integer",
           "minimum": 0
+        },
+        "cache_read_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Input tokens served from the provider's prompt cache. Priced at the cache-read rate; excluded from max_tokens accounting."
+        },
+        "cache_write_tokens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Input tokens written to the provider's prompt cache (cache creation). Priced at the cache-write rate; excluded from max_tokens accounting."
         },
         "model": {
           "type": "string"

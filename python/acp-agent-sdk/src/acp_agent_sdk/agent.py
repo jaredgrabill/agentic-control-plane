@@ -40,12 +40,20 @@ class _CountingModel:
     llm_calls: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    # Last non-None resolved model id across completions (v0 last-write-wins).
+    model: str | None = None
 
     async def complete(self, prompt: str, *, max_tokens: int = 1024) -> ModelResponse:
         self.llm_calls += 1
         response = await self.inner.complete(prompt, max_tokens=max_tokens)
         self.input_tokens += response.input_tokens
         self.output_tokens += response.output_tokens
+        self.cache_read_tokens += response.cache_read_tokens
+        self.cache_write_tokens += response.cache_write_tokens
+        if response.model is not None:
+            self.model = response.model
         return response
 
 
@@ -243,12 +251,22 @@ class Agent:
         return result
 
     @staticmethod
-    def _usage(counting: _CountingModel) -> dict[str, int]:
-        return {
+    def _usage(counting: _CountingModel) -> dict[str, int | str]:
+        # Cache tokens and model id are emitted only when present, keeping
+        # zero-LLM usage byte-identical to before the cache fields existed and
+        # matching the TypeScript SDK's usageOf().
+        usage: dict[str, int | str] = {
             "llm_calls": counting.llm_calls,
             "input_tokens": counting.input_tokens,
             "output_tokens": counting.output_tokens,
         }
+        if counting.cache_read_tokens > 0:
+            usage["cache_read_tokens"] = counting.cache_read_tokens
+        if counting.cache_write_tokens > 0:
+            usage["cache_write_tokens"] = counting.cache_write_tokens
+        if counting.model is not None:
+            usage["model"] = counting.model
+        return usage
 
     def answer_builder(self) -> AnswerBuilder:
         return AnswerBuilder()
