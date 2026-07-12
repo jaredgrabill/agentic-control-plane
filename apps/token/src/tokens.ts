@@ -169,10 +169,7 @@ export class TokenIssuer {
     return undefined;
   }
 
-  private assertNotDenied(
-    grant: string,
-    params: Parameters<TokenIssuer['denialFor']>[0],
-  ): void {
+  private assertNotDenied(grant: string, params: Parameters<TokenIssuer['denialFor']>[0]): void {
     const denial = this.denialFor(params);
     if (denial !== undefined) {
       throw new TokenDeniedError(

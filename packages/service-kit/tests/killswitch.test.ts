@@ -10,19 +10,28 @@ interface Entry {
 }
 
 function ncWith(kv: unknown): NatsConnection {
-  return { jetstream: () => ({ views: { kv: () => Promise.resolve(kv) } }) } as unknown as NatsConnection;
+  return {
+    jetstream: () => ({ views: { kv: () => Promise.resolve(kv) } }),
+  } as unknown as NatsConnection;
 }
 
 const flush = () => new Promise((r) => setImmediate(r));
 
+/** Mirrors the module's KV key derivation: base64url of the principal (KV forbids : and @). */
+const principalKey = (sub: string): string =>
+  `killswitch.principal.${Buffer.from(sub, 'utf8').toString('base64url')}`;
+
 describe('KillSwitchControl principal denylist', () => {
-  it('writes and clears the killswitch.principal.{sub} key with the full principal', async () => {
+  it('writes and clears the base64url-encoded principal key (KV forbids : and @)', async () => {
     const puts: [string, string][] = [];
     const nc = ncWith({ put: (k: string, v: string) => (puts.push([k, v]), Promise.resolve(1)) });
     const control = await KillSwitchControl.open(nc);
+    const key = principalKey('agent:cloud-agent@0.1.0');
+    // The stored key must be a valid NATS KV key: no ':' or '@'.
+    expect(key).not.toMatch(/[:@]/);
 
     await control.denyPrincipal('agent:cloud-agent@0.1.0', 'compromised', 'svc:agent-ci');
-    expect(puts[0]![0]).toBe('killswitch.principal.agent:cloud-agent@0.1.0');
+    expect(puts[0]![0]).toBe(key);
     expect(JSON.parse(puts[0]![1])).toMatchObject({
       active: true,
       reason: 'compromised',
@@ -30,7 +39,7 @@ describe('KillSwitchControl principal denylist', () => {
     });
 
     await control.allowPrincipal('agent:cloud-agent@0.1.0');
-    expect(puts[1]![0]).toBe('killswitch.principal.agent:cloud-agent@0.1.0');
+    expect(puts[1]![0]).toBe(key);
     expect(JSON.parse(puts[1]![1])).toEqual({ active: false });
   });
 });
@@ -40,12 +49,12 @@ describe('KillSwitchWatcher principal denylist', () => {
     async function* entries(): AsyncGenerator<Entry> {
       await Promise.resolve();
       yield {
-        key: 'killswitch.principal.user:bob',
+        key: principalKey('user:bob'),
         operation: 'PUT',
         string: () => JSON.stringify({ active: true, reason: 'x' }),
       };
       yield {
-        key: 'killswitch.principal.user:alice',
+        key: principalKey('user:alice'),
         operation: 'PUT',
         string: () => JSON.stringify({ active: false }),
       };

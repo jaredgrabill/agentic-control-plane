@@ -6,8 +6,9 @@
 
 import { OpenTelemetryActivityInboundInterceptor } from '@temporalio/interceptors-opentelemetry';
 import { NativeConnection, Worker } from '@temporalio/worker';
-import { connect, type NatsConnection } from 'nats';
+import { connect, tokenAuthenticator, type NatsConnection } from 'nats';
 import type { Agent } from './agent.js';
+import { BusTokenSource } from './bus-token.js';
 import { GatewayModel } from './gateway-model.js';
 import { NatsRetriever, TokenExchanger } from './retriever.js';
 import { configureTracing } from './telemetry.js';
@@ -26,23 +27,28 @@ export async function serveAgent(agent: Agent): Promise<void> {
   });
 
   let nc: NatsConnection | undefined;
+  let busTokens: BusTokenSource | undefined;
   if (agent.retriever === undefined) {
     const clientSecret = process.env.ACP_AGENT_CLIENT_SECRET;
     if (clientSecret === undefined) {
       throw new Error('ACP_AGENT_CLIENT_SECRET is required to serve an agent');
     }
+    const tokenUrl = process.env.ACP_TOKEN_URL ?? 'http://localhost:7101';
+    const clientId = process.env.ACP_AGENT_CLIENT_ID ?? `agent-${agent.agentId}`;
+    // Item 0c: the bus identity is minted from a platform JWT via the auth
+    // callout — no static NATS user. A background refresh keeps the token
+    // live; the authenticator's function form re-reads it on every connect
+    // attempt, so a reconnect presents a fresh token.
+    const source = new BusTokenSource({ tokenUrl, clientId, clientSecret, logger: agent.log });
+    busTokens = source;
+    await source.start();
     nc = await connect({
       servers: process.env.ACP_NATS_URL ?? 'nats://localhost:4222',
-      user: process.env.ACP_NATS_AGENT_USER ?? 'agent-knowledge',
-      pass: process.env.ACP_NATS_AGENT_PASSWORD ?? 'agent-knowledge-dev-password',
+      authenticator: tokenAuthenticator(() => source.token()),
     });
     agent.retriever = new NatsRetriever({
       nc,
-      exchanger: new TokenExchanger({
-        tokenUrl: process.env.ACP_TOKEN_URL ?? 'http://localhost:7101',
-        clientId: process.env.ACP_AGENT_CLIENT_ID ?? `agent-${agent.agentId}`,
-        clientSecret,
-      }),
+      exchanger: new TokenExchanger({ tokenUrl, clientId, clientSecret }),
     });
   }
 
@@ -68,8 +74,9 @@ export async function serveAgent(agent: Agent): Promise<void> {
       },
     });
   } catch (err) {
-    // Temporal startup failed after we opened NATS: close the connection we
-    // own so its socket doesn't keep the process alive.
+    // Temporal startup failed after we opened NATS: stop the refresh timer
+    // and close the connection we own so nothing keeps the process alive.
+    busTokens?.stop();
     await nc?.close();
     throw err;
   }

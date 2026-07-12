@@ -357,4 +357,17 @@ describe('pure helpers', () => {
   it('createToolClient binds the code-forge server from the environment', () => {
     expect(createToolClient()).toBeDefined();
   });
+
+  it('createToolClient wires the acp:tools exchange only when a client secret is set', () => {
+    const saved = process.env.ACP_AGENT_CLIENT_SECRET;
+    try {
+      delete process.env.ACP_AGENT_CLIENT_SECRET;
+      expect(createToolClient()).toBeDefined();
+      process.env.ACP_AGENT_CLIENT_SECRET = 'agent-code-dev-secret';
+      expect(createToolClient()).toBeDefined();
+    } finally {
+      if (saved === undefined) delete process.env.ACP_AGENT_CLIENT_SECRET;
+      else process.env.ACP_AGENT_CLIENT_SECRET = saved;
+    }
+  });
 });

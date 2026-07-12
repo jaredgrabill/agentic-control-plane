@@ -278,6 +278,7 @@ class Agent:
         from temporalio.contrib.opentelemetry import TracingInterceptor
         from temporalio.worker import Worker
 
+        from acp_agent_sdk.bus import BusTokenSource
         from acp_agent_sdk.retriever import NatsRetriever, TokenExchanger
         from acp_agent_sdk.telemetry import configure_tracing
 
@@ -297,18 +298,33 @@ class Agent:
             )
 
         if self.retriever is None:
+            token_url = os.environ.get("ACP_TOKEN_URL", "http://localhost:7101")
+            client_id = os.environ.get("ACP_AGENT_CLIENT_ID", f"agent-{self.agent_id}")
+            client_secret = os.environ["ACP_AGENT_CLIENT_SECRET"]
+            # Item 0c: the bus identity is minted from a platform JWT via the
+            # auth callout — no static NATS user. A background refresh keeps
+            # the token live and pushes each new one onto the connection so a
+            # reconnect presents a fresh credential.
+            bus_tokens = BusTokenSource(
+                token_url=token_url, client_id=client_id, client_secret=client_secret
+            )
+            await bus_tokens.start()
             nc = NatsClient()
+
+            def _update_token(token: str) -> None:
+                nc.options["token"] = token
+
+            bus_tokens.on_refresh = _update_token
             await nc.connect(
                 servers=os.environ.get("ACP_NATS_URL", "nats://localhost:4222"),
-                user=os.environ.get("ACP_NATS_AGENT_USER", "agent-knowledge"),
-                password=os.environ.get("ACP_NATS_AGENT_PASSWORD", "agent-knowledge-dev-password"),
+                token=bus_tokens.token(),
             )
             self.retriever = NatsRetriever(
                 nc=nc,
                 exchanger=TokenExchanger(
-                    token_url=os.environ.get("ACP_TOKEN_URL", "http://localhost:7101"),
-                    client_id=os.environ.get("ACP_AGENT_CLIENT_ID", f"agent-{self.agent_id}"),
-                    client_secret=os.environ["ACP_AGENT_CLIENT_SECRET"],
+                    token_url=token_url,
+                    client_id=client_id,
+                    client_secret=client_secret,
                 ),
             )
 

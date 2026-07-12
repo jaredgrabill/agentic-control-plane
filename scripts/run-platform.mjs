@@ -31,7 +31,19 @@ const base = {
 };
 
 const services = [
-  ['token', 'node', ['apps/token/dist/main.js'], {}],
+  [
+    'token',
+    'node',
+    ['apps/token/dist/main.js'],
+    {
+      // NATS auth callout: dev seeds for the issuer account (signs minted
+      // bus user JWTs) and the responder xkey (seals auth requests). Their
+      // public halves are in deploy/compose/nats/nats-server.conf. Committed
+      // dev-only — a hardened deployment vaults fresh seeds.
+      ACP_NATS_AUTH_ISSUER_SEED: 'SAAJEKZZJVRSXKW4IF7JU553MIIBJ33TBQTEREDBX6PUDOYXCQ4LFBBV24',
+      ACP_NATS_AUTH_XKEY_SEED: 'SXAK5Q7G7ZME7KLXT6BL6IGR7LCKOOBUSNTZCYEACXZP2WIWSWPARSQYKY',
+    },
+  ],
   ['audit', 'node', ['apps/audit/dist/main.js'], {}],
   ['registry', 'node', ['apps/registry/dist/main.js'], {}],
   ['policy', 'node', ['apps/policy/dist/main.js'], {}],
@@ -75,10 +87,10 @@ const services = [
     'uv',
     ['run', '--directory', 'python', 'python', '-m', 'knowledge_agent.main'],
     {
+      // Item 0c: the agent mints an acp:bus token with its own client and
+      // connects through the auth callout — no static NATS user/password.
       ACP_AGENT_CLIENT_ID: 'agent-knowledge-agent',
       ACP_AGENT_CLIENT_SECRET: 'agent-knowledge-dev-secret',
-      ACP_NATS_AGENT_USER: 'agent-knowledge',
-      ACP_NATS_AGENT_PASSWORD: 'agent-knowledge-dev-password',
       ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
     },
   ],

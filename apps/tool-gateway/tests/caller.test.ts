@@ -58,17 +58,17 @@ describe('resolveCaller', () => {
   });
 
   it('refuses an agent-principal token with no delegation chain at all', () => {
-    expect(() =>
-      resolveCaller(claims({ sub: 'agent:cloud-agent@0.1.0' }), 't'),
-    ).toThrow(/no delegation chain terminating at svc:orchestrator/);
+    expect(() => resolveCaller(claims({ sub: 'agent:cloud-agent@0.1.0' }), 't')).toThrow(
+      /no delegation chain terminating at svc:orchestrator/,
+    );
   });
 
   it('refuses an agent-principal token whose chain does not bottom out at the orchestrator', () => {
     // A fabricated chain: agent acting for a user, but no broker hop —
     // the shape an agent secret + stolen user token would forge.
-    expect(() =>
-      resolveCaller(claims({ act: { sub: 'agent:cloud-agent@0.1.0' } }), 't'),
-    ).toThrow(AuthError);
+    expect(() => resolveCaller(claims({ act: { sub: 'agent:cloud-agent@0.1.0' } }), 't')).toThrow(
+      AuthError,
+    );
     expect(() =>
       resolveCaller(
         claims({ act: { sub: 'agent:cloud-agent@0.1.0', act: { sub: 'svc:some-other' } } }),

@@ -9,11 +9,14 @@ const agentKey = (agentId: string): string => `killswitch.agent.${agentId}`;
 /**
  * Principal denylist key (ADR-0007 broker-time check, item 0c). Keyed by the
  * full principal string (agent:{id}@{ver}, user:{id}, svc:{id}). NATS KV keys
- * are dot-delimited tokens, so `:` and `@` are safe but `.` in a principal
- * would split the key — principals use `:`/`@`/`-` only, so this is a stable
- * 1:1 mapping. The watcher's `killswitch.>` prefix already covers it.
+ * forbid `:` and `@` (only `-/_=.` plus alphanumerics), so the principal is
+ * base64url-encoded into the last token — an alphabet the KV accepts, applied
+ * identically on write (denyPrincipal) and read (principalDenied), so no
+ * caller ever handles the encoded form. The watcher's `killswitch.>` prefix
+ * still covers it.
  */
-const principalKey = (sub: string): string => `killswitch.principal.${sub}`;
+const principalKey = (sub: string): string =>
+  `killswitch.principal.${Buffer.from(sub, 'utf8').toString('base64url')}`;
 
 export interface KillSwitchState {
   active: boolean;
