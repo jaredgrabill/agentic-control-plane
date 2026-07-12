@@ -1,0 +1,30 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f82",
+  "occurred_at": "2026-07-12T09:00:10Z",
+  "tenant": "acme",
+  "event_type": "approval.timeout",
+  "actor": {
+    "principal": "svc:orchestrator",
+    "delegation_chain": [{ "sub": "user:jane.doe" }, { "sub": "svc:orchestrator" }]
+  },
+  "action": {
+    "name": "approval.timeout",
+    "inputs_digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  },
+  "reason": {
+    "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+    "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51"
+  },
+  "artifacts": {
+    "agent_id": "approval-test-agent",
+    "agent_version": "0.1.0",
+    "workflow_run_id": "task-0197a3b0-run-1"
+  },
+  "details": {
+    "approval_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90",
+    "deny_after_s": 86400,
+    "escalated": true,
+    "rejected_signals": 0,
+    "latency_ms": 86400000
+  }
+}
