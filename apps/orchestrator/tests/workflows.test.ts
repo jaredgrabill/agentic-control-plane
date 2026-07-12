@@ -164,6 +164,7 @@ const control: ControlActivities = {
   deployTransition: vi.fn(),
   promoteVersion: vi.fn(),
   evaluateGate: vi.fn(),
+  scoreWithJudge: vi.fn(() => Promise.resolve()),
   now: vi.fn(),
 };
 

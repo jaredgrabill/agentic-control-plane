@@ -1,5 +1,7 @@
 import process from 'node:process';
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
+import { loadOnlineEvalConfig } from '@acp/online-eval';
 import {
   AuditPublisher,
   JwtVerifier,
@@ -36,6 +38,8 @@ const nc = await connectBus({
 });
 await ensureAuditStream(nc);
 
+const onlineEvalPath = env('ACP_ONLINE_EVAL', '');
+
 const activities = createControlActivities({
   registryUrl: env('ACP_REGISTRY_URL', 'http://localhost:7102'),
   policyUrl: env('ACP_POLICY_URL', 'http://localhost:7103'),
@@ -50,6 +54,14 @@ const activities = createControlActivities({
   audit: new AuditPublisher(nc, logger),
   logger,
   priceBookPath: env('ACP_PRICE_BOOK_PATH', defaultPriceBookPath()),
+  // Item 6: online-eval judge scoring. The config gates per-step sampling and
+  // names the judge rubric/model class; the judge POSTs scores to the eval
+  // service and completes via the LLM gateway. Absent config disables sampling.
+  ...(onlineEvalPath === ''
+    ? {}
+    : { onlineEval: loadOnlineEvalConfig(readFileSync(onlineEvalPath, 'utf8')) }),
+  llmGatewayUrl: env('ACP_LLM_GATEWAY_URL', 'http://localhost:7107'),
+  evaluationUrl: env('ACP_EVALUATION_URL', 'http://localhost:7108'),
   // Item 5: the pre-dispatch kill-switch checkpoint answers from this in-memory
   // watcher (fast path — routers react within the <10s SLO without polling).
   killSwitch: await KillSwitchWatcher.start(nc, logger),

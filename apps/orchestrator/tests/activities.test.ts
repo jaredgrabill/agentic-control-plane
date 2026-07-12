@@ -3,6 +3,7 @@ import { plan as planParser } from '@acp/protocol';
 import { createLogger, sha256Digest } from '@acp/service-kit';
 import { describe, expect, it, vi } from 'vitest';
 import { CURRENT_PRICE_BOOK_VERSION, defaultPriceBookPath } from '@acp/cost-meter';
+import { loadOnlineEvalConfig, type OnlineEvalConfig } from '@acp/online-eval';
 import { createControlActivities } from '../src/activities.js';
 import type { ControlActivities, PrincipalSnapshot } from '../src/types.js';
 
@@ -63,6 +64,7 @@ function makeActivities(
   fetchImpl: typeof fetch,
   audit: AuditEvent[] = [],
   priceBookPathOverride?: string,
+  onlineEval?: OnlineEvalConfig,
 ) {
   return createControlActivities({
     registryUrl: 'http://registry.test',
@@ -81,6 +83,9 @@ function makeActivities(
     logger: createLogger('orchestrator-test'),
     fetchImpl,
     priceBookPath: priceBookPathOverride ?? defaultPriceBookPath(),
+    llmGatewayUrl: 'http://llm.test',
+    evaluationUrl: 'http://eval.test',
+    ...(onlineEval === undefined ? {} : { onlineEval }),
   });
 }
 
@@ -335,6 +340,316 @@ describe('resolveRoute', () => {
       pin: { agentId: 'knowledge-agent', version: '9.9.9' },
     });
     expect(missing).toBeNull();
+  });
+});
+
+describe('resolveRoute judge sampling (item 6)', () => {
+  const onlineEval = loadOnlineEvalConfig(
+    JSON.stringify({
+      schema: 'acp-online-eval/v1',
+      sample: { default_percent: 0, per_agent: { 'knowledge-agent': 100 } },
+      judge: { rubric: 'answer-quality@1', model_class: 'default-tier', min_agreement: 0.85 },
+      probes: { interval_s: 2, probe_failure_weight: 5, targets: [] },
+      budget: { window_h: 24, min_samples: 5, slo_default: 0.9 },
+      drift: {
+        input_threshold: 0.5,
+        score_drop_threshold: 0.1,
+        min_current: 5,
+        reference_days: 7,
+        cooldown_h: 6,
+        severe_probe_failures: 2,
+        floor_probe_cycles: 4,
+        floor_burn_ratio: 2.0,
+      },
+    }),
+  );
+  const routingFetch = (set: Record<string, unknown>) =>
+    vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token') ? jsonResponse({ access_token: 't' }) : jsonResponse(set),
+    ) as unknown as typeof fetch;
+
+  it('samples a step at the per-agent rate (100% → always judged)', async () => {
+    const r = await makeActivities(
+      routingFetch({ active: card }),
+      [],
+      undefined,
+      onlineEval,
+    ).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+      stepId: 's-1',
+    });
+    expect(r?.judge_sample).toBe(true);
+  });
+
+  it('does not sample when there is no stepId or no config', async () => {
+    const noStep = await makeActivities(
+      routingFetch({ active: card }),
+      [],
+      undefined,
+      onlineEval,
+    ).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+    });
+    expect(noStep?.judge_sample).toBe(false);
+    const noConfig = await makeActivities(routingFetch({ active: card })).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+      stepId: 's-1',
+    });
+    expect(noConfig?.judge_sample).toBe(false);
+  });
+
+  it('samples a canary-route step at the per-agent rate', async () => {
+    const r = await makeActivities(
+      routingFetch({ active: card, canary: { card, ramp_percent: 100 } }),
+      [],
+      undefined,
+      onlineEval,
+    ).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+      stepId: 's-1',
+    });
+    expect(r?.route).toBe('canary');
+    expect(r?.judge_sample).toBe(true);
+  });
+
+  it('boosts the primary to always-judged during a shadow soak', async () => {
+    // default_percent is 0, so only the shadow boost can select an unlisted agent.
+    const cloudActive: AgentCard = { ...card, manifest: { ...card.manifest, id: 'cloud-agent' } };
+    const r = await makeActivities(
+      routingFetch({ active: cloudActive, shadow: cloudActive }),
+      [],
+      undefined,
+      onlineEval,
+    ).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+      stepId: 's-1',
+    });
+    expect(r?.judge_sample).toBe(true);
+    expect(r?.shadowCard).toBeDefined();
+  });
+});
+
+describe('scoreWithJudge (item 6)', () => {
+  const onlineEval = loadOnlineEvalConfig(
+    JSON.stringify({
+      schema: 'acp-online-eval/v1',
+      sample: { default_percent: 5 },
+      judge: { rubric: 'answer-quality@1', model_class: 'default-tier', min_agreement: 0.85 },
+      probes: { interval_s: 2, probe_failure_weight: 5, targets: [] },
+      budget: { window_h: 24, min_samples: 5, slo_default: 0.9 },
+      drift: {
+        input_threshold: 0.5,
+        score_drop_threshold: 0.1,
+        min_current: 5,
+        reference_days: 7,
+        cooldown_h: 6,
+        severe_probe_failures: 2,
+        floor_probe_cycles: 4,
+        floor_burn_ratio: 2.0,
+      },
+    }),
+  );
+
+  interface Recorded {
+    scores: unknown[];
+    fetchImpl: typeof fetch;
+  }
+  function judgeFetch(verdictText: string | { throw: true }): Recorded {
+    const scores: unknown[] = [];
+    const fetchImpl = vi.fn((url: string | URL, init?: RequestInit) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      if (s.endsWith('/v1/complete')) {
+        if (typeof verdictText === 'object') return Promise.reject(new Error('gateway down'));
+        return jsonResponse({
+          text: verdictText,
+          model_class: 'default-tier',
+          model: 'dev-echo@1',
+          provider: 'dev',
+          model_classes_version: '2026.07',
+          usage: {
+            input_tokens: 1,
+            output_tokens: 1,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+          },
+          attempts: [{ provider: 'dev', model: 'dev-echo@1', outcome: 'ok', duration_ms: 1 }],
+        });
+      }
+      if (s.endsWith('/v1/scores')) {
+        scores.push(JSON.parse((init?.body as string | undefined) ?? '{}'));
+        return jsonResponse({ accepted: true }, 202);
+      }
+      return jsonResponse({}, 404);
+    }) as unknown as typeof fetch;
+    return { scores, fetchImpl };
+  }
+
+  const baseInput = {
+    task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+    tenant: 'acme',
+    agent_id: 'knowledge-agent',
+    agent_version: '0.1.0',
+    capability: 'knowledge.answer_with_citations',
+    route: 'active' as const,
+    input: { question: 'How many vacation days?' },
+  };
+
+  it('scores a completed step, POSTs the score, and emits eval.score', async () => {
+    const { scores, fetchImpl } = judgeFetch(
+      '{"schema":"acp-judge-verdict/v1","score":0.92,"verdict":"pass","reasons":["grounded"]}',
+    );
+    const audit: AuditEvent[] = [];
+    await makeActivities(fetchImpl, audit, undefined, onlineEval).scoreWithJudge({
+      ...baseInput,
+      output: { text: 'The policy grants 20 days.', citations: [] },
+      status: 'completed',
+    });
+    expect(scores).toHaveLength(1);
+    expect(scores[0]).toMatchObject({
+      source: 'judge',
+      route: 'active',
+      score: 0.92,
+      outcome: 'scored',
+    });
+    const ev = audit.find((e) => e.event_type === 'eval.score');
+    expect(ev?.action.name).toBe('judge:answer-quality@1');
+    expect((ev?.details as { outcome: string }).outcome).toBe('scored');
+  });
+
+  it('ingests a failed step as a quality observation with NO LLM call', async () => {
+    const { scores, fetchImpl } = judgeFetch('should-not-be-called');
+    const audit: AuditEvent[] = [];
+    await makeActivities(fetchImpl, audit, undefined, onlineEval).scoreWithJudge({
+      ...baseInput,
+      output: null,
+      status: 'failed',
+    });
+    expect(scores).toHaveLength(1);
+    expect(scores[0]).toMatchObject({ passed: false, outcome: 'failed_step', score: null });
+  });
+
+  it('does NOT ingest a score when the judge errors (no budget burn), but still audits', async () => {
+    const { scores, fetchImpl } = judgeFetch({ throw: true });
+    const audit: AuditEvent[] = [];
+    await makeActivities(fetchImpl, audit, undefined, onlineEval).scoreWithJudge({
+      ...baseInput,
+      output: { text: 'answer', citations: [] },
+      status: 'completed',
+    });
+    expect(scores).toHaveLength(0);
+    const ev = audit.find((e) => e.event_type === 'eval.score');
+    expect((ev?.details as { outcome: string }).outcome).toBe('judge_error');
+  });
+
+  it('does NOT ingest on an unparseable verdict but audits the outcome', async () => {
+    const { scores, fetchImpl } = judgeFetch('I think the answer is fine, no JSON here.');
+    const audit: AuditEvent[] = [];
+    await makeActivities(fetchImpl, audit, undefined, onlineEval).scoreWithJudge({
+      ...baseInput,
+      output: { text: 'answer', citations: [] },
+      status: 'completed',
+    });
+    expect(scores).toHaveLength(0);
+    const ev = audit.find((e) => e.event_type === 'eval.score');
+    expect((ev?.details as { outcome: string }).outcome).toBe('unparseable_verdict');
+  });
+
+  it('renders citations (doc_id + snippet) and stringifies an input with no text field', async () => {
+    const { scores, fetchImpl } = judgeFetch(
+      '{"schema":"acp-judge-verdict/v1","score":0.8,"verdict":"pass","reasons":[]}',
+    );
+    await makeActivities(fetchImpl, [], undefined, onlineEval).scoreWithJudge({
+      ...baseInput,
+      input: { unusual_field: 'no question key here' },
+      output: {
+        text: 'grounded answer',
+        citations: [{ doc_id: 'policy-4', snippet: 'twenty days' }, 'raw-string-citation'],
+      },
+      status: 'completed',
+    });
+    expect(scores).toHaveLength(1);
+    expect(scores[0]).toMatchObject({ score: 0.8 });
+  });
+
+  it('REFUSES to score (uncalibrated) with no LLM call when the model class is uncalibrated', async () => {
+    const uncalibratedConfig = loadOnlineEvalConfig(
+      JSON.stringify({
+        schema: 'acp-online-eval/v1',
+        sample: { default_percent: 5 },
+        // reasoning-tier has no committed calibration record → the gate refuses.
+        judge: { rubric: 'answer-quality@1', model_class: 'reasoning-tier', min_agreement: 0.85 },
+        probes: { interval_s: 2, probe_failure_weight: 5, targets: [] },
+        budget: { window_h: 24, min_samples: 5, slo_default: 0.9 },
+        drift: {
+          input_threshold: 0.5,
+          score_drop_threshold: 0.1,
+          min_current: 5,
+          reference_days: 7,
+          cooldown_h: 6,
+          severe_probe_failures: 2,
+          floor_probe_cycles: 4,
+          floor_burn_ratio: 2.0,
+        },
+      }),
+    );
+    const { scores, fetchImpl } = judgeFetch('should-not-be-called');
+    const audit: AuditEvent[] = [];
+    await makeActivities(fetchImpl, audit, undefined, uncalibratedConfig).scoreWithJudge({
+      ...baseInput,
+      output: { text: 'answer', citations: [] },
+      status: 'completed',
+    });
+    expect(scores).toHaveLength(0);
+    const ev = audit.find((e) => e.event_type === 'eval.score');
+    expect((ev?.details as { outcome: string }).outcome).toBe('uncalibrated');
+  });
+
+  it('treats a completed step with null output as a failed observation', async () => {
+    const { scores, fetchImpl } = judgeFetch('should-not-be-called');
+    await makeActivities(fetchImpl, [], undefined, onlineEval).scoreWithJudge({
+      ...baseInput,
+      output: null,
+      status: 'completed',
+    });
+    expect(scores[0]).toMatchObject({ passed: false, outcome: 'failed_step' });
+  });
+
+  it('falls back to rubric/model defaults when no online-eval config is wired', async () => {
+    const { scores, fetchImpl } = judgeFetch(
+      '{"schema":"acp-judge-verdict/v1","score":0.88,"verdict":"pass","reasons":[]}',
+    );
+    // No onlineEval passed → the judge uses answer-quality@1 / default-tier.
+    await makeActivities(fetchImpl).scoreWithJudge({
+      ...baseInput,
+      output: { text: 'answer', citations: [] },
+      status: 'completed',
+    });
+    expect(scores[0]).toMatchObject({ score: 0.88, rubric: 'answer-quality@1' });
+  });
+
+  it('never throws — a total failure is swallowed (alarm-continue)', async () => {
+    const brokenFetch = vi.fn(() =>
+      Promise.reject(new Error('everything is down')),
+    ) as unknown as typeof fetch;
+    await expect(
+      makeActivities(brokenFetch, [], undefined, onlineEval).scoreWithJudge({
+        ...baseInput,
+        output: { text: 'a', citations: [] },
+        status: 'completed',
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 

@@ -55,6 +55,7 @@ import {
   type ExecutedWrite,
   type PrincipalSnapshot,
   type ShadowStepInput,
+  type JudgeScoreInput,
   type StepDispatch,
   type StepExecution,
 } from './types.js';
@@ -738,6 +739,7 @@ async function runAgentStep(
     capability: planStep.capability,
     tenant: dispatch.tenant,
     taskId: dispatch.taskId,
+    stepId: planStep.step_id,
     ...(dispatch.compensation === undefined
       ? {}
       : {
@@ -905,6 +907,7 @@ async function runAgentStep(
         capability: planStep.capability,
         tenant: dispatch.tenant,
         taskId: dispatch.taskId,
+        stepId: planStep.step_id,
       })
     )?.card;
     if (current?.manifest.id !== card.manifest.id || current.version !== card.version) {
@@ -1102,6 +1105,31 @@ async function runAgentStep(
     return stepResult;
   });
 
+  // Online-eval (item 6): a sampled production step is judged out-of-band. The
+  // JudgeScoreWorkflow is started ABANDON and never awaited (shadow pattern), so
+  // a slow or failing judge cannot touch this step's latency or outcome. Only
+  // active/canary routes are sampled (a pinned compensator is never judged).
+  if (route.judge_sample === true && route.route !== 'pinned') {
+    await startChild(JudgeScoreWorkflow, {
+      workflowId: `${workflowInfo().workflowId}-judge`,
+      parentClosePolicy: ParentClosePolicy.ABANDON,
+      args: [
+        {
+          task_id: dispatch.taskId,
+          step_id: planStep.step_id,
+          tenant: dispatch.tenant,
+          agent_id: card.manifest.id,
+          agent_version: card.version,
+          capability: planStep.capability,
+          route: route.route,
+          input: request.input,
+          output: result.output ?? null,
+          status: result.status,
+        } satisfies JudgeScoreInput,
+      ],
+    });
+  }
+
   // Executed metadata — only the child knows the discovered capability's risk
   // and reversibility. The TaskWorkflow reads it to build the compensation
   // stack (completed R2/R3 with a compensator) or record an irreversible write.
@@ -1231,10 +1259,43 @@ export async function ShadowStepWorkflow(input: ShadowStepInput): Promise<void> 
       duration_ms: durationMs,
       ...(result.error?.class === undefined ? {} : { error_class: result.error.class }),
     });
+
+    // Online-eval (item 6): judge the shadow output too. This is the paired
+    // scoring item 4 promised — the shadow score (route 'shadow') feeds ONLY the
+    // deployment gate's metrics.quality, never the production error budget (the
+    // budget excludes shadow rows). scoreWithJudge catches everything.
+    await control.scoreWithJudge({
+      task_id: input.taskId,
+      step_id: input.stepId,
+      tenant: input.tenant,
+      agent_id: shadowCard.manifest.id,
+      agent_version: shadowCard.version,
+      capability: input.capability,
+      route: 'shadow',
+      input: input.input,
+      output: result.output ?? null,
+      status: result.status === 'completed' ? 'completed' : 'failed',
+    });
   } catch (err) {
     // A shadow failure is data, never an incident: record it and close cleanly.
     await emitResult('failed', { error_class: 'shadow_error', error: rootMessage(err) });
   }
+}
+
+/**
+ * JudgeScoreWorkflow (item 6) — a fire-and-forget child that scores ONE
+ * completed production step with the calibrated judge. Started
+ * ParentClosePolicy.ABANDON and never awaited by the parent step, so its
+ * latency (an LLM call) and any failure are fully isolated from the task. The
+ * whole body is a single scoreWithJudge activity that catches everything; the
+ * ≤3 retries here are a safety net for a transient audit/POST blip.
+ */
+export async function JudgeScoreWorkflow(input: JudgeScoreInput): Promise<void> {
+  const scorer = proxyActivities<ControlActivities>({
+    startToCloseTimeout: '30 seconds',
+    retry: { maximumAttempts: 3 },
+  });
+  await scorer.scoreWithJudge(input);
 }
 
 /** Signal the gateway sends a verified human decision on. */

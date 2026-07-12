@@ -340,6 +340,18 @@ importers:
       '@acp/cost-meter':
         specifier: workspace:*
         version: link:../../packages/cost-meter
+      '@acp/embedding':
+        specifier: workspace:*
+        version: link:../../packages/embedding
+      '@acp/judge':
+        specifier: workspace:*
+        version: link:../../packages/judge
+      '@acp/llm-client':
+        specifier: workspace:*
+        version: link:../../packages/llm-client
+      '@acp/online-eval':
+        specifier: workspace:*
+        version: link:../../packages/online-eval
       '@acp/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

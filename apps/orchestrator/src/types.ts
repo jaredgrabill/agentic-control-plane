@@ -262,6 +262,33 @@ export interface RouteResult {
   bucket: number;
   /** The shadow candidate to mirror this step to (shadow soak only). */
   shadowCard?: AgentCard;
+  /**
+   * Online-eval (item 6): true when THIS step is selected for judged scoring.
+   * Deterministic per (task_id, step_id); boosted to always-on during a shadow
+   * soak so the incumbent is judged paired with the candidate. Never set for a
+   * pinned compensator dispatch.
+   */
+  judge_sample?: boolean;
+}
+
+/**
+ * Input to the JudgeScoreWorkflow — a fire-and-forget judged score of one
+ * completed step (item 6). Carries the input + output text in-hand at step
+ * completion (the only place the full output exists; audit keeps digests only).
+ */
+export interface JudgeScoreInput {
+  task_id: string;
+  step_id: string;
+  tenant: string;
+  agent_id: string;
+  agent_version: string;
+  capability: string;
+  /** The route the scored step ran (shadow scores feed only deployment gates). */
+  route: 'active' | 'canary' | 'shadow';
+  input: Record<string, unknown>;
+  /** The step's Answer-envelope output; null on a failed step. */
+  output: Record<string, unknown> | null;
+  status: 'completed' | 'failed';
 }
 
 /** Input to the ShadowStepWorkflow — a fire-and-forget mirror of one primary step. */
@@ -386,8 +413,20 @@ export interface ControlActivities {
     capability: string;
     tenant: string;
     taskId: string;
+    /** The step being routed — feeds deterministic per-step judge sampling (item 6). */
+    stepId?: string;
     pin?: { agentId: string; version: string };
   }): Promise<RouteResult | null>;
+  /**
+   * Online-eval (item 6): score one completed step with the calibrated judge
+   * and ingest the result. Gated judge call (an uncalibrated/failed judge is a
+   * JUDGE condition, never an agent quality observation) → embed the input →
+   * POST the score to the eval service (idempotent) → emit eval.score. Catches
+   * everything: a scoring failure must never disturb the (abandoned) workflow
+   * or, via the shadow path, the primary step. A failed step is ingested as a
+   * quality observation (passed:false) with no LLM call.
+   */
+  scoreWithJudge(input: JudgeScoreInput): Promise<void>;
   /**
    * Cedar decision for one delegation. The orchestrator is the PEP for
    * agent-to-agent and user-to-agent delegation. Presents the principal's

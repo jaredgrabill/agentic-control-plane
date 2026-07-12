@@ -59,6 +59,7 @@ const control: ControlActivities = {
   deployTransition: vi.fn().mockResolvedValue(undefined),
   promoteVersion: vi.fn().mockResolvedValue(undefined),
   evaluateGate: vi.fn(),
+  scoreWithJudge: vi.fn(() => Promise.resolve()),
   now: vi.fn().mockResolvedValue({ iso: '2026-07-11T10:00:00Z' }),
 };
 
