@@ -316,6 +316,38 @@ describe('resolveRoute', () => {
     expect(r).toBeNull();
   });
 
+  it('activeOnly (probe) routes to the active card even under a 100% canary ramp, never mirrors', async () => {
+    const candidate = { ...card, version: '0.2.0' };
+    // ramp 100 means EVERY bucket would session-pin to the canary — a probe
+    // must still land on the active incumbent, and must not shadow-mirror.
+    const r = await makeActivities(
+      routingFetch({
+        active: card,
+        canary: { card: candidate, ramp_percent: 100 },
+        shadow: candidate,
+      }),
+    ).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+      activeOnly: true,
+    });
+    expect(r?.route).toBe('active');
+    expect(r?.card.version).toBe(card.version);
+    expect(r?.shadowCard).toBeUndefined();
+
+    // No active version → null (a probe never falls back to a candidate).
+    const none = await makeActivities(
+      routingFetch({ canary: { card: candidate, ramp_percent: 100 } }),
+    ).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+      activeOnly: true,
+    });
+    expect(none).toBeNull();
+  });
+
   it('pins to an exact version (compensator) and never mirrors; 404 → null', async () => {
     const pinFetch = vi.fn((url: string | URL) => {
       const s = String(url);

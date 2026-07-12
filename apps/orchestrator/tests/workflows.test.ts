@@ -655,6 +655,41 @@ describe('TaskWorkflow v1', () => {
     expect(knowledgeExec).toHaveBeenCalledTimes(2);
   });
 
+  it('(12) probe plumbing: a probe-flagged task routes active-only even under a canary ramp', async () => {
+    knowledgeExec.mockImplementation((req) =>
+      Promise.resolve(
+        completedStep(req, answerOutput('Answer [1].', ['policy/change-management'], 0.9)),
+      ),
+    );
+    // Simulate a 100% canary ramp: WITHOUT activeOnly the route session-pins
+    // to a canary version whose task queue has NO worker here, so the step
+    // could never complete. Completion therefore PROVES the probe flag reached
+    // resolveRoute and pinned the step to the active card (0.1.0, served).
+    vi.mocked(control.resolveRoute).mockImplementation(async (input) => {
+      const routedCard = await control.discoverAgent(input.capability, input.tenant);
+      if (routedCard === null) return null;
+      if (input.activeOnly === true) return { card: routedCard, route: 'active', bucket: 0 };
+      return {
+        card: { ...routedCard, version: '9.9.9-canary' },
+        route: 'canary',
+        rampPercent: 100,
+        bucket: 0,
+      };
+    });
+
+    const result = await withWorkers(['knowledge-agent'], () =>
+      env.client.workflow.execute(TaskWorkflow, {
+        taskQueue: CONTROL_TASK_QUEUE,
+        workflowId: workflowId(),
+        args: [task, { probe: true }],
+      }),
+    );
+    expect(result.status).toBe('completed');
+    const routeCalls = vi.mocked(control.resolveRoute).mock.calls;
+    expect(routeCalls.length).toBeGreaterThan(0);
+    expect(routeCalls.every(([input]) => input.activeOnly === true)).toBe(true);
+  });
+
   it('fails honestly when no active agent serves the capability (kill-switch path)', async () => {
     vi.mocked(control.discoverAgent).mockResolvedValue(null);
     const result = await runTask(task, []);
