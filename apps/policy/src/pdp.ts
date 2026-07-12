@@ -16,7 +16,7 @@ export interface AuthzRequest {
 }
 
 export interface AuthzDecision {
-  decision: 'allow' | 'deny';
+  decision: 'allow' | 'deny' | 'require-approval';
   bundle_version: string;
   determining_policies: string[];
 }
@@ -67,10 +67,24 @@ export class CedarPdp {
         'cedar policy errors during evaluation',
       );
     }
+    const determining = answer.response.diagnostics.reason;
+    if (answer.response.decision !== 'allow') {
+      // Cedar deny (forbid, no permit): annotations never rescue a deny.
+      return {
+        decision: 'deny',
+        bundle_version: this.bundle.version,
+        determining_policies: determining,
+      };
+    }
+    // Three-way lift, restrictive tie-break: a Cedar allow becomes
+    // require-approval if ANY policy that determined it carries
+    // @decision("require-approval"). A later broad plain permit cannot
+    // silently bypass a gate that also matched — the annotated permit wins.
+    const gated = determining.some((id) => this.bundle.approvalPolicies.has(id));
     return {
-      decision: answer.response.decision === 'allow' ? 'allow' : 'deny',
+      decision: gated ? 'require-approval' : 'allow',
       bundle_version: this.bundle.version,
-      determining_policies: answer.response.diagnostics.reason,
+      determining_policies: determining,
     };
   }
 }

@@ -15,7 +15,7 @@ const BUNDLE_DIR = join(import.meta.dirname, '..', '..', '..', 'policies');
 
 interface GoldenCase {
   name: string;
-  expect: 'allow' | 'deny';
+  expect: 'allow' | 'deny' | 'require-approval';
   determined_by?: string;
   request: AuthzRequest;
 }
@@ -45,8 +45,12 @@ describe('golden policy suite (the active bundle)', () => {
   }
 
   it('every policy in the bundle is exercised by at least one allow case (no untested territory)', () => {
+    // A require-approval verdict is a lifted allow: the annotated permit still
+    // determined it, so those cases exercise their determining policy too.
     const exercised = new Set(
-      golden.cases.filter((c) => c.expect === 'allow').map((c) => c.determined_by),
+      golden.cases
+        .filter((c) => c.expect === 'allow' || c.expect === 'require-approval')
+        .map((c) => c.determined_by),
     );
     for (const id of pdp.policyIds) {
       expect(exercised, `policy ${id} has no allow case in policies/tests/cases.json`).toContain(
@@ -91,12 +95,126 @@ describe('bundle loading', () => {
 describe('fail-closed evaluation', () => {
   it('denies when the policy text does not evaluate', () => {
     const broken = new CedarPdp(
-      { policies: { broken: 'this is not cedar at all' }, version: 'test+000000000000' },
+      {
+        policies: { broken: 'this is not cedar at all' },
+        approvalPolicies: new Set(),
+        version: 'test+000000000000',
+      },
       logger,
     );
     const decision = broken.authorize(golden.cases[0]!.request);
     expect(decision.decision).toBe('deny');
     expect(decision.determining_policies).toEqual([]);
+  });
+});
+
+describe('three-way lift (annotation-gated permits)', () => {
+  const anyRequest: AuthzRequest = {
+    principal: { type: 'User', id: 'user:jane.doe', attrs: { tenant: 'acme' } },
+    action: 'delegate',
+    resource: { type: 'Agent', id: 'change-agent', attrs: { tenant: 'acme' } },
+    context: { risk: 'R2', scopes: ['task:submit'] },
+  };
+
+  it('lifts an allow determined by an annotated permit to require-approval', () => {
+    const pdp = new CedarPdp(
+      {
+        policies: { gate: '@id("gate")\npermit (principal, action, resource);' },
+        approvalPolicies: new Set(['gate']),
+        version: 'test+000000000000',
+      },
+      logger,
+    );
+    expect(pdp.authorize(anyRequest).decision).toBe('require-approval');
+  });
+
+  // RESTRICTIVE TIE-BREAK, PINNED: when a plain permit AND an annotated
+  // permit both determine the same allow, the annotated one wins — a later
+  // broad permit must NEVER silently bypass a gate that also matched.
+  it('a plain permit alongside a matching annotated permit still requires approval', () => {
+    const pdp = new CedarPdp(
+      {
+        policies: {
+          plain: '@id("plain")\npermit (principal, action, resource);',
+          gate: '@id("gate")\npermit (principal, action, resource);',
+        },
+        approvalPolicies: new Set(['gate']),
+        version: 'test+000000000000',
+      },
+      logger,
+    );
+    const decision = pdp.authorize(anyRequest);
+    expect(decision.decision).toBe('require-approval');
+    expect(decision.determining_policies).toEqual(expect.arrayContaining(['plain', 'gate']));
+  });
+
+  it('a plain-only allow stays allow (no annotation, no gate)', () => {
+    const pdp = new CedarPdp(
+      {
+        policies: { plain: '@id("plain")\npermit (principal, action, resource);' },
+        approvalPolicies: new Set(['plain-that-does-not-match']),
+        version: 'test+000000000000',
+      },
+      logger,
+    );
+    expect(pdp.authorize(anyRequest).decision).toBe('allow');
+  });
+
+  // An annotation NEVER rescues a deny: a forbid (even one perversely marked
+  // in approvalPolicies, which the loader would reject) still denies.
+  it('a forbid is never lifted — a deny stays a deny', () => {
+    const pdp = new CedarPdp(
+      {
+        policies: {
+          gate: '@id("gate")\npermit (principal, action, resource);',
+          block: '@id("block")\nforbid (principal, action, resource);',
+        },
+        approvalPolicies: new Set(['gate', 'block']),
+        version: 'test+000000000000',
+      },
+      logger,
+    );
+    expect(pdp.authorize(anyRequest).decision).toBe('deny');
+  });
+});
+
+describe('bundle annotation loading', () => {
+  const write = (dir: string, name: string, text: string) =>
+    writeFileSync(join(dir, `${name}.cedar`), text);
+
+  it('collects @decision("require-approval") permits into approvalPolicies', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'acp-gate-'));
+    write(dir, 'plain', '@id("plain")\npermit (principal, action, resource);');
+    write(
+      dir,
+      'gate',
+      '@id("gate")\n@decision("require-approval")\npermit (principal, action, resource);',
+    );
+    const loaded = loadBundle(dir);
+    expect([...loaded.approvalPolicies]).toEqual(['gate']);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('rejects @decision on a forbid (a deny is never an approval)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'acp-gate-'));
+    write(
+      dir,
+      'bad',
+      '@id("bad")\n@decision("require-approval")\nforbid (principal, action, resource);',
+    );
+    expect(() => loadBundle(dir)).toThrow(/non-permit/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('rejects an unknown @decision value', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'acp-gate-'));
+    write(
+      dir,
+      'bad',
+      '@id("bad")\n@decision("require-review")\npermit (principal, action, resource);',
+    );
+    expect(() => loadBundle(dir)).toThrow(/only supported value/);
+    rmSync(dir, { recursive: true, force: true });
   });
 });
 
