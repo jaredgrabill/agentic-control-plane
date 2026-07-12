@@ -4,7 +4,8 @@ import type { KV, NatsConnection } from 'nats';
 import type { RegistryAnnouncer } from './app.js';
 
 export const REGISTRY_BUCKET = 'acp_registry';
-export const cardKey = (agentId: string): string => `agent.${agentId}`;
+/** Versioned KV key (debt #3): one snapshot per (agent_id, version). */
+export const cardKey = (agentId: string, version: string): string => `agent.${agentId}.${version}`;
 
 /**
  * Publishes registry announcements on acp.platform.registry.<id>.<verb>
@@ -26,7 +27,7 @@ export class NatsRegistryAnnouncer implements RegistryAnnouncer {
   }
 
   async announce(verb: 'registered' | 'updated', card: AgentCard): Promise<void> {
-    await this.kv.put(cardKey(card.manifest.id), JSON.stringify(card));
+    await this.kv.put(cardKey(card.manifest.id, card.version), JSON.stringify(card));
     this.nc.publish(subjects.registry(card.manifest.id, verb), JSON.stringify(card));
     this.logger.info(
       { agent_id: card.manifest.id, verb, state: card.lifecycle_state },

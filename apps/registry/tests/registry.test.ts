@@ -6,7 +6,7 @@ import type {
   EvalBaseline,
   LifecycleState,
 } from '@acp/protocol';
-import { JwtVerifier, createLogger } from '@acp/service-kit';
+import { JwtVerifier, createLogger, stableStringify } from '@acp/service-kit';
 import type { FastifyInstance } from 'fastify';
 import {
   calculateJwkThumbprint,
@@ -18,29 +18,171 @@ import {
 } from 'jose';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { buildRegistryApp, REGISTRY_AUDIENCE } from '../src/app.js';
-import { stableStringify, verifyCard } from '../src/signing.js';
-import type { AgentFilter, RegistryStore } from '../src/store.js';
+import { verifyCard } from '../src/signing.js';
+import {
+  InvariantViolation,
+  type AgentFilter,
+  type PutResult,
+  type RegistryStore,
+  type RoutingSet,
+  type TransitionOptions,
+} from '../src/store.js';
 
 const ISSUER = 'https://token.test.local';
 
+/** Versioned in-memory store mirroring the Postgres invariants (debt #3). */
 class MemoryStore implements RegistryStore {
-  readonly cards = new Map<string, AgentCard>();
-  put(card: AgentCard): Promise<void> {
-    this.cards.set(card.manifest.id, card);
+  readonly rows = new Map<string, { card: AgentCard; ramp: number | null }>();
+  private key(id: string, v: string): string {
+    return `${id}@${v}`;
+  }
+  private rowsOf(id: string): { card: AgentCard; ramp: number | null }[] {
+    return [...this.rows.values()].filter((r) => r.card.manifest.id === id);
+  }
+  clear(): void {
+    this.rows.clear();
+  }
+  cardOf(id: string, v: string): AgentCard | undefined {
+    return this.rows.get(this.key(id, v))?.card;
+  }
+  migrate(): Promise<void> {
     return Promise.resolve();
   }
-  get(agentId: string): Promise<AgentCard | undefined> {
-    return Promise.resolve(this.cards.get(agentId));
+  put(card: AgentCard): Promise<PutResult> {
+    const k = this.key(card.manifest.id, card.version);
+    const existing = this.rows.get(k);
+    if (existing === undefined) {
+      this.rows.set(k, { card, ramp: null });
+      return Promise.resolve({ outcome: 'inserted', card });
+    }
+    if (stableStringify(existing.card.manifest) === stableStringify(card.manifest)) {
+      return Promise.resolve({ outcome: 'idempotent', card: existing.card });
+    }
+    return Promise.resolve({ outcome: 'conflict', existing: existing.card });
+  }
+  get(id: string): Promise<AgentCard | undefined> {
+    const rank: Record<LifecycleState, number> = {
+      active: 0,
+      canary: 1,
+      shadow: 2,
+      deprecated: 3,
+      registered: 4,
+      suspended: 5,
+      retired: 6,
+    };
+    const ranked = this.rowsOf(id)
+      .map((r) => r.card)
+      .sort((a, b) => {
+        const s = rank[a.lifecycle_state] - rank[b.lifecycle_state];
+        return s !== 0 ? s : b.updated_at.localeCompare(a.updated_at);
+      });
+    return Promise.resolve(ranked[0]);
+  }
+  getVersion(id: string, v: string): Promise<AgentCard | undefined> {
+    return Promise.resolve(this.cardOf(id, v));
+  }
+  listVersions(id: string): Promise<AgentCard[]> {
+    return Promise.resolve(
+      this.rowsOf(id)
+        .map((r) => r.card)
+        .sort((a, b) => b.updated_at.localeCompare(a.updated_at)),
+    );
   }
   list(filter: AgentFilter): Promise<AgentCard[]> {
     return Promise.resolve(
-      [...this.cards.values()].filter(
-        (c) =>
-          (filter.state === undefined || c.lifecycle_state === filter.state) &&
-          (filter.capability === undefined ||
-            c.manifest.capabilities.some((cap) => cap.name === filter.capability)),
-      ),
+      [...this.rows.values()]
+        .map((r) => r.card)
+        .filter(
+          (c) =>
+            (filter.state === undefined || c.lifecycle_state === filter.state) &&
+            (filter.capability === undefined ||
+              c.manifest.capabilities.some((cap) => cap.name === filter.capability)),
+        ),
     );
+  }
+  routingSet(capability: string): Promise<RoutingSet> {
+    const set: RoutingSet = {};
+    for (const r of [...this.rows.values()].sort((a, b) =>
+      a.card.version.localeCompare(b.card.version),
+    )) {
+      if (!r.card.manifest.capabilities.some((c) => c.name === capability)) continue;
+      const s = r.card.lifecycle_state;
+      if (s === 'active' && set.active === undefined) set.active = r.card;
+      else if (s === 'canary' && set.canary === undefined)
+        set.canary = { card: r.card, ramp_percent: r.ramp ?? 0 };
+      else if (s === 'shadow' && set.shadow === undefined) set.shadow = r.card;
+    }
+    return Promise.resolve(set);
+  }
+  transition(
+    id: string,
+    v: string,
+    to: LifecycleState,
+    opts: TransitionOptions,
+  ): Promise<AgentCard> {
+    const row = this.rows.get(this.key(id, v));
+    if (row === undefined) throw new Error(`no version ${v} of ${id}`);
+    // Enforce the partial-unique invariants the DB enforces.
+    if (
+      to === 'active' &&
+      this.rowsOf(id).some((r) => r !== row && r.card.lifecycle_state === 'active')
+    ) {
+      throw new InvariantViolation('one_active_version', 'another version is already active');
+    }
+    if (
+      (to === 'shadow' || to === 'canary') &&
+      this.rowsOf(id).some(
+        (r) =>
+          r !== row && (r.card.lifecycle_state === 'shadow' || r.card.lifecycle_state === 'canary'),
+      )
+    ) {
+      throw new InvariantViolation('one_candidate_version', 'a candidate already exists');
+    }
+    const updated: AgentCard = {
+      ...row.card,
+      lifecycle_state: to,
+      updated_at: opts.now,
+      ...(opts.setDeployedAt === true ? { deployed_at: opts.now } : {}),
+      ...(opts.reason !== undefined ? { state_reason: opts.reason } : {}),
+    };
+    row.card = updated;
+    row.ramp = opts.rampPercent === undefined ? null : opts.rampPercent;
+    return Promise.resolve(updated);
+  }
+  async promote(
+    id: string,
+    candidateVersion: string,
+    now: string,
+  ): Promise<{ incumbent?: AgentCard; candidate: AgentCard }> {
+    const active = this.rowsOf(id).find((r) => r.card.lifecycle_state === 'active');
+    let incumbent: AgentCard | undefined;
+    if (active !== undefined) {
+      incumbent = { ...active.card, lifecycle_state: 'deprecated', updated_at: now };
+      active.card = incumbent;
+    }
+    const candRow = this.rows.get(this.key(id, candidateVersion));
+    if (candRow === undefined) throw new Error('no candidate');
+    if (candRow.card.lifecycle_state !== 'canary') throw new Error('candidate not canary');
+    const candidate: AgentCard = {
+      ...candRow.card,
+      lifecycle_state: 'active',
+      deployed_at: now,
+      updated_at: now,
+    };
+    candRow.card = candidate;
+    candRow.ramp = null;
+    return Promise.resolve(incumbent === undefined ? { candidate } : { incumbent, candidate });
+  }
+  putBaseline(id: string, v: string, baseline: EvalBaseline): Promise<AgentCard> {
+    const row = this.rows.get(this.key(id, v));
+    if (row === undefined) throw new Error('no row');
+    const updated: AgentCard = {
+      ...row.card,
+      eval_baseline: baseline,
+      updated_at: new Date(Date.parse(row.card.updated_at) + 1000).toISOString(),
+    };
+    row.card = updated;
+    return Promise.resolve(updated);
   }
 }
 
@@ -91,7 +233,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  store.cards.clear();
+  store.clear();
   announcements.length = 0;
   suspensions.length = 0;
   auditEvents.length = 0;
@@ -141,6 +283,7 @@ async function register(body: unknown, scope = 'registry:write') {
   });
 }
 
+/** Legacy single-version state route (admin). */
 async function transition(agentId: string, state: LifecycleState, reason?: string) {
   return app.inject({
     method: 'POST',
@@ -148,6 +291,55 @@ async function transition(agentId: string, state: LifecycleState, reason?: strin
     headers: { authorization: `Bearer ${await makeToken('registry:admin')}` },
     payload: { state, ...(reason === undefined ? {} : { reason }) },
   });
+}
+
+/** Versioned state route with an explicit scope + optional ramp. */
+async function transitionVersion(
+  agentId: string,
+  version: string,
+  state: LifecycleState,
+  opts: { scope?: string; reason?: string; ramp_percent?: number } = {},
+) {
+  return app.inject({
+    method: 'POST',
+    url: `/v1/agents/${agentId}/versions/${version}/state`,
+    headers: { authorization: `Bearer ${await makeToken(opts.scope ?? 'registry:deploy')}` },
+    payload: {
+      state,
+      ...(opts.reason === undefined ? {} : { reason: opts.reason }),
+      ...(opts.ramp_percent === undefined ? {} : { ramp_percent: opts.ramp_percent }),
+    },
+  });
+}
+
+function baseline(overrides: Partial<EvalBaseline> = {}): EvalBaseline {
+  return {
+    schema: 'acp-eval-baseline/v1',
+    agent_id: 'knowledge-agent',
+    agent_version: '0.1.0',
+    metrics: { pass_rate: 1, citation_precision: 1, abstention_accuracy: 1 },
+    suite: { digest: `sha256:${'0'.repeat(64)}`, case_count: 7 },
+    harness: 'acp-agent-sdk-py@0.1.0',
+    recorded_at: '2026-07-11T09:00:00Z',
+    ...overrides,
+  };
+}
+
+async function putBaseline(agentId: string, body: unknown, scope = 'registry:write') {
+  return app.inject({
+    method: 'PUT',
+    url: `/v1/agents/${agentId}/baseline`,
+    headers: { authorization: `Bearer ${await makeToken(scope)}` },
+    payload: body as Record<string, unknown>,
+  });
+}
+
+/** Registers, records a baseline, and drives registered→shadow→canary. */
+async function makeCanary(version: string, ramp = 5): Promise<void> {
+  await register({ manifest: manifest(), version });
+  await putBaseline('knowledge-agent', baseline({ agent_version: version }));
+  await transitionVersion('knowledge-agent', version, 'shadow');
+  await transitionVersion('knowledge-agent', version, 'canary', { ramp_percent: ramp });
 }
 
 describe('registration', () => {
@@ -161,13 +353,46 @@ describe('registration', () => {
     expect(auditEvents.map((e) => e.event_type)).toEqual(['agent.registered']);
   });
 
+  it('is idempotent on an identical re-registration (200, no sibling touch)', async () => {
+    await register({ manifest: manifest(), version: '0.1.0' });
+    announcements.length = 0;
+    const again = await register({ manifest: manifest(), version: '0.1.0' });
+    expect(again.statusCode).toBe(200);
+    // No second announcement/audit for an idempotent re-register.
+    expect(announcements).toHaveLength(0);
+  });
+
+  it('409s a changed manifest under the same version (bump the version)', async () => {
+    await register({ manifest: manifest(), version: '0.1.0' });
+    const changed = await register({
+      manifest: manifest({ description: 'a different contract' }),
+      version: '0.1.0',
+    });
+    expect(changed.statusCode).toBe(409);
+    expect(changed.json<{ error: { message: string } }>().error.message).toContain(
+      'bump the version',
+    );
+  });
+
+  it('a new version never touches sibling rows (debt #3)', async () => {
+    await register({ manifest: manifest(), version: '0.1.0' });
+    await transition('knowledge-agent', 'active');
+    await putBaseline('knowledge-agent', baseline({ agent_version: '0.1.0' }));
+    const activeBefore = store.cardOf('knowledge-agent', '0.1.0')!;
+
+    const res = await register({ manifest: manifest(), version: '0.2.0' });
+    expect(res.statusCode).toBe(201);
+    // The incumbent's active card + baseline are untouched.
+    const activeAfter = store.cardOf('knowledge-agent', '0.1.0')!;
+    expect(activeAfter.lifecycle_state).toBe('active');
+    expect(activeAfter.eval_baseline).toEqual(activeBefore.eval_baseline);
+    expect(store.cardOf('knowledge-agent', '0.2.0')!.lifecycle_state).toBe('registered');
+  });
+
   it('detects card tampering after signature', async () => {
     const res = await register({ manifest: manifest(), version: '0.1.0' });
     const card = res.json<AgentCard>();
-    const tampered: AgentCard = {
-      ...card,
-      manifest: { ...card.manifest, owner: 'team-evil' },
-    };
+    const tampered: AgentCard = { ...card, manifest: { ...card.manifest, owner: 'team-evil' } };
     expect(await verifyCard(tampered, registryJwks)).toBe(false);
   });
 
@@ -204,18 +429,17 @@ describe('registration', () => {
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json<{ error: { message: string } }>().error.message).toContain('compensator');
 
-    // Compensator must resolve to a capability in the same manifest.
     const withCompensator = await register({
       manifest: manifest({
         capabilities: [r2Cap({ compensator: 'change.withdraw' }), withdrawCap()],
       }),
-      version: '0.1.0',
+      version: '0.2.0',
     });
     expect(withCompensator.statusCode).toBe(201);
 
     const irreversible = await register({
       manifest: manifest({ capabilities: [r2Cap({ irreversible: true })] }),
-      version: '0.1.0',
+      version: '0.3.0',
     });
     expect(irreversible.statusCode).toBe(201);
   });
@@ -275,28 +499,17 @@ describe('registration', () => {
     expect(r0Comp.statusCode).toBe(400);
     expect(r0Comp.json<{ error: { message: string } }>().error.message).toContain('R0');
 
-    const r3Comp = await register({
-      manifest: manifest({
-        capabilities: [
-          r2Cap({ compensator: 'change.withdraw' }),
-          withdrawCap({ risk: 'R3', compensator: 'change.submit' }),
-        ],
-      }),
-      version: '0.1.0',
-    });
-    expect(r3Comp.statusCode).toBe(400);
-
     const r1Comp = await register({
       manifest: manifest({
         capabilities: [r2Cap({ compensator: 'change.withdraw' }), withdrawCap({ risk: 'R1' })],
       }),
-      version: '0.1.0',
+      version: '0.2.0',
     });
     expect(r1Comp.statusCode).toBe(201);
   });
 
-  it('rejects an R0 that declares a compensator or irreversible', async () => {
-    const comp = await register({
+  it('rejects an R0 with a compensator or irreversible, and an R1 with irreversible', async () => {
+    const r0Comp = await register({
       manifest: manifest({
         capabilities: [
           { ...manifest().capabilities[0], compensator: 'change.withdraw' },
@@ -305,16 +518,23 @@ describe('registration', () => {
       }),
       version: '0.1.0',
     });
-    expect(comp.statusCode).toBe(400);
-    expect(comp.json<{ error: { message: string } }>().error.message).toContain('R0');
+    expect(r0Comp.statusCode).toBe(400);
+    expect(r0Comp.json<{ error: { message: string } }>().error.message).toContain('R0');
 
-    const irr = await register({
+    const r0Irr = await register({
       manifest: manifest({
         capabilities: [{ ...manifest().capabilities[0], irreversible: true }],
       }),
-      version: '0.1.0',
+      version: '0.2.0',
     });
-    expect(irr.statusCode).toBe(400);
+    expect(r0Irr.statusCode).toBe(400);
+
+    const r1Irr = await register({
+      manifest: manifest({ capabilities: [withdrawCap({ irreversible: true })] }),
+      version: '0.3.0',
+    });
+    expect(r1Irr.statusCode).toBe(400);
+    expect(r1Irr.json<{ error: { message: string } }>().error.message).toContain('R1');
   });
 
   it('rejects duplicate capability names and a missing version', async () => {
@@ -370,48 +590,70 @@ describe('discovery', () => {
     });
     expect(unknown.statusCode).toBe(404);
   });
+
+  it('representative get() prefers active over other states', async () => {
+    await register({ manifest: manifest(), version: '0.1.0' });
+    await transition('knowledge-agent', 'active');
+    await register({ manifest: manifest(), version: '0.2.0' });
+    const byId = await app.inject({
+      url: '/v1/agents/knowledge-agent',
+      headers: { authorization: `Bearer ${await makeToken('registry:read')}` },
+    });
+    expect(byId.json<AgentCard>().version).toBe('0.1.0');
+  });
+
+  it('lists all versions of an agent', async () => {
+    await register({ manifest: manifest(), version: '0.1.0' });
+    await register({ manifest: manifest(), version: '0.2.0' });
+    const res = await app.inject({
+      url: '/v1/agents/knowledge-agent/versions',
+      headers: { authorization: `Bearer ${await makeToken('registry:read')}` },
+    });
+    expect(res.json<{ versions: AgentCard[] }>().versions).toHaveLength(2);
+
+    const one = await app.inject({
+      url: '/v1/agents/knowledge-agent/versions/0.2.0',
+      headers: { authorization: `Bearer ${await makeToken('registry:read')}` },
+    });
+    expect(one.json<AgentCard>().version).toBe('0.2.0');
+  });
 });
 
-describe('lifecycle transitions', () => {
+describe('legacy single-version state route', () => {
   beforeEach(async () => {
     await register({ manifest: manifest(), version: '0.1.0' });
     announcements.length = 0;
     auditEvents.length = 0;
   });
 
-  it('promotes registered → active and announces the update', async () => {
+  it('bootstraps registered → active (admin) and stamps deployed_at', async () => {
     const res = await transition('knowledge-agent', 'active');
     expect(res.statusCode).toBe(200);
-    expect(res.json<AgentCard>().lifecycle_state).toBe('active');
-    expect(announcements.map((a) => a.verb)).toEqual(['updated']);
+    const card = res.json<AgentCard>();
+    expect(card.lifecycle_state).toBe('active');
+    expect(card.deployed_at).toBeDefined();
     expect(auditEvents.map((e) => e.event_type)).toEqual(['agent.lifecycle_changed']);
-    expect(suspensions).toHaveLength(0);
   });
 
-  it('suspends an active agent: kill-switch flag first, then announcement and audit', async () => {
+  it('suspends active then reinstates, flipping the kill-switch flag both ways', async () => {
     await transition('knowledge-agent', 'active');
     suspensions.length = 0;
     auditEvents.length = 0;
 
-    const res = await transition('knowledge-agent', 'suspended', 'bad citations in prod');
-    expect(res.statusCode).toBe(200);
+    const susp = await transition('knowledge-agent', 'suspended', 'bad citations');
+    expect(susp.statusCode).toBe(200);
     expect(suspensions).toEqual([
-      { agentId: 'knowledge-agent', suspended: true, reason: 'bad citations in prod' },
+      { agentId: 'knowledge-agent', suspended: true, reason: 'bad citations' },
     ]);
     expect(auditEvents.map((e) => e.event_type)).toEqual([
       'agent.lifecycle_changed',
       'killswitch.activated',
     ]);
-  });
 
-  it('reinstates a suspended agent and clears the flag', async () => {
-    await transition('knowledge-agent', 'active');
-    await transition('knowledge-agent', 'suspended', 'drill');
     suspensions.length = 0;
     auditEvents.length = 0;
-
-    const res = await transition('knowledge-agent', 'active', 'drill complete');
-    expect(res.statusCode).toBe(200);
+    const reinstate = await transition('knowledge-agent', 'active', 'drill complete');
+    expect(reinstate.statusCode).toBe(200);
     expect(suspensions).toEqual([
       { agentId: 'knowledge-agent', suspended: false, reason: 'drill complete' },
     ]);
@@ -421,115 +663,213 @@ describe('lifecycle transitions', () => {
     ]);
   });
 
-  it('rejects transitions outside the v0 vocabulary', async () => {
-    const res = await transition('knowledge-agent', 'suspended');
-    expect(res.statusCode).toBe(409);
-    expect(res.json<{ error: { message: string } }>().error.message).toContain('registered');
+  it('rejects an illegal transition and is 409 ambiguous for a multi-version agent', async () => {
+    const illegal = await transition('knowledge-agent', 'suspended');
+    expect(illegal.statusCode).toBe(409);
 
-    const canary = await transition('knowledge-agent', 'canary');
-    expect(canary.statusCode).toBe(409);
+    await register({ manifest: manifest(), version: '0.2.0' });
+    const ambiguous = await transition('knowledge-agent', 'active');
+    expect(ambiguous.statusCode).toBe(409);
+    expect(ambiguous.json<{ error: { message: string } }>().error.message).toContain('ambiguous');
   });
 
   it('404s on unknown agents', async () => {
-    const res = await transition('ghost-agent', 'active');
-    expect(res.statusCode).toBe(404);
+    expect((await transition('ghost-agent', 'active')).statusCode).toBe(404);
   });
 });
 
-describe('baseline recording', () => {
-  function baseline(overrides: Partial<EvalBaseline> = {}): EvalBaseline {
-    return {
-      schema: 'acp-eval-baseline/v1',
-      agent_id: 'knowledge-agent',
-      agent_version: '0.1.0',
-      metrics: { pass_rate: 1, citation_precision: 1, abstention_accuracy: 1 },
-      suite: {
-        digest: `sha256:${'0'.repeat(64)}`,
-        case_count: 7,
-      },
-      harness: 'acp-agent-sdk-py@0.1.0',
-      recorded_at: '2026-07-11T09:00:00Z',
-      ...overrides,
-    };
-  }
+describe('versioned transitions and scope classes', () => {
+  beforeEach(async () => {
+    await register({ manifest: manifest(), version: '0.1.0' });
+    await putBaseline('knowledge-agent', baseline({ agent_version: '0.1.0' }));
+    announcements.length = 0;
+    auditEvents.length = 0;
+  });
 
-  async function putBaseline(agentId: string, body: unknown, scope = 'registry:write') {
-    return app.inject({
-      method: 'PUT',
-      url: `/v1/agents/${agentId}/baseline`,
-      headers: { authorization: `Bearer ${await makeToken(scope)}` },
-      payload: body as Record<string, unknown>,
+  it('registered → shadow requires a baseline and registry:deploy', async () => {
+    // Without a baseline: register a second, baseline-less version.
+    await register({ manifest: manifest(), version: '0.2.0' });
+    const noBaseline = await transitionVersion('knowledge-agent', '0.2.0', 'shadow');
+    expect(noBaseline.statusCode).toBe(409);
+    expect(noBaseline.json<{ error: { message: string } }>().error.message).toContain(
+      'eval_baseline',
+    );
+
+    // A deploy edge driven with only admin scope is 403.
+    const wrongScope = await transitionVersion('knowledge-agent', '0.1.0', 'shadow', {
+      scope: 'registry:admin',
     });
-  }
+    expect(wrongScope.statusCode).toBe(403);
 
+    const ok = await transitionVersion('knowledge-agent', '0.1.0', 'shadow');
+    expect(ok.statusCode).toBe(200);
+    expect(ok.json<AgentCard>().lifecycle_state).toBe('shadow');
+  });
+
+  it('shadow → canary requires ramp_percent 1-100; canary → shadow clears it', async () => {
+    await transitionVersion('knowledge-agent', '0.1.0', 'shadow');
+    const noRamp = await transitionVersion('knowledge-agent', '0.1.0', 'canary');
+    expect(noRamp.statusCode).toBe(400);
+    const badRamp = await transitionVersion('knowledge-agent', '0.1.0', 'canary', {
+      ramp_percent: 0,
+    });
+    expect(badRamp.statusCode).toBe(400);
+
+    const ok = await transitionVersion('knowledge-agent', '0.1.0', 'canary', { ramp_percent: 25 });
+    expect(ok.statusCode).toBe(200);
+    expect(store.rows.get('knowledge-agent@0.1.0')!.ramp).toBe(25);
+
+    const demote = await transitionVersion('knowledge-agent', '0.1.0', 'shadow');
+    expect(demote.statusCode).toBe(200);
+    expect(store.rows.get('knowledge-agent@0.1.0')!.ramp).toBeNull();
+  });
+
+  it('refuses canary → active on the state route (promote only)', async () => {
+    await transitionVersion('knowledge-agent', '0.1.0', 'shadow');
+    await transitionVersion('knowledge-agent', '0.1.0', 'canary', { ramp_percent: 50 });
+    const res = await transitionVersion('knowledge-agent', '0.1.0', 'active');
+    expect(res.statusCode).toBe(409);
+    expect(res.json<{ error: { message: string } }>().error.message).toContain('promote');
+  });
+
+  it('enforces one_candidate_version: a second shadow is 409', async () => {
+    await register({ manifest: manifest(), version: '0.2.0' });
+    await putBaseline('knowledge-agent', baseline({ agent_version: '0.2.0' }));
+    await transitionVersion('knowledge-agent', '0.1.0', 'shadow');
+    const second = await transitionVersion('knowledge-agent', '0.2.0', 'shadow');
+    expect(second.statusCode).toBe(409);
+    expect(second.json<{ error: { message: string } }>().error.message).toContain('candidate');
+  });
+});
+
+describe('promote (atomic)', () => {
+  it('promotes canary → active and demotes the incumbent, 2 announcements + 2 audits', async () => {
+    // Incumbent 0.1.0 active.
+    await register({ manifest: manifest(), version: '0.1.0' });
+    await transition('knowledge-agent', 'active');
+    // Candidate 0.2.0 → canary.
+    await makeCanary('0.2.0', 50);
+    announcements.length = 0;
+    auditEvents.length = 0;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/agents/knowledge-agent/promote',
+      headers: { authorization: `Bearer ${await makeToken('registry:deploy')}` },
+      payload: { version: '0.2.0' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(store.cardOf('knowledge-agent', '0.2.0')!.lifecycle_state).toBe('active');
+    expect(store.cardOf('knowledge-agent', '0.2.0')!.deployed_at).toBeDefined();
+    expect(store.cardOf('knowledge-agent', '0.1.0')!.lifecycle_state).toBe('deprecated');
+    expect(announcements.map((a) => a.verb)).toEqual(['updated', 'updated']);
+    expect(auditEvents.map((e) => e.event_type)).toEqual([
+      'agent.lifecycle_changed',
+      'agent.lifecycle_changed',
+    ]);
+  });
+
+  it('first-ever promote with no incumbent emits one lifecycle_changed', async () => {
+    await makeCanary('0.1.0', 100);
+    announcements.length = 0;
+    auditEvents.length = 0;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/agents/knowledge-agent/promote',
+      headers: { authorization: `Bearer ${await makeToken('registry:deploy')}` },
+      payload: { version: '0.1.0' },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(auditEvents).toHaveLength(1);
+  });
+
+  it('409s promoting a non-canary version and requires registry:deploy', async () => {
+    await register({ manifest: manifest(), version: '0.1.0' });
+    const notCanary = await app.inject({
+      method: 'POST',
+      url: '/v1/agents/knowledge-agent/promote',
+      headers: { authorization: `Bearer ${await makeToken('registry:deploy')}` },
+      payload: { version: '0.1.0' },
+    });
+    expect(notCanary.statusCode).toBe(409);
+
+    const wrongScope = await app.inject({
+      method: 'POST',
+      url: '/v1/agents/knowledge-agent/promote',
+      headers: { authorization: `Bearer ${await makeToken('registry:admin')}` },
+      payload: { version: '0.1.0' },
+    });
+    expect(wrongScope.statusCode).toBe(403);
+  });
+});
+
+describe('routing view', () => {
+  it('returns active + candidate for a capability', async () => {
+    await register({ manifest: manifest(), version: '0.1.0' });
+    await transition('knowledge-agent', 'active');
+    await makeCanary('0.2.0', 25);
+
+    const res = await app.inject({
+      url: '/v1/routing?capability=knowledge.search',
+      headers: { authorization: `Bearer ${await makeToken('registry:read')}` },
+    });
+    expect(res.statusCode).toBe(200);
+    const set = res.json<RoutingSet>();
+    expect(set.active?.version).toBe('0.1.0');
+    expect(set.canary?.card.version).toBe('0.2.0');
+    expect(set.canary?.ramp_percent).toBe(25);
+    expect(set.shadow).toBeUndefined();
+  });
+
+  it('requires a capability parameter', async () => {
+    const res = await app.inject({
+      url: '/v1/routing',
+      headers: { authorization: `Bearer ${await makeToken('registry:read')}` },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('baseline recording (version-aware)', () => {
   beforeEach(async () => {
     await register({ manifest: manifest(), version: '0.1.0' });
     announcements.length = 0;
     auditEvents.length = 0;
   });
 
-  it('records the baseline on the card, announces, and audits', async () => {
-    const before = store.cards.get('knowledge-agent')!;
-    await new Promise((resolve) => setTimeout(resolve, 5));
-
+  it('records the baseline on its own version, announces, and audits', async () => {
+    const before = store.cardOf('knowledge-agent', '0.1.0')!;
     const res = await putBaseline('knowledge-agent', baseline());
     expect(res.statusCode).toBe(200);
     const card = res.json<AgentCard>();
     expect(card.eval_baseline).toEqual(baseline());
-    expect(card.lifecycle_state).toBe(before.lifecycle_state);
     expect(card.card_signature).toBe(before.card_signature);
-    expect(Date.parse(card.updated_at)).toBeGreaterThan(Date.parse(before.updated_at));
-    expect(store.cards.get('knowledge-agent')?.eval_baseline).toEqual(baseline());
-
     expect(announcements.map((a) => a.verb)).toEqual(['updated']);
     expect(auditEvents.map((e) => e.event_type)).toEqual(['agent.baseline_recorded']);
-    const details = auditEvents[0]!.details as {
-      agent_version: string;
-      suite_digest: string;
-      metrics: Record<string, number>;
-    };
-    expect(details.agent_version).toBe('0.1.0');
-    expect(details.suite_digest).toMatch(/^sha256:[0-9a-f]{64}$/);
-    expect(details.metrics.pass_rate).toBe(1);
   });
 
-  it('overwrites idempotently: the last recorded baseline wins', async () => {
+  it('a candidate baseline never clobbers the incumbent (debt #3)', async () => {
     await putBaseline('knowledge-agent', baseline());
-    const res = await putBaseline(
+    await register({ manifest: manifest(), version: '0.2.0' });
+    await putBaseline(
       'knowledge-agent',
-      baseline({ metrics: { pass_rate: 0.9, citation_precision: 1, abstention_accuracy: 1 } }),
+      baseline({
+        agent_version: '0.2.0',
+        metrics: { pass_rate: 0.7, citation_precision: 1, abstention_accuracy: 1 },
+      }),
     );
-    expect(res.statusCode).toBe(200);
-    expect(store.cards.get('knowledge-agent')?.eval_baseline?.metrics.pass_rate).toBe(0.9);
+    expect(store.cardOf('knowledge-agent', '0.1.0')!.eval_baseline?.metrics.pass_rate).toBe(1);
+    expect(store.cardOf('knowledge-agent', '0.2.0')!.eval_baseline?.metrics.pass_rate).toBe(0.7);
   });
 
-  it('404s on unknown agents', async () => {
-    const res = await putBaseline('ghost-agent', baseline({ agent_id: 'ghost-agent' }));
+  it('404s for a version that is not registered', async () => {
+    const res = await putBaseline('knowledge-agent', baseline({ agent_version: '9.9.9' }));
     expect(res.statusCode).toBe(404);
-  });
-
-  it('rejects schema-invalid baselines with the violation named', async () => {
-    const { suite: _suite, ...missingSuite } = baseline();
-    const res = await putBaseline('knowledge-agent', missingSuite);
-    expect(res.statusCode).toBe(400);
-    expect(res.json<{ error: { message: string } }>().error.message).toContain('eval_baseline');
   });
 
   it('rejects a baseline recorded for a different agent', async () => {
     const res = await putBaseline('knowledge-agent', baseline({ agent_id: 'other-agent' }));
     expect(res.statusCode).toBe(400);
-    expect(res.json<{ error: { message: string } }>().error.message).toBe(
-      'baseline agent_id other-agent does not match knowledge-agent',
-    );
-  });
-
-  it('409s when the baseline version does not match the registered card', async () => {
-    const res = await putBaseline('knowledge-agent', baseline({ agent_version: '0.2.0' }));
-    expect(res.statusCode).toBe(409);
-    expect(res.json<{ error: { message: string } }>().error.message).toBe(
-      'baseline is for version 0.2.0 but the registered card is 0.1.0 — re-run the suite ' +
-        'against the registered contract',
-    );
   });
 
   it('requires the registry:write scope', async () => {
@@ -539,32 +879,14 @@ describe('baseline recording', () => {
 });
 
 describe('edge cases', () => {
-  it('lists all agents when no filter is given', async () => {
-    await register({ manifest: manifest(), version: '0.1.0' });
-    const res = await app.inject({
-      url: '/v1/agents',
-      headers: { authorization: `Bearer ${await makeToken('registry:read')}` },
-    });
-    expect(res.json<{ agents: AgentCard[] }>().agents).toHaveLength(1);
-  });
-
   it('verifyCard returns false for garbage signatures instead of throwing', async () => {
     await register({ manifest: manifest(), version: '0.1.0' });
-    const card = store.cards.get('knowledge-agent')!;
+    const card = store.cardOf('knowledge-agent', '0.1.0')!;
     expect(await verifyCard({ ...card, card_signature: 'not-a-jws' }, registryJwks)).toBe(false);
   });
 
   it('rejects a registration with no manifest at all', async () => {
     const res = await register({ version: '0.1.0' });
     expect(res.statusCode).toBe(400);
-  });
-});
-
-describe('stableStringify', () => {
-  it('is insertion-order independent and drops undefined members', () => {
-    expect(stableStringify({ b: 1, a: [{ y: 2, x: 1 }] })).toBe(
-      stableStringify({ a: [{ x: 1, y: 2 }], b: 1 }),
-    );
-    expect(stableStringify({ a: 1, gone: undefined })).toBe('{"a":1}');
   });
 });

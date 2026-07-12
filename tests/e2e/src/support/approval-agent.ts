@@ -9,9 +9,12 @@
  */
 
 import { join } from 'node:path';
-import { Agent, CapabilityError, ErrorClass } from '@acp/agent-sdk';
+import { Agent, CapabilityError, ErrorClass, agentTaskQueue } from '@acp/agent-sdk';
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { repoRoot } from './platform.js';
+
+/** The approval-test-agent registers and activates at 0.1.0 (registerAndActivate). */
+const APPROVAL_AGENT_VERSION = '0.1.0';
 
 export const APPROVAL_AGENT_ID = 'approval-test-agent';
 export const APPROVAL_MANIFEST_PATH = join(
@@ -72,7 +75,9 @@ export async function startApprovalAgent(): Promise<RunningAgent> {
   const worker = await Worker.create({
     connection,
     namespace: process.env.ACP_TEMPORAL_NAMESPACE ?? 'default',
-    taskQueue: agent.taskQueue,
+    // Version-qualified queue (item 4) — computed explicitly so this in-process
+    // worker needs no ACP_AGENT_VERSION env; matches the registered 0.1.0 card.
+    taskQueue: agentTaskQueue(agent.agentId, APPROVAL_AGENT_VERSION),
     activities: {
       execute_capability: (request: unknown) => agent.execute(request),
     },

@@ -20,6 +20,15 @@ import { FakeModel, isContextualModel, type ModelClient, type ModelResponse } fr
 import type { Retriever } from './retriever.js';
 import { createAgentLogger } from './telemetry.js';
 
+/**
+ * Version-qualified agent task queue — MUST be byte-for-byte identical to the
+ * orchestrator's agentTaskQueue() (apps/orchestrator/src/types.ts). A
+ * cross-language fixture test pins the exact string for a known (id, version).
+ */
+export function agentTaskQueue(agentId: string, version: string): string {
+  return `agent-${agentId}@${version}`;
+}
+
 /** A capability handler: context + validated input → output conforming to the declared schema. */
 export type Handler = (
   ctx: CapabilityContext,
@@ -109,9 +118,23 @@ export class Agent {
     return this.manifest.id;
   }
 
-  /** Must equal the orchestrator's agentTaskQueue() — the dispatch contract. */
+  /**
+   * The version-qualified task queue this agent serves — MUST equal the
+   * orchestrator's agentTaskQueue(id, version) byte-for-byte (the dispatch
+   * contract). The running version comes from ACP_AGENT_VERSION: two versions
+   * of one agent serve DISTINCT queues, so a shadow/canary worker is reachable
+   * independently of the incumbent. Unset is a fatal misconfiguration (a worker
+   * on the wrong queue would silently receive no work).
+   */
   get taskQueue(): string {
-    return `agent-${this.agentId}`;
+    const version = process.env.ACP_AGENT_VERSION;
+    if (version === undefined || version === '') {
+      throw new Error(
+        'ACP_AGENT_VERSION is required to serve an agent — it version-qualifies the task queue ' +
+          `(agent-${this.agentId}@<version>) so the orchestrator dispatches to the right worker`,
+      );
+    }
+    return agentTaskQueue(this.agentId, version);
   }
 
   /** Registers the handler for a manifest-declared capability. */

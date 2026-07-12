@@ -8,10 +8,29 @@ from acp_agent_sdk import (
     ErrorClass,
     FakeModel,
     ModelResponse,
+    agent_task_queue,
 )
 from temporalio.exceptions import ApplicationError
 
 from .conftest import MANIFEST, step_request
+
+
+class TestTaskQueue:
+    def test_agent_task_queue_pins_cross_language_string(self) -> None:
+        # MUST match the TypeScript SDK's agentTaskQueue and the orchestrator's
+        # agentTaskQueue for the same (id, version).
+        assert agent_task_queue("knowledge-agent", "0.2.0") == "agent-knowledge-agent@0.2.0"
+
+    def test_task_queue_is_version_qualified_from_env(
+        self, agent: Agent, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ACP_AGENT_VERSION", "0.4.0")
+        assert agent.task_queue == "agent-test-agent@0.4.0"
+
+    def test_task_queue_requires_env(self, agent: Agent, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("ACP_AGENT_VERSION", raising=False)
+        with pytest.raises(RuntimeError, match="ACP_AGENT_VERSION is required"):
+            _ = agent.task_queue
 
 
 def good_output(text: str = "hello [1]") -> dict[str, Any]:

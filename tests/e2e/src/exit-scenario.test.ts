@@ -81,9 +81,22 @@ async function waitForResult(taskId: string, timeoutMs = 90_000): Promise<TaskRe
   }
 }
 
-async function auditEvents(taskId?: string, tenant = 'acme'): Promise<AuditEvent[]> {
+async function auditEvents(
+  taskId?: string,
+  tenant = 'acme',
+  eventType?: string,
+): Promise<AuditEvent[]> {
   const token = await ciToken('acp:audit', 'audit:read');
-  const url = `${AUDIT_URL}/v1/events?tenant=${tenant}${taskId === undefined ? '' : `&task_id=${taskId}`}`;
+  // The full CI suite shares one audit stream and the store returns the OLDEST
+  // `limit` events (default 200, ORDER BY occurred_at ASC). Once earlier files
+  // (e.g. the deployment suite driving steady traffic) saturate the stream, a
+  // later file's own events fall outside an unfiltered 200-event window. Filter
+  // by event_type server-side and lift the limit to the audit cap (1000) so each
+  // query stays bounded to its own event class regardless of total volume.
+  const params = new URLSearchParams({ tenant, limit: '1000' });
+  if (taskId !== undefined) params.set('task_id', taskId);
+  if (eventType !== undefined) params.set('event_type', eventType);
+  const url = `${AUDIT_URL}/v1/events?${params.toString()}`;
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   expect(res.status).toBe(200);
   return ((await res.json()) as { events: AuditEvent[] }).events;
@@ -147,7 +160,7 @@ describe('phase 1 exit scenario', () => {
     // asynchronous — give the stream a moment.
     let recorded: AuditEvent | undefined;
     for (let i = 0; i < 20 && recorded === undefined; i++) {
-      recorded = (await auditEvents(undefined, 'platform')).find(
+      recorded = (await auditEvents(undefined, 'platform', 'agent.baseline_recorded')).find(
         (e) => e.event_type === 'agent.baseline_recorded',
       );
       if (recorded === undefined) await new Promise((r) => setTimeout(r, 1000));
@@ -172,7 +185,9 @@ describe('phase 1 exit scenario', () => {
 
     // Corpus mutations are on the audit stream: the ingest ledger exists
     // from day one, with the raw chunk text and versions.
-    const corpusEvents = (await auditEvents()).filter((e) => e.event_type === 'corpus.mutation');
+    const corpusEvents = (await auditEvents(undefined, 'acme', 'corpus.mutation')).filter(
+      (e) => e.event_type === 'corpus.mutation',
+    );
     expect(corpusEvents.length).toBeGreaterThan(10);
     const block = corpusEvents[0]!;
     expect(block.artifacts?.lineage_ids?.[0]).toMatch(/^[0-9a-f]{8}-/);
@@ -308,7 +323,7 @@ describe('phase 1 exit scenario', () => {
     expect(stoppedAfterMs, 'suspension must stop new traffic in <10s').toBeLessThan(10_000);
 
     // Audit knows the switch flipped (registry events are platform-tenant).
-    const killEvents = (await auditEvents(undefined, 'platform')).filter(
+    const killEvents = (await auditEvents(undefined, 'platform', 'killswitch.activated')).filter(
       (e) => e.event_type === 'killswitch.activated',
     );
     expect(killEvents.length).toBeGreaterThan(0);

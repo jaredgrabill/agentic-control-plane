@@ -59,6 +59,19 @@ Gates 4–5 are the Deployment Controller's `DeploymentWorkflow`
 promotion decision is recorded with the eval evidence attached — an audit
 artifact.
 
+**v0 gate math (Phase 3 item 4).** The `GateEvaluator` is deterministic and
+audit-derived: the shadow gate joins `deployment.shadow_result` records to
+their primary `step.completed` on `(task_id, step_id)`; the canary gate folds
+`step.completed` split by the executing agent version. It breaches on success-
+ratio delta, p95 latency ratio, or cost/step ratio (cost only when both
+versions are priced by the Cost Meter book) — the **audit stream is the
+comparison store**. Paired *judged quality* is **not** in v0: `GateReport`
+carries an optional `metrics.quality` field that item 6's calibrated judge
+fills, consuming the same `shadow_result` records behind the same
+`GateEvaluator` interface. The `DeploymentWorkflow`'s breach logic is
+metric-agnostic (it treats any populated metric uniformly), so item 6 swaps the
+evaluator implementation, not the workflow.
+
 ## Online Evaluation
 
 - **Sampled scoring:** ~5–10% of production traffic scored by calibrated

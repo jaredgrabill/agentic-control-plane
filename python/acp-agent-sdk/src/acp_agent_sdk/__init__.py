@@ -3,6 +3,7 @@ handlers, ModelClient (with the FakeModel test seam), Retriever,
 AnswerBuilder, and the EvalHarness."""
 
 from acp_agent_sdk.agent import Agent as Agent
+from acp_agent_sdk.agent import agent_task_queue as agent_task_queue
 from acp_agent_sdk.answer import AnswerBuilder as AnswerBuilder
 from acp_agent_sdk.bus import BusTokenSource as BusTokenSource
 from acp_agent_sdk.context import CapabilityContext as CapabilityContext

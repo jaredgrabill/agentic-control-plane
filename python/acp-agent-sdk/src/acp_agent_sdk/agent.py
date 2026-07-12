@@ -32,6 +32,14 @@ from acp_agent_sdk.telemetry import configure_logging
 Handler = Callable[[CapabilityContext, dict[str, Any]], Awaitable[dict[str, Any]]]
 
 
+def agent_task_queue(agent_id: str, version: str) -> str:
+    """Version-qualified agent task queue — MUST be byte-for-byte identical to
+    the orchestrator's agentTaskQueue() and the TypeScript SDK's. A
+    cross-language fixture test pins the exact string for a known (id, version).
+    """
+    return f"agent-{agent_id}@{version}"
+
+
 @dataclass
 class _CountingModel:
     """Wraps the configured model so usage lands in the StepResult."""
@@ -92,7 +100,18 @@ class Agent:
 
     @property
     def task_queue(self) -> str:
-        return f"agent-{self.agent_id}"
+        """Version-qualified queue this agent serves — MUST equal the
+        orchestrator's agentTaskQueue(id, version) (the dispatch contract). The
+        running version comes from ACP_AGENT_VERSION; unset is fatal (a worker on
+        the wrong queue would silently receive no work)."""
+        version = os.environ.get("ACP_AGENT_VERSION")
+        if not version:
+            raise RuntimeError(
+                "ACP_AGENT_VERSION is required to serve an agent — it version-qualifies the task "
+                f"queue (agent-{self.agent_id}@<version>) so the orchestrator dispatches to the "
+                "right worker"
+            )
+        return agent_task_queue(self.agent_id, version)
 
     def capability(self, name: str) -> Callable[[Handler], Handler]:
         """Registers the handler for a manifest-declared capability."""

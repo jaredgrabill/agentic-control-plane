@@ -1,0 +1,28 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e4003",
+  "occurred_at": "2026-07-11T10:05:00Z",
+  "tenant": "acme",
+  "event_type": "deployment.shadow_result",
+  "actor": {
+    "principal": "svc:orchestrator",
+    "delegation_chain": [{ "sub": "user:jane.doe" }, { "sub": "svc:orchestrator" }]
+  },
+  "action": {
+    "name": "deployment.shadow_result",
+    "outputs_digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  },
+  "reason": {
+    "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+    "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51"
+  },
+  "artifacts": {
+    "agent_id": "knowledge-agent",
+    "agent_version": "0.2.0"
+  },
+  "details": {
+    "status": "completed",
+    "incumbent_version": "0.1.0",
+    "duration_ms": 210,
+    "usage": { "llm_calls": 1, "input_tokens": 120, "output_tokens": 48 }
+  }
+}

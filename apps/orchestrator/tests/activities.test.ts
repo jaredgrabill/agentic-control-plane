@@ -68,6 +68,7 @@ function makeActivities(
     registryUrl: 'http://registry.test',
     policyUrl: 'http://policy.test',
     tokenUrl: 'http://token.test',
+    auditUrl: 'http://audit.test',
     clientId: 'svc-orchestrator',
     clientSecret: 'secret',
     verifier: { verify },
@@ -241,6 +242,271 @@ describe('discoverAgent', () => {
     await expect(makeActivities(broken).discoverAgent('x.y', 'acme')).rejects.toThrow(
       /registry discovery failed: 500/,
     );
+  });
+});
+
+describe('resolveRoute', () => {
+  const routingFetch = (set: Record<string, unknown>) =>
+    vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token') ? jsonResponse({ access_token: 't' }) : jsonResponse(set),
+    ) as unknown as typeof fetch;
+
+  it('routes to the active incumbent and computes a deterministic bucket', async () => {
+    const acts = makeActivities(routingFetch({ active: card }));
+    const r1 = await acts.resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    });
+    expect(r1?.route).toBe('active');
+    expect(r1?.card.manifest.id).toBe('knowledge-agent');
+    expect(r1?.bucket).toBeGreaterThanOrEqual(0);
+    expect(r1?.bucket).toBeLessThan(100);
+    // Same task_id → same bucket (session pinning is a pure function of task_id).
+    const r2 = await acts.resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    });
+    expect(r2?.bucket).toBe(r1?.bucket);
+  });
+
+  it('routes to the canary when the bucket is under the ramp, else the incumbent', async () => {
+    const alwaysCanary = await makeActivities(
+      routingFetch({ active: card, canary: { card, ramp_percent: 100 } }),
+    ).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+    });
+    expect(alwaysCanary?.route).toBe('canary');
+    expect(alwaysCanary?.rampPercent).toBe(100);
+
+    const neverCanary = await makeActivities(
+      routingFetch({ active: card, canary: { card, ramp_percent: 0 } }),
+    ).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+    });
+    expect(neverCanary?.route).toBe('active');
+  });
+
+  it('surfaces a shadow candidate to mirror (shadow soak)', async () => {
+    const r = await makeActivities(routingFetch({ active: card, shadow: card })).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+    });
+    expect(r?.route).toBe('active');
+    expect(r?.shadowCard?.manifest.id).toBe('knowledge-agent');
+  });
+
+  it('returns null when nothing is active', async () => {
+    const r = await makeActivities(routingFetch({})).resolveRoute({
+      capability: 'x.y',
+      tenant: 'acme',
+      taskId: 't-1',
+    });
+    expect(r).toBeNull();
+  });
+
+  it('pins to an exact version (compensator) and never mirrors; 404 → null', async () => {
+    const pinFetch = vi.fn((url: string | URL) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      if (s.includes('/versions/0.1.0')) return jsonResponse(card);
+      return jsonResponse({ error: 'nope' }, 404);
+    }) as unknown as typeof fetch;
+    const acts = makeActivities(pinFetch);
+    const pinned = await acts.resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+      pin: { agentId: 'knowledge-agent', version: '0.1.0' },
+    });
+    expect(pinned?.route).toBe('pinned');
+    expect(pinned?.shadowCard).toBeUndefined();
+
+    const missing = await acts.resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+      pin: { agentId: 'knowledge-agent', version: '9.9.9' },
+    });
+    expect(missing).toBeNull();
+  });
+});
+
+describe('digestValue', () => {
+  it('is a stable sha256 over the canonical value (key-order independent)', async () => {
+    const acts = makeActivities(vi.fn());
+    const a = await acts.digestValue({ b: 1, a: 2 });
+    const b = await acts.digestValue({ a: 2, b: 1 });
+    expect(a.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(a.digest).toBe(b.digest);
+  });
+});
+
+describe('deployment activities', () => {
+  const baseline = { suite: { digest: `sha256:${'1'.repeat(64)}` } };
+  const candidate = (over: Partial<AgentCard> = {}): AgentCard => ({
+    ...card,
+    version: '0.2.0',
+    lifecycle_state: 'registered',
+    eval_baseline: baseline as never,
+    ...over,
+  });
+
+  it('beginDeployment validates the candidate and resolves the incumbent + baseline note', async () => {
+    const fetchImpl = vi.fn((url: string | URL) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      if (s.includes('/versions/0.2.0')) return jsonResponse(candidate());
+      if (s.includes('state=active'))
+        return jsonResponse({ agents: [{ ...card, eval_baseline: baseline }] });
+      return jsonResponse({});
+    }) as unknown as typeof fetch;
+    const pre = await makeActivities(fetchImpl).beginDeployment({
+      agentId: 'knowledge-agent',
+      candidateVersion: '0.2.0',
+    });
+    expect(pre.incumbentVersion).toBe('0.1.0');
+    expect(pre.requiresApproval).toBe(false); // R0 capability
+    expect(pre.baselineNote).toBe('comparable_suite');
+    expect(pre.capabilities).toEqual(['knowledge.answer_with_citations']);
+  });
+
+  it('beginDeployment refuses a non-registered candidate or a missing baseline', async () => {
+    const active = vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token')
+        ? jsonResponse({ access_token: 't' })
+        : jsonResponse(candidate({ lifecycle_state: 'active' })),
+    ) as unknown as typeof fetch;
+    await expect(
+      makeActivities(active).beginDeployment({
+        agentId: 'knowledge-agent',
+        candidateVersion: '0.2.0',
+      }),
+    ).rejects.toThrow(/not registered/);
+
+    const noBaseline = vi.fn((url: string | URL) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      const { eval_baseline: _b, ...rest } = candidate();
+      return jsonResponse(rest);
+    }) as unknown as typeof fetch;
+    await expect(
+      makeActivities(noBaseline).beginDeployment({
+        agentId: 'knowledge-agent',
+        candidateVersion: '0.2.0',
+      }),
+    ).rejects.toThrow(/no eval_baseline/);
+  });
+
+  it('beginDeployment flags requiresApproval for an R2-capable candidate', async () => {
+    const r0cap = card.manifest.capabilities[0];
+    const r2 = candidate({
+      manifest: {
+        ...card.manifest,
+        capabilities: [{ ...r0cap, risk: 'R2' }],
+      },
+    });
+    const fetchImpl = vi.fn((url: string | URL) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      if (s.includes('/versions/')) return jsonResponse(r2);
+      return jsonResponse({ agents: [] });
+    }) as unknown as typeof fetch;
+    const pre = await makeActivities(fetchImpl).beginDeployment({
+      agentId: 'knowledge-agent',
+      candidateVersion: '0.2.0',
+    });
+    expect(pre.requiresApproval).toBe(true);
+    expect(pre.incumbentVersion).toBeUndefined(); // no active agent
+  });
+
+  it('deployTransition posts the versioned state with the registry:deploy token', async () => {
+    const calls: { url: string; body?: unknown }[] = [];
+    const fetchImpl = vi.fn((url: string | URL, init?: RequestInit) => {
+      calls.push({ url: String(url), body: init?.body });
+      if (String(url).endsWith('/v1/token')) {
+        const raw = typeof init?.body === 'string' ? init.body : '{}';
+        const scope = (JSON.parse(raw) as { scope?: string }).scope;
+        expect(scope).toBe('registry:deploy');
+        return jsonResponse({ access_token: 't' });
+      }
+      return jsonResponse({});
+    }) as unknown as typeof fetch;
+    await makeActivities(fetchImpl).deployTransition({
+      agentId: 'knowledge-agent',
+      version: '0.2.0',
+      state: 'canary',
+      rampPercent: 25,
+      reason: 'ramp',
+    });
+    const post = calls.at(-1)!;
+    expect(post.url).toContain('/versions/0.2.0/state');
+    expect(JSON.parse(post.body as string)).toMatchObject({ state: 'canary', ramp_percent: 25 });
+  });
+
+  it('promoteVersion posts to /promote', async () => {
+    const calls: string[] = [];
+    const fetchImpl = vi.fn((url: string | URL) => {
+      calls.push(String(url));
+      return String(url).endsWith('/v1/token')
+        ? jsonResponse({ access_token: 't' })
+        : jsonResponse({});
+    }) as unknown as typeof fetch;
+    await makeActivities(fetchImpl).promoteVersion({
+      agentId: 'knowledge-agent',
+      version: '0.2.0',
+    });
+    expect(calls.at(-1)).toContain('/v1/agents/knowledge-agent/promote');
+  });
+
+  it('evaluateGate pages the audit window and runs the evaluator (canary)', async () => {
+    const events = [
+      {
+        event_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f60',
+        occurred_at: '2026-07-11T10:00:00Z',
+        tenant: 'acme',
+        event_type: 'step.completed',
+        actor: { principal: 'svc:orchestrator' },
+        action: { name: 'step.completed' },
+        reason: { task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40' },
+        artifacts: { agent_version: '0.2.0' },
+        details: { status: 'completed', duration_ms: 100 },
+      },
+    ];
+    const fetchImpl = vi.fn((url: string | URL) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      expect(s).toContain('/v1/events');
+      expect(s).toContain('since=');
+      return jsonResponse({ events });
+    }) as unknown as typeof fetch;
+    const report = await makeActivities(fetchImpl).evaluateGate({
+      kind: 'canary',
+      tenant: 'acme',
+      since: '2026-07-11T09:59:00Z',
+      candidateVersion: '0.2.0',
+      incumbentVersion: '0.1.0',
+      thresholds: {
+        max_success_delta: 0.05,
+        max_p95_ratio: 1.5,
+        max_cost_ratio: 1.25,
+        min_shadow_completion: 0.9,
+        min_shadow_samples: 2,
+      },
+    });
+    expect(report.samples.candidate).toBe(1);
+    expect(report.verdict).toBe('pass');
+  });
+
+  it('now returns an ISO timestamp', async () => {
+    const { iso } = await makeActivities(vi.fn()).now();
+    expect(Number.isNaN(Date.parse(iso))).toBe(false);
   });
 });
 
@@ -566,9 +832,9 @@ describe('digestApprovalSubject', () => {
     risk: 'R2',
     input: { target: 'record-42', mode: 'apply' },
     requested_scopes: ['gov:test:write'],
-    plan: { plan_id: 'p', steps: [] } as unknown as Parameters<
-      ControlActivities['digestApprovalSubject']
-    >[0]['plan'],
+    plan: { plan_id: 'p', steps: [] } as unknown as NonNullable<
+      Parameters<ControlActivities['digestApprovalSubject']>[0]['plan']
+    >,
     plan_digest: `sha256:${'0'.repeat(64)}`,
   };
 

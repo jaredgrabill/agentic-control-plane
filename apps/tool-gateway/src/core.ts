@@ -185,6 +185,31 @@ export class ToolGatewayCore {
       );
     }
 
+    // (2.5) SHADOW SUPPRESSION — before Cedar and before ANY upstream contact.
+    // A shadow-context token (verified `deployment.mode === 'shadow'`, minted
+    // only by the ShadowStepWorkflow) executes R0 reads normally but must NOT
+    // cause side effects: an R1+ tool is refused and the would-be call is
+    // recorded (inputs_digest), so the deployment gate can compare what the
+    // candidate WOULD have done without the candidate ever touching the world.
+    // Read from VERIFIED claims only — a forged header cannot set it — and it
+    // never forwards even for dry_run (an R2 approval-bound policy would refuse
+    // a shadow token, and forwarding would need a Cedar pass we deliberately do
+    // not take here). This precedes the Cedar decision and carries no policy
+    // reference; the audit outcome is a refusal envelope tagged shadow_suppressed.
+    if (caller.claims.deployment?.mode === 'shadow' && rankOf(spec.risk) >= rankOf('R1')) {
+      await this.emitAudit(caller, serverId, tool, args, corr, undefined, 'error:upstream_auth', {
+        shadowSuppressed: { toolRisk: spec.risk },
+      });
+      return refuse(
+        fail(
+          'upstream_auth',
+          `shadow mode: side effects suppressed for ${serverId}/${tool} (risk ${spec.risk}) — ` +
+            'the would-be call was recorded, not executed (deployment shadow context)',
+        ),
+        'error:upstream_auth',
+      );
+    }
+
     // Approval grounds derived from the VERIFIED token claims only — never
     // request-supplied. Trustworthy (bound) iff the token carries an approval
     // claim AND the brokered task binding matches THIS call's correlation AND
@@ -417,7 +442,7 @@ export class ToolGatewayCore {
     tool: string,
     args: Record<string, unknown>,
     corr: Correlation,
-    decision: PolicyDecision,
+    decision: PolicyDecision | undefined,
     outcome: Outcome,
     extras: AuditExtras,
   ): Promise<void> {
@@ -434,11 +459,16 @@ export class ToolGatewayCore {
       reason: {
         ...(corr.taskId !== undefined ? { task_id: corr.taskId } : {}),
         ...(corr.stepId !== undefined ? { step_id: corr.stepId } : {}),
-        policy: {
-          decision: decision.decision,
-          bundle_version: decision.bundle_version,
-          determining_policies: decision.determining_policies,
-        },
+        // Shadow suppression precedes Cedar, so it carries NO policy reference.
+        ...(decision === undefined
+          ? {}
+          : {
+              policy: {
+                decision: decision.decision,
+                bundle_version: decision.bundle_version,
+                determining_policies: decision.determining_policies,
+              },
+            }),
       },
       ...(extras.lineageIds !== undefined && extras.lineageIds.length > 0
         ? { artifacts: { lineage_ids: extras.lineageIds } }
@@ -456,6 +486,9 @@ export class ToolGatewayCore {
               capability: extras.riskRefusal.capability,
               capability_risk: extras.riskRefusal.capabilityRisk,
             }
+          : {}),
+        ...(extras.shadowSuppressed !== undefined
+          ? { shadow_suppressed: true, tool_risk: extras.shadowSuppressed.toolRisk }
           : {}),
       },
     };
@@ -475,6 +508,8 @@ interface AuditExtras {
   approvalId?: string;
   /** Present when a structural risk-class refusal fired (step 3.5). */
   riskRefusal?: RiskRefusal;
+  /** Present when a shadow-context write was suppressed (step 2.5). */
+  shadowSuppressed?: { toolRisk: string };
 }
 
 /** The approval context handed to Cedar: granted only when a claim binds to THIS step. */

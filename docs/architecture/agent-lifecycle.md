@@ -88,6 +88,29 @@ escalation rate, p95 latency, and cost per task against the incumbent.
 Breach of any gate auto-rolls back to the previous ramp step and alerts the
 owning team; two consecutive rollbacks demote to `shadow`.
 
+### Deployment Controller v0 (Phase 3 item 4 — implemented)
+
+The `DeploymentWorkflow` owns promotion end-to-end: it transitions the
+candidate through `shadow → canary` ramp → owner approval (R2+ only) →
+atomic `/promote` → drain, gating each phase on the deterministic
+`GateEvaluator` (evaluation.md). The registry is now **versioned** — one card
+per `(agent_id, version)`, with DB-enforced one-active / one-candidate
+invariants — so a candidate's card and `eval_baseline` are unclobberable
+(closes debt #3). Routing is version-aware with a deterministic session bucket
+(`sha256(task_id) % 100`); a canary task stays on one version end-to-end, and a
+compensator is pinned to the exact version that did the write.
+
+v0 deviations (deliberate, documented):
+- **`shadow → retired`** is a legal admin edge (candidate cleanup without a
+  promote), and **`suspended → active`** is kept as a legacy admin edge so the
+  kill-switch reinstatement path works without routing through `shadow`.
+- **Suspension is coarse**: the kill-switch flag is keyed by the whole agent id
+  (`killswitch.agent.{id}`), suspending all versions at once — acceptable
+  emergency control; per-version suspension is deferred.
+- **Owner approval** records the initiator but does not yet verify approver ∈
+  owner team (no directory); the true-traffic drain is a fixed timer, and
+  gated (R2) capabilities are **not** shadow-mirrored in v0.
+
 ### Kill switch
 
 Tiered, tested, and owned:

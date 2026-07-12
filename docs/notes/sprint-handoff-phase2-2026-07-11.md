@@ -55,9 +55,12 @@ and `evals` jobs are new required checks worth adding to branch protection.
 4. **`max_cost_usd` is recorded, not enforced** — needs the Cost Meter price
    book (Phase 2 roadmap item not in this sprint's five tasks).
 5. **Registry re-registration still resets lifecycle_state and now also drops
-   `eval_baseline`** (debt #3, unchanged): acceptable while CI is the only
-   registrar; the committed per-agent `evals/baseline.json` is the gate's
-   source of truth.
+   `eval_baseline`** (debt #3 — **CLOSED in Phase 3 item 4**): the registry is
+   now versioned (one card per `(agent_id, version)`, DB-enforced one-active /
+   one-candidate invariants), so a new-version registration never touches a
+   sibling's card or baseline, and `eval_baseline` is load-bearing per version
+   for the deployment gates. The legacy single-row `agents` table is migrated
+   forward and dropped on boot.
 6. **LLM planner / LLM gateway not started**: `rule-planner@1` produces
    exactly three plan shapes (explicit capability, cost-forensics composite,
    knowledge default). The LLM planner swaps the `planTask` implementation

@@ -17,6 +17,77 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 export const GATEWAY_AUDIENCE = 'acp:gateway';
 export const TASK_SUBMIT_SCOPE = 'task:submit';
 export const APPROVALS_DECIDE_SCOPE = 'approvals:decide';
+export const DEPLOY_WRITE_SCOPE = 'deploy:write';
+export const DEPLOY_READ_SCOPE = 'deploy:read';
+
+const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$/;
+const AGENT_ID_RE = /^[a-z][a-z0-9-]{0,62}$/;
+
+/**
+ * Gate thresholds + soak profile for a deployment (mirror of the orchestrator's
+ * DeploymentConfig — kept here so the gateway need not depend on the
+ * orchestrator app). E2E overrides every field to run seconds-scale.
+ */
+interface GateThresholds {
+  max_success_delta: number;
+  max_p95_ratio: number;
+  max_cost_ratio: number;
+  min_shadow_completion: number;
+  min_shadow_samples: number;
+}
+interface DeploymentConfig {
+  shadow_soak_s: number;
+  min_shadow_samples: number;
+  ramp_steps: number[];
+  ramp_soak_s: number;
+  drain_s: number;
+  thresholds: GateThresholds;
+}
+const DEFAULT_DEPLOYMENT_CONFIG: DeploymentConfig = {
+  shadow_soak_s: 3600,
+  min_shadow_samples: 5,
+  ramp_steps: [5, 25, 50, 100],
+  ramp_soak_s: 1800,
+  drain_s: 3600,
+  thresholds: {
+    max_success_delta: 0.05,
+    max_p95_ratio: 1.5,
+    max_cost_ratio: 1.25,
+    min_shadow_completion: 0.9,
+    min_shadow_samples: 5,
+  },
+};
+
+/** The internal DeploymentWorkflow input the gateway constructs and starts. */
+export interface DeploymentRequestPayload {
+  deployment_id: string;
+  agent_id: string;
+  candidate_version: string;
+  initiated_by: string;
+  tenant: string;
+  config: DeploymentConfig;
+}
+export interface DeploymentStartInput {
+  request: DeploymentRequestPayload;
+}
+export interface DeploymentStatusView {
+  deployment_id: string;
+  phase: string;
+  ramp_percent?: number;
+  aborted: boolean;
+  gate_reports: unknown[];
+  running?: boolean;
+  result?: Record<string, unknown>;
+}
+
+/** Starts, queries, and aborts the per-agent DeploymentWorkflow singleton. */
+export interface DeploymentController {
+  start(
+    input: DeploymentStartInput,
+  ): Promise<{ outcome: 'started'; workflowRunId: string } | { outcome: 'already_running' }>;
+  status(agentId: string): Promise<DeploymentStatusView | undefined>;
+  abort(agentId: string): Promise<{ outcome: 'aborting' | 'not_found' | 'already_terminal' }>;
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -90,6 +161,7 @@ export interface GatewayDeps {
   verifier: JwtVerifier;
   starter: TaskStarter;
   approvals: ApprovalGateway;
+  deployments: DeploymentController;
   killSwitch: KillSwitchReader;
   audit: AuditSink;
   logger: Logger;
@@ -341,6 +413,94 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
     });
 
     return reply.status(202).send({ approval_id: approvalId, decision_id: decisionId });
+  });
+
+  // Start a deployment (Deployment Controller). Singleton per agent
+  // (deploy-{agent_id}): a second concurrent deployment is a 409.
+  app.post('/v1/deployments', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, DEPLOY_WRITE_SCOPE);
+    const body = (request.body ?? {}) as {
+      agent_id?: string;
+      candidate_version?: string;
+      tenant?: string;
+      config?: Partial<DeploymentConfig>;
+    };
+    if (typeof body.agent_id !== 'string' || !AGENT_ID_RE.test(body.agent_id)) {
+      throw new AuthError('agent_id is required and must be a lowercase agent id', 400);
+    }
+    if (typeof body.candidate_version !== 'string' || !SEMVER_RE.test(body.candidate_version)) {
+      throw new AuthError('candidate_version is required and must be semver', 400);
+    }
+    // The tenant whose shadow/canary traffic the gates evaluate. Defaults to the
+    // caller's tenant; an operator may target another tenant explicitly.
+    const tenant =
+      typeof body.tenant === 'string' && body.tenant !== '' ? body.tenant : claims.tenant;
+    const config: DeploymentConfig = {
+      ...DEFAULT_DEPLOYMENT_CONFIG,
+      ...body.config,
+      thresholds: { ...DEFAULT_DEPLOYMENT_CONFIG.thresholds, ...body.config?.thresholds },
+    };
+    const deployment_id = randomUUID();
+    const result = await deps.deployments.start({
+      request: {
+        deployment_id,
+        agent_id: body.agent_id,
+        candidate_version: body.candidate_version,
+        initiated_by: claims.sub,
+        tenant,
+        config,
+      },
+    });
+    if (result.outcome === 'already_running') {
+      return reply.status(409).send({
+        error: {
+          message: `a deployment for ${body.agent_id} is already running — abort or await it first`,
+          status: 409,
+        },
+      });
+    }
+    return reply.status(202).send({
+      deployment_id,
+      agent_id: body.agent_id,
+      candidate_version: body.candidate_version,
+      workflow_run_id: result.workflowRunId,
+    });
+  });
+
+  app.get('/v1/deployments/:agent_id', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, DEPLOY_READ_SCOPE);
+    const { agent_id } = request.params as { agent_id: string };
+    if (!AGENT_ID_RE.test(agent_id))
+      throw new AuthError('agent_id must be a lowercase agent id', 400);
+    const view = await deps.deployments.status(agent_id);
+    if (view === undefined) {
+      return reply
+        .status(404)
+        .send({ error: { message: `no deployment for ${agent_id}`, status: 404 } });
+    }
+    return reply.send(view);
+  });
+
+  app.post('/v1/deployments/:agent_id/abort', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, DEPLOY_WRITE_SCOPE);
+    const { agent_id } = request.params as { agent_id: string };
+    if (!AGENT_ID_RE.test(agent_id))
+      throw new AuthError('agent_id must be a lowercase agent id', 400);
+    const result = await deps.deployments.abort(agent_id);
+    if (result.outcome === 'not_found') {
+      return reply
+        .status(404)
+        .send({ error: { message: `no running deployment for ${agent_id}`, status: 404 } });
+    }
+    if (result.outcome === 'already_terminal') {
+      return reply.status(409).send({
+        error: { message: `the deployment for ${agent_id} is already terminal`, status: 409 },
+      });
+    }
+    return reply.status(202).send({ agent_id, status: 'aborting' });
   });
 
   return app;

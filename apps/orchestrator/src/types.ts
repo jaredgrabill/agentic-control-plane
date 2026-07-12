@@ -8,6 +8,9 @@ import type {
   TaskRequest,
 } from '@acp/protocol';
 import type { ResolvedPriceBook } from '@acp/cost-meter/pricing';
+import type { GateReport, GateThresholds } from './deployment-gates.js';
+
+export type { GateReport, GateThresholds } from './deployment-gates.js';
 
 /**
  * Delegation depth cap (agent-patterns.md): 1 = delegated directly from the
@@ -70,6 +73,14 @@ export interface CompensationDispatch {
   originalCapability: string;
   /** The approval that authorized the original write, if it was gated. */
   approval?: ExecutedApproval;
+  /**
+   * The agent id + version that executed the original write. A compensator is
+   * PINNED to this exact version (resolveRoute pin), so the undo runs on the
+   * same code that did the write — never re-routed to a canary/active that may
+   * behave differently — and it is NEVER shadow-mirrored.
+   */
+  agentId: string;
+  agentVersion: string;
 }
 
 /** The approval grounds recorded when a gated write executed (subset carried for compensation). */
@@ -154,8 +165,16 @@ export interface ApprovalSubject {
   compensator?: string;
   /** True when the write is flagged irreversible — raises the approval bar (visibility v1). */
   irreversible?: boolean;
-  plan: Plan;
-  plan_digest: string;
+  /**
+   * The full plan + its digest (blast radius). OPTIONAL as of item 4 (deliberate
+   * item-1 amendment): a deployment's owner-approval subject reuses this machine
+   * but has no task plan — its blast radius is the version promotion itself,
+   * carried in `input` ({from_version, to_version, gate_reports_digest}). Every
+   * task-step approval still sets both; the digest binding is unaffected because
+   * stableStringify drops undefined members.
+   */
+  plan?: Plan;
+  plan_digest?: string;
 }
 
 /** Input to the ApprovalWorkflow child. */
@@ -225,6 +244,90 @@ export interface CapabilityTokenGrounds {
   risk: string;
 }
 
+/**
+ * The version-aware routing decision for one step (item 4, D5). `route`
+ * distinguishes the incumbent (`active`), a session-pinned canary
+ * (`canary` — this task's bucket fell under the ramp), and a compensator pinned
+ * to its original version (`pinned`). `bucket` is the deterministic
+ * sha256(task_id)%100 — the same for every step of a task, so a task stays on
+ * one version end-to-end (session pinning). `shadowCard`, present only during a
+ * shadow soak (never for a pinned compensator), names the candidate to mirror.
+ */
+export interface RouteResult {
+  card: AgentCard;
+  route: 'active' | 'canary' | 'pinned';
+  /** The canary ramp percentage this bucket was compared against (route==='canary'). */
+  rampPercent?: number;
+  /** Deterministic session bucket, sha256(task_id)%100. */
+  bucket: number;
+  /** The shadow candidate to mirror this step to (shadow soak only). */
+  shadowCard?: AgentCard;
+}
+
+/** Input to the ShadowStepWorkflow — a fire-and-forget mirror of one primary step. */
+export interface ShadowStepInput {
+  taskId: string;
+  stepId: string;
+  tenant: string;
+  principal: string;
+  snapshot: PrincipalSnapshot;
+  capability: string;
+  input: Record<string, unknown>;
+  /** The shadow candidate card (agent id + version + declared capability). */
+  shadowCard: AgentCard;
+  /** The incumbent version this shadow is compared against (for the gate join). */
+  incumbentVersion: string;
+}
+
+/** Deployment tunables (D7); every field is overridable so E2E runs seconds-scale. */
+export interface DeploymentConfig {
+  shadow_soak_s: number;
+  min_shadow_samples: number;
+  ramp_steps: number[];
+  ramp_soak_s: number;
+  drain_s: number;
+  thresholds: GateThresholds;
+}
+
+/** The default deployment profile (production-scale soaks). */
+export const DEFAULT_DEPLOYMENT_CONFIG: DeploymentConfig = {
+  shadow_soak_s: 3600,
+  min_shadow_samples: 5,
+  ramp_steps: [5, 25, 50, 100],
+  ramp_soak_s: 1800,
+  drain_s: 3600,
+  thresholds: {
+    max_success_delta: 0.05,
+    max_p95_ratio: 1.5,
+    max_cost_ratio: 1.25,
+    min_shadow_completion: 0.9,
+    min_shadow_samples: 5,
+  },
+};
+
+/** Internal input to the DeploymentWorkflow. */
+export interface DeploymentRequest {
+  deployment_id: string;
+  agent_id: string;
+  candidate_version: string;
+  initiated_by: string;
+  /** The tenant whose shadow/canary traffic the gates evaluate (task tenant). */
+  tenant: string;
+  config: DeploymentConfig;
+}
+
+/** What beginDeployment resolves after validating the candidate against the incumbent. */
+export interface DeploymentPreflight {
+  /** The current active version being replaced; undefined on a first-ever deployment. */
+  incumbentVersion?: string;
+  /** The candidate's declared capabilities and their max risk (drives the R2 approval gate). */
+  capabilities: string[];
+  /** True when any candidate capability is R2/R3 — final promotion needs owner approval. */
+  requiresApproval: boolean;
+  /** Baseline comparison note recorded on deployment.started (e.g. 'incomparable_suite'). */
+  baselineNote: string;
+}
+
 /** Control-plane activities implemented by the orchestrator's own worker. */
 export interface ControlActivities {
   /**
@@ -244,6 +347,19 @@ export interface ControlActivities {
   planTask(task: TaskRequest): Promise<{ plan: Plan; planDigest: string }>;
   /** Registry lookup: active agents serving a capability. Truth, not bus scanning. */
   discoverAgent(capability: string, tenant: string): Promise<AgentCard | null>;
+  /**
+   * Version-aware routing (item 4, D5). Reads the registry routing set for a
+   * capability, computes the deterministic session bucket, and returns the card
+   * to run plus any shadow candidate to mirror. A `pin` (a compensator's
+   * original agent+version) routes to exactly that version and never mirrors.
+   * Returns null when nothing serves the capability.
+   */
+  resolveRoute(input: {
+    capability: string;
+    tenant: string;
+    taskId: string;
+    pin?: { agentId: string; version: string };
+  }): Promise<RouteResult | null>;
   /**
    * Cedar decision for one delegation. The orchestrator is the PEP for
    * agent-to-agent and user-to-agent delegation. Presents the principal's
@@ -304,9 +420,55 @@ export interface ControlActivities {
      * from. Independent of approval/compensation (a gated write carries both).
      */
     capability?: CapabilityTokenGrounds;
+    /**
+     * Signed into the token's deployment claim — present ONLY when the
+     * ShadowStepWorkflow brokers a shadow step token. The tool gateway reads it
+     * to suppress side effects for the shadow step.
+     */
+    deployment?: { mode: string };
   }): Promise<{ token: string }>;
   /** Protocol-validated audit emission (JetStream-acked). */
   emitAudit(event: Record<string, unknown>): Promise<void>;
+  /** sha256 over the canonical form of a value (the shadow result's output digest). */
+  digestValue(value: unknown): Promise<{ digest: string }>;
+
+  // --- Deployment Controller (item 4) ---
+  /**
+   * Validates a candidate before a deployment starts: it must be `registered`
+   * with a baseline whose id/version match; the current active version becomes
+   * the incumbent (a first-ever deployment has none — the workflow uses an admin
+   * bootstrap). Returns the candidate's capabilities/risk and a baseline-
+   * comparison note (same suite → candidate ≥ incumbent − tolerance; different
+   * suite → 'incomparable_suite', recorded and allowed).
+   */
+  beginDeployment(input: {
+    agentId: string;
+    candidateVersion: string;
+  }): Promise<DeploymentPreflight>;
+  /** Drives a registry versioned lifecycle transition with the controller's registry:deploy scope. */
+  deployTransition(input: {
+    agentId: string;
+    version: string;
+    state: string;
+    rampPercent?: number;
+    reason?: string;
+  }): Promise<void>;
+  /** Atomic promote (registry POST /promote): candidate canary→active, incumbent active→deprecated. */
+  promoteVersion(input: { agentId: string; version: string }): Promise<void>;
+  /**
+   * Fetches the audit window and runs the GateEvaluator. `kind` selects the
+   * shadow (join shadow_result to primary) or canary (split by version) math.
+   */
+  evaluateGate(input: {
+    kind: 'shadow' | 'canary';
+    tenant: string;
+    since: string;
+    candidateVersion: string;
+    incumbentVersion?: string;
+    thresholds: GateThresholds;
+  }): Promise<GateReport>;
+  /** Current ISO time (activity-side wall clock) for gate window boundaries. */
+  now(): Promise<{ iso: string }>;
   /**
    * Loads and resolves the current price book to integer micro-USD rates
    * (Cost Meter). Called once per task; the resolved book is pinned into
@@ -327,4 +489,12 @@ export interface AgentActivities {
 }
 
 export const CONTROL_TASK_QUEUE = 'acp-tasks';
-export const agentTaskQueue = (agentId: string): string => `agent-${agentId}`;
+/**
+ * Version-qualified agent task queue (item 4): `agent-{id}@{version}`. Two
+ * versions of one agent serve DISTINCT queues, so the orchestrator dispatches a
+ * canary/shadow step to the exact version's worker — the dispatch contract with
+ * both SDKs (packages/agent-sdk agentTaskQueue / python agent_task_queue must
+ * produce this byte-for-byte).
+ */
+export const agentTaskQueue = (agentId: string, version: string): string =>
+  `agent-${agentId}@${version}`;

@@ -1015,3 +1015,83 @@ describe('structural risk-class enforcement (step 3.5)', () => {
     expect(unbound.compensation).toEqual({ active: false });
   });
 });
+
+// ------------------------------------------- shadow suppression (item 4, step 2.5)
+
+/** A shadow-context caller: a verified deployment.mode='shadow' token + an R0 capability. */
+function shadowCaller(over: { risk?: string } = {}): Caller {
+  return resolveCaller(
+    claimsFor({
+      aud: 'acp:tools',
+      scope: 'probe:read probe:draft probe:write probe:admin',
+      act: { sub: 'agent:knowledge-agent@0.2.0', act: { sub: 'svc:orchestrator' } },
+      brokered: { task_id: RISK_TASK_ID, verified_at: '2026-07-11T09:00:00Z' },
+      capability: { name: 'knowledge.search', risk: over.risk ?? 'R0' },
+      deployment: { mode: 'shadow' },
+    }),
+    'raw-shadow-jwt',
+  );
+}
+
+describe('shadow suppression (step 2.5)', () => {
+  it('executes an R0 read normally in a shadow context (real reads are not suppressed)', async () => {
+    const result = await h.core.callTool(shadowCaller(), 'scripted', 'probe', {}, CORR);
+    expect(envelopeOf(result)?.ok).toBe(true);
+    expect(h.scriptedCalls.calls).toBe(1);
+  });
+
+  it('suppresses an R1 write: refuses, records the would-be call, no policy block', async () => {
+    const result = await h.core.callTool(shadowCaller(), 'scripted', 'draft_probe', {}, CORR);
+    expect(errorOf(result).code).toBe('upstream_auth');
+    expect(errorOf(result).message).toContain('side effects suppressed');
+    expect(h.scriptedCalls.calls).toBe(0);
+    expect(h.limiter.calls).toBe(0); // suppressed before the limiter and before Cedar
+
+    const event = h.audit.at(-1)!;
+    expect(event.event_type).toBe('tool.called');
+    expect(event.action.inputs_digest).toBeDefined();
+    expect(event.details as Record<string, unknown>).toMatchObject({
+      shadow_suppressed: true,
+      tool_risk: 'R1',
+      server: 'scripted',
+      tool: 'draft_probe',
+    });
+    // No policy reference: suppression precedes Cedar.
+    expect(event.reason?.policy).toBeUndefined();
+  });
+
+  it('never contacts the upstream for an R2 write, even with a failing-fake upstream', async () => {
+    scriptedRespond = () => {
+      throw new Error('upstream must not be reached in shadow mode');
+    };
+    const result = await h.core.callTool(shadowCaller(), 'scripted', 'write_probe', {}, CORR);
+    expect(errorOf(result).code).toBe('upstream_auth');
+    expect(h.scriptedCalls.calls).toBe(0);
+  });
+
+  it('suppresses BEFORE Cedar: a would-be deny still records shadow_suppressed, not a policy block', async () => {
+    h.policy.decision = {
+      decision: 'deny',
+      bundle_version: '2026.07+deny',
+      determining_policies: [],
+    };
+    const result = await h.core.callTool(shadowCaller(), 'scripted', 'write_probe', {}, CORR);
+    expect(errorOf(result).message).toContain('side effects suppressed');
+    const event = h.audit.at(-1)!;
+    expect((event.details as { shadow_suppressed?: boolean }).shadow_suppressed).toBe(true);
+    expect(event.reason?.policy).toBeUndefined();
+    expect(h.policy.requests).toHaveLength(0); // Cedar never consulted
+  });
+
+  it('does not suppress a NON-shadow R2 write (step 2.5 fires only for a shadow claim)', async () => {
+    const result = await h.core.callTool(
+      capabilityAgentCaller({ name: 'change.step', risk: 'R2' }),
+      'scripted',
+      'write_probe',
+      {},
+      CORR,
+    );
+    expect(envelopeOf(result)?.ok).toBe(true);
+    expect(h.scriptedCalls.calls).toBe(1);
+  });
+});

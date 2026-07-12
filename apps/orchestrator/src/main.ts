@@ -39,6 +39,7 @@ const activities = createControlActivities({
   registryUrl: env('ACP_REGISTRY_URL', 'http://localhost:7102'),
   policyUrl: env('ACP_POLICY_URL', 'http://localhost:7103'),
   tokenUrl: env('ACP_TOKEN_URL', 'http://localhost:7101'),
+  auditUrl: env('ACP_AUDIT_URL', 'http://localhost:7104'),
   clientId: env('ACP_ORCHESTRATOR_CLIENT_ID', 'svc-orchestrator'),
   clientSecret: env('ACP_ORCHESTRATOR_CLIENT_SECRET', 'orchestrator-dev-secret'),
   verifier: new JwtVerifier(

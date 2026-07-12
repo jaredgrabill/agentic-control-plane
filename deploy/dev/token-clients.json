@@ -34,7 +34,7 @@
     "principal": "svc:orchestrator",
     "tenant": "platform",
     "roles": ["platform", "broker"],
-    "scopes": ["registry:read", "policy:decide"]
+    "scopes": ["registry:read", "registry:deploy", "policy:decide", "audit:read"]
   },
   {
     "client_id": "svc-tool-gateway",
@@ -64,6 +64,22 @@
     "client_id": "agent-knowledge-agent",
     "client_secret": "agent-knowledge-dev-secret",
     "principal": "agent:knowledge-agent@0.1.0",
+    "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
+    "client_id": "agent-knowledge-agent-v2",
+    "client_secret": "agent-knowledge-v2-dev-secret",
+    "principal": "agent:knowledge-agent@0.2.0",
+    "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
+    "client_id": "agent-knowledge-agent-v3",
+    "client_secret": "agent-knowledge-v3-dev-secret",
+    "principal": "agent:knowledge-agent@0.3.0",
     "tenant": "acme",
     "roles": ["agent"],
     "scopes": []
@@ -104,6 +120,8 @@
       "registry:read",
       "knowledge:ingest",
       "audit:read",
+      "deploy:write",
+      "deploy:read",
       "llm:invoke"
     ]
   }

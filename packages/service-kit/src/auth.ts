@@ -87,6 +87,21 @@ export interface CapabilityClaim {
   risk: string;
 }
 
+/**
+ * Signed deployment grounds (Phase 3 item 4). Only `TokenIssuer.delegate()`
+ * sets it — and only the orchestrator's ShadowStepWorkflow, when it brokers a
+ * SHADOW step token. Rides verbatim across the shadow agent's same-actor
+ * acp:tools exchange (SPRINT cross-item contract) so the tool gateway reads
+ * `deployment.mode === 'shadow'` from a VERIFIED claim and SUPPRESSES side
+ * effects (executes R0 reads, refuses R1+ writes and records what would have
+ * been done). A caller cannot forge it: issue()/exchange() reject a
+ * body-supplied deployment (400), and an actor-appending exchange drops it.
+ */
+export interface DeploymentClaim {
+  /** The deployment mode; v0 is 'shadow' only (side-effect suppression). */
+  mode: string;
+}
+
 export interface PlatformClaims extends JWTPayload {
   sub: string;
   tenant: string;
@@ -102,6 +117,8 @@ export interface PlatformClaims extends JWTPayload {
   compensation?: CompensationClaim;
   /** Present only on broker-delegated step tokens naming the executing capability, and their same-actor exchanges. */
   capability?: CapabilityClaim;
+  /** Present only on broker-delegated SHADOW step tokens, and their same-actor exchanges. */
+  deployment?: DeploymentClaim;
 }
 
 export class AuthError extends Error {

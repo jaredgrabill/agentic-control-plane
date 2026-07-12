@@ -5,6 +5,8 @@ export interface AuditQuery {
   tenant: string;
   taskId?: string | undefined;
   eventType?: string | undefined;
+  /** ISO timestamp; only events with occurred_at >= since are returned (indexed by (tenant, occurred_at)). */
+  since?: string | undefined;
   limit?: number | undefined;
 }
 
@@ -81,6 +83,10 @@ export class PgAuditStore implements AuditStore {
     if (q.eventType !== undefined) {
       params.push(q.eventType);
       clauses.push(`event_type = $${params.length}`);
+    }
+    if (q.since !== undefined) {
+      params.push(q.since);
+      clauses.push(`occurred_at >= $${params.length}`);
     }
     params.push(Math.min(q.limit ?? 200, 1000));
     const res = await this.pool.query<{ event: AuditEvent }>(
