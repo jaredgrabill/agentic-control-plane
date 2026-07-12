@@ -21,7 +21,10 @@ export interface FirewallRulesSearchArgs {
   limit?: number | undefined;
 }
 
-export function firewallRulesSearch(fx: NetsecFixtures, args: FirewallRulesSearchArgs): QueryOutcome {
+export function firewallRulesSearch(
+  fx: NetsecFixtures,
+  args: FirewallRulesSearchArgs,
+): QueryOutcome {
   const active =
     args.service !== undefined ||
     args.cidr !== undefined ||

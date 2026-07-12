@@ -40,8 +40,7 @@ export function registerExposureAnalysis(agent: Agent, tools: ToolClient): void 
     const input = rawInput as ExposureInput;
     if (
       input.include_ports !== undefined &&
-      (!Array.isArray(input.include_ports) ||
-        input.include_ports.some((p) => !Number.isInteger(p)))
+      (!Array.isArray(input.include_ports) || input.include_ports.some((p) => !Number.isInteger(p)))
     ) {
       throw new CapabilityError(
         ErrorClass.NeedsInput,
@@ -50,7 +49,12 @@ export function registerExposureAnalysis(agent: Agent, tools: ToolClient): void 
     }
 
     const serviceArgs = input.service === undefined ? {} : { service: input.service };
-    const sgResponse = await tools.call(NETSEC, 'security_group_get', serviceArgs, callOptions(ctx));
+    const sgResponse = await tools.call(
+      NETSEC,
+      'security_group_get',
+      serviceArgs,
+      callOptions(ctx),
+    );
     const ipamResponse = await tools.call(NETSEC, 'ipam_lookup', serviceArgs, callOptions(ctx));
     const groups = (sgResponse.data as { groups: Group[] }).groups;
     const allocations = (ipamResponse.data as { allocations: Allocation[] }).allocations;
