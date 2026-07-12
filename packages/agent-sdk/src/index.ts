@@ -6,6 +6,7 @@
 
 export { Agent, type AgentOptions, type Handler } from './agent.js';
 export { AnswerBuilder, DEFAULT_CONFIDENCE_FLOOR } from './answer.js';
+export { BUS_AUDIENCE, BusTokenSource, type BusTokenOptions } from './bus-token.js';
 export { CapabilityContext } from './context.js';
 export { CapabilityError, ErrorClass } from './errors.js';
 export {

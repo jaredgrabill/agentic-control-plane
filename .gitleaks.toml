@@ -11,6 +11,8 @@ description = "Synthetic test fixtures and documented dev-stack defaults"
 paths = [
   '''packages/protocol/fixtures/.*''',
   '''deploy/dev/token-clients\.json''',
+  '''deploy/compose/nats/nats-server\.conf''',
+  '''scripts/run-platform\.mjs''',
   '''fixtures/acme-corp/.*''',
   '''.*/tests?/.*''',
 ]

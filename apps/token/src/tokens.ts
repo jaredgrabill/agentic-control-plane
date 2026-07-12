@@ -17,6 +17,49 @@ export const DEFAULT_TTL_SECONDS = 10 * 60;
 /** ADR-0007: broker grounds older than this are refused (defense-in-depth against snapshot replay). */
 export const DEFAULT_MAX_TASK_AGE_SECONDS = 86_400;
 
+/**
+ * The read side of the kill switch the issuer needs (ADR-0007 broker-time
+ * denylist, item 0c). Structurally satisfied by service-kit's
+ * KillSwitchWatcher; injectable so unit tests stub it. All three return a
+ * truthy state only when the switch is ACTIVE.
+ */
+export interface KillSwitchLike {
+  fleetHalt(): unknown;
+  agentSuspension(agentId: string): unknown;
+  principalDenied(sub: string): unknown;
+}
+
+/** Why a mint was refused, for the token.denied audit and the 403 body. */
+export interface TokenDenial {
+  reason: 'fleet_halt' | 'killswitch' | 'principal_denylist';
+  /** The control-KV key that tripped, e.g. killswitch.agent.cloud-agent. */
+  key: string;
+  /** The offending principal (suspended agent, denylisted subject). */
+  principal: string;
+  tenant: string;
+}
+
+/**
+ * A mint refused at broker time because an identity is revoked — distinct
+ * from a scope/shape AuthError. 403, and carries the denial so the app can
+ * emit a token.denied audit event.
+ */
+export class TokenDeniedError extends AuthError {
+  constructor(
+    readonly denial: TokenDenial,
+    message: string,
+  ) {
+    super(message, 403);
+    this.name = 'TokenDeniedError';
+  }
+}
+
+/** `agent:{id}@{version}` (or `agent:{id}`) → the bare kill-switch id; undefined for non-agents. */
+function agentIdOf(principal: string): string | undefined {
+  if (!principal.startsWith('agent:')) return undefined;
+  return principal.slice('agent:'.length).split('@')[0];
+}
+
 export interface IssueRequest {
   client: RegisteredClient;
   audience: string;
@@ -68,13 +111,73 @@ export interface IssuedToken {
 
 export class TokenIssuer {
   private readonly maxTaskAgeSeconds: number;
+  private readonly killSwitch: KillSwitchLike | undefined;
 
   constructor(
     private readonly keys: KeyStore,
     private readonly issuer: string,
-    options?: { maxTaskAgeSeconds?: number },
+    options?: { maxTaskAgeSeconds?: number; killSwitch?: KillSwitchLike },
   ) {
     this.maxTaskAgeSeconds = options?.maxTaskAgeSeconds ?? DEFAULT_MAX_TASK_AGE_SECONDS;
+    this.killSwitch = options?.killSwitch;
+  }
+
+  /**
+   * ADR-0007 broker-time denylist. Returns the first denial that applies —
+   * fleet halt, then agent suspension, then principal denylist — so a
+   * revoked identity gets NO fresh token (its outstanding ones live out
+   * their ≤15min; the tool-gateway/callout checks block use in seconds).
+   */
+  private denialFor(params: {
+    tenant: string;
+    primaryPrincipal: string;
+    checkFleet: boolean;
+    agentPrincipals: string[];
+    denylistPrincipals: string[];
+  }): TokenDenial | undefined {
+    const ks = this.killSwitch;
+    if (ks === undefined) return undefined;
+    if (params.checkFleet && ks.fleetHalt() !== undefined) {
+      return {
+        reason: 'fleet_halt',
+        key: 'killswitch.fleet',
+        principal: params.primaryPrincipal,
+        tenant: params.tenant,
+      };
+    }
+    for (const p of params.agentPrincipals) {
+      const id = agentIdOf(p);
+      if (id !== undefined && ks.agentSuspension(id) !== undefined) {
+        return {
+          reason: 'killswitch',
+          key: `killswitch.agent.${id}`,
+          principal: p,
+          tenant: params.tenant,
+        };
+      }
+    }
+    for (const p of params.denylistPrincipals) {
+      if (ks.principalDenied(p) !== undefined) {
+        return {
+          reason: 'principal_denylist',
+          key: `killswitch.principal.${p}`,
+          principal: p,
+          tenant: params.tenant,
+        };
+      }
+    }
+    return undefined;
+  }
+
+  private assertNotDenied(grant: string, params: Parameters<TokenIssuer['denialFor']>[0]): void {
+    const denial = this.denialFor(params);
+    if (denial !== undefined) {
+      throw new TokenDeniedError(
+        denial,
+        `${grant} refused: ${denial.reason} on ${denial.principal} (${denial.key}) — ` +
+          'a revoked identity gets no fresh token (ADR-0007 broker-time denylist)',
+      );
+    }
   }
 
   private async sign(
@@ -98,6 +201,20 @@ export class TokenIssuer {
 
   /** client_credentials issuance: the token speaks for the client's registered principal. */
   async issue(request: IssueRequest): Promise<IssuedToken> {
+    // Broker-time denylist: a suspended/denylisted/halted agent gets no
+    // fresh token at all — this blocks the acp:bus mint the NATS callout
+    // would otherwise honor. Non-agent clients (platform infra) are not
+    // gated here: fleet halt must not stop the control plane issuing its own
+    // service tokens.
+    if (request.client.principal.startsWith('agent:')) {
+      this.assertNotDenied('issue', {
+        tenant: request.client.tenant,
+        primaryPrincipal: request.client.principal,
+        checkFleet: true,
+        agentPrincipals: [request.client.principal],
+        denylistPrincipals: [request.client.principal],
+      });
+    }
     const requested = request.scopes ?? request.client.scopes;
     const outside = requested.filter((s) => !request.client.scopes.includes(s));
     if (outside.length > 0) {
@@ -136,6 +253,15 @@ export class TokenIssuer {
         403,
       );
     }
+    // Broker-time denylist: a killed agent cannot convert tokens it still
+    // holds — the effective actor must not be suspended or denylisted.
+    this.assertNotDenied('exchange', {
+      tenant: subject.tenant,
+      primaryPrincipal: actor,
+      checkFleet: false,
+      agentPrincipals: [actor],
+      denylistPrincipals: [actor],
+    });
     // Idempotent actor: re-exchanging under the same acting party (e.g. an
     // agent narrowing its own token toward a tool audience) must not
     // duplicate links in the delegation chain. And when the requested actor
@@ -143,12 +269,26 @@ export class TokenIssuer {
     // plain user token toward acp:knowledge), no delegation happened — the
     // exchange must not fabricate an act link, or downstream PEPs would
     // record a bogus [user, user] chain.
-    const act: ActClaim | undefined =
-      subject.act?.sub === actor
-        ? subject.act
-        : actor === subject.sub && subject.act === undefined
-          ? undefined
-          : { sub: actor, ...(subject.act !== undefined ? { act: subject.act } : {}) };
+    const sameActor = subject.act?.sub === actor;
+    const act: ActClaim | undefined = sameActor
+      ? subject.act
+      : actor === subject.sub && subject.act === undefined
+        ? undefined
+        : { sub: actor, ...(subject.act !== undefined ? { act: subject.act } : {}) };
+
+    // Governance-claim exchange propagation (SPRINT cross-item contract,
+    // item-3 D2): broker-minted grounds ride VERBATIM only across same-actor
+    // narrowing exchanges — the existing idempotent-actor branch. This is
+    // what lets an agent's per-call acp:agent→acp:tools exchange (post-0c
+    // audience flip) still carry the brokered.task_id binding downstream
+    // PEPs check. Any actor-appending exchange or chain-free rescope DROPS
+    // it (a new actor must not inherit another actor's task grounds). The
+    // claim can only come from the verified subject token — the exchange
+    // endpoint accepts no body-supplied brokered claim — so there is no
+    // injection path. Item 3 formalizes the full claim list; 0c ships
+    // `brokered`, the one claim already minted (supersedes design-0c §4's
+    // "no brokered claim propagates").
+    const brokered = sameActor ? subject.brokered : undefined;
 
     return this.sign(
       {
@@ -158,6 +298,7 @@ export class TokenIssuer {
         roles: subject.roles,
         scope: scopes.join(' '),
         ...(act !== undefined ? { act } : {}),
+        ...(brokered !== undefined ? { brokered } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
@@ -204,6 +345,16 @@ export class TokenIssuer {
     // broker takes custody, user → actor → broker when it delegates onward —
     // delegationChain() keeps yielding user → svc:orchestrator → agent.
     const actor = request.actor ?? request.client.principal;
+    // Broker-time denylist: refuse to mint a fresh step token for a halted
+    // fleet, a suspended target agent, or a denylisted subject/actor — this
+    // is what stops a suspended agent getting new tokens for a task's life.
+    this.assertNotDenied('delegate', {
+      tenant: subject.tenant,
+      primaryPrincipal: actor,
+      checkFleet: true,
+      agentPrincipals: [actor],
+      denylistPrincipals: [subject.sub, actor],
+    });
     const act: ActClaim =
       actor === request.client.principal
         ? { sub: request.client.principal }

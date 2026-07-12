@@ -4,6 +4,7 @@ AnswerBuilder, and the EvalHarness."""
 
 from acp_agent_sdk.agent import Agent as Agent
 from acp_agent_sdk.answer import AnswerBuilder as AnswerBuilder
+from acp_agent_sdk.bus import BusTokenSource as BusTokenSource
 from acp_agent_sdk.context import CapabilityContext as CapabilityContext
 from acp_agent_sdk.errors import CapabilityError as CapabilityError
 from acp_agent_sdk.errors import ErrorClass as ErrorClass

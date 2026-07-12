@@ -55,6 +55,22 @@
     "scopes": []
   },
   {
+    "client_id": "agent-cloud-agent",
+    "client_secret": "agent-cloud-dev-secret",
+    "principal": "agent:cloud-agent@0.1.0",
+    "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
+    "client_id": "agent-code-agent",
+    "client_secret": "agent-code-dev-secret",
+    "principal": "agent:code-agent@0.1.0",
+    "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
     "client_id": "svc-ci",
     "client_secret": "ci-dev-secret",
     "principal": "svc:agent-ci",

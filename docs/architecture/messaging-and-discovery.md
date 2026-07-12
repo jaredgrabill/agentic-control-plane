@@ -73,13 +73,25 @@ Rules:
   (and per environment), plus a `platform` account exporting control-plane
   services (registry, policy, token) as cross-account service exports.
 - **Auth callout** bridges platform identity to bus identity: on connection,
-  the callout service validates the presented platform JWT (same JWKS as the
+  the callout responder validates the presented platform JWT (same JWKS as the
   Gateway), consults RBAC, and mints a session-scoped NATS user JWT from a
   **scoped signing key** template (role → subject permissions). Bus
   permissions stay coarse (tenant prefix + role template); fine-grained
   authorization happens at the Policy Service per call.
 - No agent ever holds long-lived bus credentials; NATS JWTs expire with the
   platform token that produced them.
+- **Implemented in Phase 3 item 0c** (dev stack): the callout responder lives
+  in the token service (`apps/token/src/bus-auth/`) — zero-network local
+  KeyStore verification over the existing NATS connection. An agent mints an
+  `acp:bus` token with its own client (`client_credentials`, ≤15min) and
+  connects presenting it; the responder accepts only `aud acp:bus` + role
+  `agent` + a versioned `agent:{id}@…` sub + a mapped tenant + not
+  kill-switched, then mints a `TENANT_ACME` user JWT whose exp equals the
+  platform token's and whose pub/sub template is parameterized per agent (no
+  permission reaches another agent or a platform-internal subject). Requests
+  are xkey-sealed. Platform services keep static bypass users; the static
+  tenant user is gone. A background refresh re-mints at ~2/3 TTL so reconnects
+  present a live token (`BusTokenSource`, both SDKs).
 
 ## Discovery Flow
 

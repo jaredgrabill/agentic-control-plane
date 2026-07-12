@@ -1,0 +1,18 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f70",
+  "occurred_at": "2026-07-11T09:05:00Z",
+  "tenant": "acme",
+  "event_type": "token.denied",
+  "actor": {
+    "principal": "svc:orchestrator",
+    "delegation_chain": [{ "sub": "svc:orchestrator" }]
+  },
+  "action": { "name": "token.denied" },
+  "details": {
+    "grant": "urn:acp:oauth:grant-type:broker-delegation",
+    "audience": "acp:agent:cloud-agent",
+    "reason": "killswitch",
+    "key": "killswitch.agent.cloud-agent",
+    "principal": "agent:cloud-agent@0.1.0"
+  }
+}

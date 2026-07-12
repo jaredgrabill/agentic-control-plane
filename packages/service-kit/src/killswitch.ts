@@ -6,6 +6,17 @@ import { openKv } from './nats.js';
 export const CONTROL_BUCKET = 'acp_control';
 const FLEET_KEY = 'killswitch.fleet';
 const agentKey = (agentId: string): string => `killswitch.agent.${agentId}`;
+/**
+ * Principal denylist key (ADR-0007 broker-time check, item 0c). Keyed by the
+ * full principal string (agent:{id}@{ver}, user:{id}, svc:{id}). NATS KV keys
+ * forbid `:` and `@` (only `-/_=.` plus alphanumerics), so the principal is
+ * base64url-encoded into the last token — an alphabet the KV accepts, applied
+ * identically on write (denyPrincipal) and read (principalDenied), so no
+ * caller ever handles the encoded form. The watcher's `killswitch.>` prefix
+ * still covers it.
+ */
+const principalKey = (sub: string): string =>
+  `killswitch.principal.${Buffer.from(sub, 'utf8').toString('base64url')}`;
 
 export interface KillSwitchState {
   active: boolean;
@@ -62,6 +73,18 @@ export class KillSwitchWatcher {
     return s?.active === true ? s : undefined;
   }
 
+  /**
+   * Whether a principal is on the broker-time denylist (ADR-0007). Distinct
+   * from agent suspension (keyed by bare agent id): the denylist keys the
+   * full principal string, so it revokes a specific agent version, a user,
+   * or a service — the token service refuses to delegate/exchange/issue for
+   * it, and the NATS auth callout refuses its bus sessions.
+   */
+  principalDenied(sub: string): KillSwitchState | undefined {
+    const s = this.state.get(principalKey(sub));
+    return s?.active === true ? s : undefined;
+  }
+
   stop(): void {
     this.stopped = true;
   }
@@ -105,5 +128,21 @@ export class KillSwitchControl {
 
   async resumeFleet(): Promise<void> {
     await this.kv.put(FLEET_KEY, JSON.stringify({ active: false }));
+  }
+
+  async denyPrincipal(sub: string, reason: string, activatedBy: string): Promise<void> {
+    await this.kv.put(
+      principalKey(sub),
+      JSON.stringify({
+        active: true,
+        reason,
+        activated_by: activatedBy,
+        activated_at: new Date().toISOString(),
+      } satisfies KillSwitchState),
+    );
+  }
+
+  async allowPrincipal(sub: string): Promise<void> {
+    await this.kv.put(principalKey(sub), JSON.stringify({ active: false }));
   }
 }

@@ -88,8 +88,16 @@ We will make the orchestrator an **identity broker** — option (a):
   underneath the client secret.
 - **Revocation granularity coarsens** from step to task: an expired subject
   token no longer stops a running task's later steps. The kill switch
-  remains the severe-case control; a principal denylist check at broker time
-  is deferred to Phase 3.
+  remains the severe-case control. The principal denylist check at broker
+  time — deferred at the time of writing — **shipped in Phase 3 item 0c**:
+  `TokenIssuer.delegate()`, `exchange()`, and `issue()` now refuse to mint
+  for a halted fleet, a suspended agent, or a denylisted principal
+  (control-KV key `killswitch.principal.{sub}`, watched in-memory), emitting
+  a `token.denied` audit event. A revoked identity therefore gets no fresh
+  step token for the task's remaining life; its outstanding tokens live out
+  their ≤15-minute TTL while the tool-gateway and NATS-callout checks block
+  their use within seconds. Operate it with
+  `scripts/kill-switch.mjs deny-principal <principal> --reason "…"`.
 - The raw `subject_token` still appears once in workflow history as task
   input; its exposure is bounded by its own ≤ 15-minute TTL.
 - Revisit if the IETF on-behalf-of-for-agents drafts standardize a broker

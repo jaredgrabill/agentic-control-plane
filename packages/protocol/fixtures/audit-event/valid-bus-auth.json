@@ -1,0 +1,16 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f71",
+  "occurred_at": "2026-07-11T09:06:00Z",
+  "tenant": "acme",
+  "event_type": "bus.auth",
+  "actor": {
+    "principal": "agent:cloud-agent@0.1.0",
+    "delegation_chain": [{ "sub": "agent:cloud-agent@0.1.0" }]
+  },
+  "action": { "name": "bus.auth" },
+  "details": {
+    "decision": "allow",
+    "account": "TENANT_ACME",
+    "user_nkey": "UXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+  }
+}

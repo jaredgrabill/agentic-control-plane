@@ -266,4 +266,59 @@ describe('McpToolClient HTTP auth statuses and header forwarding', () => {
       expect(headers['x-acp-test']).toBe('yes');
     }
   });
+
+  it('exchanges the delegated token before it becomes the bearer (item 0c)', async () => {
+    seen.length = 0;
+    const provided: string[] = [];
+    const client = new McpToolClient({
+      servers: { cloud: { url } },
+      tokenProvider: (delegated) => {
+        provided.push(delegated);
+        return Promise.resolve(`tools-for-${delegated}`);
+      },
+    });
+    await failureOf(client.call('cloud', 't', {}, { delegatedToken: 'delegated-abc' }));
+    // The provider saw the raw delegated token exactly once...
+    expect(provided).toEqual(['delegated-abc']);
+    // ...and the wire only ever carried the exchanged token — never the
+    // delegated one (a stolen step token must not reach the gateway).
+    expect(seen.length).toBeGreaterThan(0);
+    for (const headers of seen) {
+      expect(headers.authorization).toBe('Bearer tools-for-delegated-abc');
+    }
+  });
+
+  it('surfaces a tokenProvider failure as its own CapabilityError', async () => {
+    seen.length = 0;
+    const client = new McpToolClient({
+      servers: { cloud: { url } },
+      tokenProvider: () =>
+        Promise.reject(new CapabilityError('policy_denied', 'exchange refused (403)')),
+    });
+    const err = await failureOf(client.call('cloud', 't', {}, { delegatedToken: 'd' }));
+    expect(err.errorClass).toBe('policy_denied');
+    expect(err.message).toBe('exchange refused (403)');
+    // The exchange failed, so no upstream call was attempted.
+    expect(seen.length).toBe(0);
+  });
+});
+
+describe('McpToolClient tokenProvider vs transport bindings', () => {
+  it('does not exchange for transport-factory bindings (headers are ignored)', async () => {
+    let providerCalls = 0;
+    const client = new McpToolClient({
+      servers: {
+        cloud: bindingFor('t', () =>
+          envelopeResult({ ok: true, data: { ok: 1 }, provenance: PROVENANCE }),
+        ),
+      },
+      tokenProvider: (t) => {
+        providerCalls += 1;
+        return Promise.resolve(t);
+      },
+    });
+    const response = await client.call('cloud', 't', {}, { delegatedToken: 'd' });
+    expect(response.data).toEqual({ ok: 1 });
+    expect(providerCalls).toBe(0);
+  });
 });

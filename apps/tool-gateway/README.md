@@ -14,21 +14,30 @@ span. Every refusal after authN is a typed ToolEnvelope error inside an
 MCP result, so the `@acp/tool-client` error mapping fires unchanged;
 authN failures are HTTP 401.
 
-## Which tokens the gateway accepts (v1)
+## Which tokens the gateway accepts
 
-`verifyWithAudience` accepts `aud === 'acp:tools'` **or**
-`aud.startsWith('acp:agent:')`, with a consistency check: an
-`acp:agent:{id}` token must carry `act.sub` starting `agent:{id}@`.
+`verifyWithAudience` accepts exactly one audience: `aud === 'acp:tools'`
+(Phase 3 item 0c — the audience-family sprawl of v1 is closed, debt #2).
+Multi-audience tokens are refused by `verifyWithAudience` regardless.
 
-Why accept agent audiences at all? The step's delegated token is minted
-for the *agent's* audience. Re-exchanging it toward `acp:tools` before
-every call would force token-service credentials onto every TS agent
-(exactly the debt the `noRetriever` design avoided) for **no authorization
-gain**: the delegated token already carries the narrowed scopes and the
-full `act` chain, which are the only inputs Cedar and the audit trail
-consume. The aud↔act.sub check means a stolen bare service token cannot
-simply be pointed at the gateway. Phase 3 tightens acceptance to
-`acp:tools` only once agents mint per-call tool tokens.
+Agents no longer present their step's delegated token (audience
+`acp:agent:{id}`) here. Each agent exchanges that token — using its **own**
+client secret, a second independent credential — for one bound to
+`acp:tools` (RFC 8693, same-actor narrowing; see
+`packages/tool-client` `toolTokenProvider`). Two consequences:
+
+- A stolen delegated step token replayed at the gateway opens **nothing**:
+  its audience is not accepted, and converting it needs the agent secret.
+- **Orchestrator-chain check** (`resolveCaller`): an `acp:tools` token whose
+  acting principal is an Agent (`act.sub` starts `agent:`) must carry a
+  delegation chain whose innermost actor is `svc:orchestrator` — the sole
+  broker (ADR-0007). This refuses an agent-secret + stolen-subject-token
+  fabrication that names an agent actor with no broker hop underneath.
+  User and Service principals are exempt (IDE users mint `acp:tools`
+  directly and have no chain by design; Cedar gates them). This is a
+  structural gate — Cedar still makes the real authorization decision on
+  top of it, so a platform-role client that can fabricate a full chain is
+  caught by policy (and is a trusted-infra, audited concern), not here.
 
 ## Credential brokering
 

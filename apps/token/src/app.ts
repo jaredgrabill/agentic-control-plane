@@ -4,7 +4,13 @@ import { AuthError, createHttpServer, delegationChain, type Logger } from '@acp/
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ClientRegistry, RegisteredClient } from './clients.js';
 import type { KeyStore } from './keys.js';
-import { TokenIssuer, type IssuedToken } from './tokens.js';
+import {
+  TokenDeniedError,
+  TokenIssuer,
+  type IssuedToken,
+  type KillSwitchLike,
+  type TokenDenial,
+} from './tokens.js';
 
 export const TOKEN_EXCHANGE_GRANT = 'urn:ietf:params:oauth:grant-type:token-exchange';
 /** Non-standard on purpose: RFC 8693 requires a live subject token; the broker grant asserts a verified claim set (ADR-0007). */
@@ -24,6 +30,8 @@ export interface TokenAppDeps {
   now?: () => Date;
   /** ADR-0007: broker grounds older than this are refused. Default 86400s. */
   brokerMaxTaskAgeSeconds?: number;
+  /** ADR-0007 broker-time denylist: refuse mints for revoked identities. */
+  killSwitch?: KillSwitchLike;
 }
 
 interface TokenBody {
@@ -47,7 +55,29 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     ...(deps.brokerMaxTaskAgeSeconds === undefined
       ? {}
       : { maxTaskAgeSeconds: deps.brokerMaxTaskAgeSeconds }),
+    ...(deps.killSwitch === undefined ? {} : { killSwitch: deps.killSwitch }),
   });
+
+  /**
+   * Runs an issuer grant; if it is refused by the broker-time denylist,
+   * emits a token.denied audit event before the 403 surfaces. The mint
+   * already failed, so this is the security record of the refusal.
+   */
+  async function guarded<T>(
+    grant: string,
+    audience: string | undefined,
+    client: RegisteredClient,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err instanceof TokenDeniedError) {
+        await emitDenied(deps, grant, audience ?? '', client, err.denial);
+      }
+      throw err;
+    }
+  }
 
   app.get('/.well-known/jwks.json', () => deps.keys.jwks);
 
@@ -63,12 +93,15 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     if (body.audience === undefined || body.audience === '') {
       throw new AuthError('audience is required — platform tokens are always audience-bound', 400);
     }
-    const issued = await issuerSvc.issue({
-      client,
-      audience: body.audience,
-      scopes: splitScope(body.scope),
-      ttlSeconds: parseTtl(body.requested_ttl),
-    });
+    const audience = body.audience;
+    const issued = await guarded('client_credentials', audience, client, () =>
+      issuerSvc.issue({
+        client,
+        audience,
+        scopes: splitScope(body.scope),
+        ttlSeconds: parseTtl(body.requested_ttl),
+      }),
+    );
     await emitAudit(deps, 'token.issued', client, issued);
     return reply.send(toResponse(issued));
   });
@@ -94,14 +127,18 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     if (body.audience === undefined || body.audience === '') {
       throw new AuthError('audience is required — exchange rebinds the token to its target', 400);
     }
-    const issued = await issuerSvc.exchange({
-      client,
-      subjectToken: body.subject_token,
-      audience: body.audience,
-      scopes: splitScope(body.scope),
-      actor: body.actor,
-      ttlSeconds: parseTtl(body.requested_ttl),
-    });
+    const audience = body.audience;
+    const subjectToken = body.subject_token;
+    const issued = await guarded(TOKEN_EXCHANGE_GRANT, audience, client, () =>
+      issuerSvc.exchange({
+        client,
+        subjectToken,
+        audience,
+        scopes: splitScope(body.scope),
+        actor: body.actor,
+        ttlSeconds: parseTtl(body.requested_ttl),
+      }),
+    );
     await emitAudit(deps, 'token.exchanged', client, issued);
     return reply.send({
       ...toResponse(issued),
@@ -137,23 +174,28 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
         400,
       );
     }
-    const issued = await issuerSvc.delegate({
-      client,
-      subject: body.subject as { sub: string; tenant: string; roles: string[]; scopes: string[] },
-      audience: body.audience,
-      // Explicit-or-nothing: an empty scope string means an empty grant,
-      // never "everything the snapshot holds" (a toolless agent gets zero).
-      scopes: splitScope(body.scope) ?? [],
-      actor: body.actor,
-      grounds: {
-        task_id: body.grounds.task_id,
-        ...(body.grounds.subject_jti === undefined
-          ? {}
-          : { subject_jti: body.grounds.subject_jti }),
-        verified_at: body.grounds.verified_at,
-      },
-      ttlSeconds: parseTtl(body.requested_ttl),
-    });
+    const groundsTaskId = body.grounds.task_id;
+    const groundsVerifiedAt = body.grounds.verified_at;
+    const audience = body.audience;
+    const issued = await guarded(BROKER_DELEGATION_GRANT, audience, client, () =>
+      issuerSvc.delegate({
+        client,
+        subject: body.subject as { sub: string; tenant: string; roles: string[]; scopes: string[] },
+        audience,
+        // Explicit-or-nothing: an empty scope string means an empty grant,
+        // never "everything the snapshot holds" (a toolless agent gets zero).
+        scopes: splitScope(body.scope) ?? [],
+        actor: body.actor,
+        grounds: {
+          task_id: groundsTaskId,
+          ...(body.grounds?.subject_jti === undefined
+            ? {}
+            : { subject_jti: body.grounds.subject_jti }),
+          verified_at: groundsVerifiedAt,
+        },
+        ttlSeconds: parseTtl(body.requested_ttl),
+      }),
+    );
     await emitAudit(deps, 'token.brokered', client, issued, {
       reason: { task_id: body.grounds.task_id },
       details: {
@@ -208,6 +250,47 @@ function toResponse(issued: IssuedToken): Record<string, unknown> {
     expires_in: issued.expiresIn,
     scope: issued.claims.scope,
   };
+}
+
+/**
+ * Records a broker-time denial (ADR-0007). Emitted after the mint was
+ * already refused, so the caller gets its 403 regardless; this is the audit
+ * record of the refusal. R0 fail-open-with-alarm like the other token
+ * audits — the denial itself is enforced at mint time, not by this write.
+ */
+async function emitDenied(
+  deps: TokenAppDeps,
+  grant: string,
+  audience: string,
+  client: RegisteredClient,
+  denial: TokenDenial,
+): Promise<void> {
+  const event: AuditEvent = {
+    event_id: crypto.randomUUID(),
+    occurred_at: (deps.now?.() ?? new Date()).toISOString(),
+    tenant: denial.tenant,
+    event_type: 'token.denied',
+    actor: {
+      principal: client.principal,
+      delegation_chain: [{ sub: client.principal }],
+    },
+    action: { name: 'token.denied' },
+    details: {
+      grant,
+      audience,
+      reason: denial.reason,
+      key: denial.key,
+      principal: denial.principal,
+    },
+  };
+  try {
+    await deps.audit.publish(event);
+  } catch (err) {
+    deps.logger.error(
+      { err, reason: denial.reason, key: denial.key },
+      'token.denied audit publish failed (fail-open, R0 tier) — the denial itself was enforced',
+    );
+  }
 }
 
 async function emitAudit(

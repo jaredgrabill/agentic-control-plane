@@ -171,11 +171,23 @@ describe('401 matrix (HTTP-level, mapped policy_denied by the client)', () => {
     expect(cls).toBe('policy_denied');
   });
 
-  it('agent audience with a mismatched actor → 401', async () => {
+  it('old agent-audience token shape (acp:agent:{id}) → 401 at the door', async () => {
+    // Post-flip, the whole acp:agent:* family is refused by audience alone —
+    // a stolen delegated step token opens nothing here.
     const token = await makeToken(
-      { act: { sub: 'agent:code-agent@0.1.0', act: { sub: 'svc:orchestrator' } } },
+      { act: { sub: 'agent:cloud-agent@0.1.0', act: { sub: 'svc:orchestrator' } } },
       'acp:agent:cloud-agent',
     );
+    const { cls } = await classOf(
+      client().call('scripted', 'probe', {}, { delegatedToken: token }),
+    );
+    expect(cls).toBe('policy_denied');
+  });
+
+  it('acp:tools token acting as an agent with NO orchestrator chain → 401', async () => {
+    // The agent-secret + stolen-subject-token forge: names an agent actor
+    // but the chain does not bottom out at svc:orchestrator.
+    const token = await makeToken({ act: { sub: 'agent:cloud-agent@0.1.0' } });
     const { cls } = await classOf(
       client().call('scripted', 'probe', {}, { delegatedToken: token }),
     );
@@ -208,11 +220,10 @@ describe('accepted audiences', () => {
     expect(auditEvents[0]!.reason?.task_id).toBe(taskId);
   });
 
-  it('acp:agent:{id} delegated token with a consistent actor → success', async () => {
-    const token = await makeToken(
-      { act: { sub: 'agent:cloud-agent@0.1.0', act: { sub: 'svc:orchestrator' } } },
-      'acp:agent:cloud-agent',
-    );
+  it('acp:tools token acting as an agent, chain terminating at the orchestrator → success', async () => {
+    const token = await makeToken({
+      act: { sub: 'agent:cloud-agent@0.1.0', act: { sub: 'svc:orchestrator' } },
+    });
     const response = await client().call('scripted', 'probe', {}, { delegatedToken: token });
     expect(response.data).toEqual({ answered: true });
     expect(auditEvents[0]!.actor.principal).toBe('agent:cloud-agent@0.1.0');
