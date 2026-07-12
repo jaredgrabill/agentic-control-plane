@@ -340,6 +340,130 @@ describe('kill switch tiers 2-3 + audit integrity', () => {
     expect(cli.stdout).toContain(taskId);
   }, 240_000);
 
+  it('numeric round-trip (real pg): nasty jsonb numbers hash identically after the jsonb round-trip', async () => {
+    // The Number() coercion seam (store.ts chainHead/toChainRow) and the
+    // stableStringify float64 re-render (chain.ts) are only claims until a
+    // record actually round-trips through REAL postgres jsonb: pg stores json
+    // numbers as arbitrary-precision numeric and re-renders them (1e21 comes
+    // back as "1000000000000000000000"), node-pg parses that back to float64,
+    // and the verifier's recompute must still equal the append-time hash.
+    // Self-contained on a throwaway tenant, exactly like the tamper drill.
+    const tenant = `ksnum${Math.floor(Math.random() * 1e6)}`;
+    const pool = new pg.Pool({ connectionString: DB_URL });
+    const recordHash = (chainSeq: number, prevHash: string, event: unknown): string =>
+      sha256Digest(
+        stableStringify({
+          v: 'acp-audit-chain/v1',
+          tenant,
+          chain_seq: chainSeq,
+          prev_hash: prevHash,
+          event,
+        }),
+      );
+    const nastyDetails: Record<string, number> = {
+      max_safe: Number.MAX_SAFE_INTEGER, // 9007199254740991
+      above_safe: 2 ** 53, // first unrepresentable odd boundary
+      float_sum: 0.1 + 0.2, // 0.30000000000000004
+      huge: 1e21, // pg jsonb re-renders as 1000000000000000000000
+      tiny: 5e-324, // smallest denormal
+      small_exp: 1e-7,
+      negative: -987654.321,
+      pi: Math.PI,
+      neg_zero: -0, // JSON renders as 0 on both sides
+    };
+    const mkEvent = (details: Record<string, number>): AuditEvent => ({
+      event_id: randomUUID(),
+      occurred_at: new Date().toISOString(),
+      tenant,
+      event_type: 'tool.called',
+      actor: { principal: 'svc:test' },
+      action: { name: 'numeric-roundtrip' },
+      details,
+    });
+
+    try {
+      // Row 3 carries a numeric literal BEYOND float64 precision, injected as
+      // raw JSON text: jsonb stores all 23 digits, node-pg's JSON.parse
+      // coerces to float64 on read — the hash must be over the PARSED value on
+      // both sides for verify to hold.
+      const bigLiteral = '12345678901234567890123';
+      const sentinel = 918273645;
+      const jsonTexts: string[] = [];
+      const events: unknown[] = [];
+      for (let i = 0; i < 3; i += 1) {
+        const event = mkEvent(i === 2 ? { ...nastyDetails, big_numeric: sentinel } : nastyDetails);
+        const text = JSON.stringify(event).replace(
+          `"big_numeric":${sentinel}`,
+          `"big_numeric":${bigLiteral}`,
+        );
+        jsonTexts.push(text);
+        events.push(JSON.parse(text)); // hash over the float64-parsed shape
+      }
+
+      let prev = GENESIS_PREV_HASH;
+      for (let seq = 1; seq <= 3; seq += 1) {
+        const event = events[seq - 1] as AuditEvent;
+        const hash = recordHash(seq, prev, event);
+        await pool.query(
+          `INSERT INTO audit_events (event_id, occurred_at, tenant, event_type, principal, event, chain_seq, prev_hash, record_hash)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [
+            event.event_id,
+            event.occurred_at,
+            tenant,
+            event.event_type,
+            'svc:test',
+            jsonTexts[seq - 1],
+            seq,
+            prev,
+            hash,
+          ],
+        );
+        prev = hash;
+      }
+
+      // Postgres really stored the full-precision literal (the seam is real:
+      // storage is lossless; the float64 coercion happens at node-pg parse).
+      const stored = await pool.query<{ text: string }>(
+        `SELECT event::text AS text FROM audit_events WHERE tenant=$1 AND chain_seq=3`,
+        [tenant],
+      );
+      expect(stored.rows[0]!.text).toContain(bigLiteral);
+      // And 1e21 was re-rendered in expanded numeric form by jsonb.
+      expect(stored.rows[0]!.text).toContain('1000000000000000000000');
+
+      // The verifier walks the chain through chainPage/toChainRow (bigint
+      // chain_seq -> Number) and recomputes every hash over the jsonb
+      // round-tripped events: it must still verify, and the head must come
+      // back as a real JSON number, not a bigint string.
+      const token = await ciToken('acp:audit', 'audit:read');
+      const res = await fetch(`${AUDIT_URL}/v1/verify?tenant=${tenant}`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      expect(res.status, await res.clone().text()).toBe(200);
+      const body = (await res.json()) as {
+        verified: boolean;
+        records_checked: number;
+        head: { chain_seq: number; record_hash: string } | null;
+        failure?: { kind: string; chain_seq: number };
+      };
+      expect(body.verified, JSON.stringify(body.failure)).toBe(true);
+      expect(body.records_checked).toBe(3);
+      expect(body.head?.chain_seq).toBe(3);
+      expect(typeof body.head?.chain_seq).toBe('number');
+      expect(body.head?.record_hash).toBe(prev);
+    } finally {
+      // Clean up ONLY this throwaway tenant's rows (same pattern as the drill).
+      await pool.query('DROP TRIGGER IF EXISTS audit_events_append_only ON audit_events');
+      await pool.query(`DELETE FROM audit_events WHERE tenant=$1`, [tenant]);
+      await pool.query(`
+        CREATE TRIGGER audit_events_append_only BEFORE UPDATE OR DELETE ON audit_events
+        FOR EACH ROW EXECUTE FUNCTION audit_events_no_mutation();
+      `);
+      await pool.end();
+    }
+  }, 120_000);
+
   it('tamper drill (security-negative): triggers refuse mutation + forged linkage; verify catches a mutation', async () => {
     // Self-contained on a throwaway tenant so acme/platform chains stay intact.
     const tenant = `ksdrill${Math.floor(Math.random() * 1e6)}`;
