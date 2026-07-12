@@ -1,0 +1,28 @@
+{
+  "name": "@acp/llm-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LLM Gateway: the one door to model providers — versioned model classes, intra-call provider failover, prompt-caching layout enforcement, model allowlists, and a model.invoked audit per completion",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "eslint .",
+    "test": "vitest run --coverage",
+    "start": "node dist/main.js"
+  },
+  "dependencies": {
+    "@acp/llm-client": "workspace:*",
+    "@acp/protocol": "workspace:*",
+    "@acp/service-kit": "workspace:*",
+    "@opentelemetry/api": "^1.9.1",
+    "fastify": "^5.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "@vitest/coverage-v8": "^3.2.4",
+    "jose": "^6.0.11",
+    "vitest": "^3.2.4"
+  }
+}

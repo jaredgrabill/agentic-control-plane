@@ -237,6 +237,37 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
 
+  apps/llm-gateway:
+    dependencies:
+      '@acp/llm-client':
+        specifier: workspace:*
+        version: link:../../packages/llm-client
+      '@acp/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@acp/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      '@opentelemetry/api':
+        specifier: ^1.9.1
+        version: 1.9.1
+      fastify:
+        specifier: ^5.4.0
+        version: 5.10.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      jose:
+        specifier: ^6.0.11
+        version: 6.2.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
+
   apps/orchestrator:
     dependencies:
       '@acp/protocol':
