@@ -27,6 +27,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AuditEvent } from '@acp/protocol';
+import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AUDIT_URL,
@@ -42,6 +43,31 @@ import {
 } from './support/platform.js';
 
 let platform: ChildProcess | undefined;
+
+const DB_URL = process.env.ACP_DATABASE_URL ?? 'postgres://acp:acp-dev-password@localhost:5432/acp';
+let evalDb: pg.Pool | undefined;
+
+/**
+ * Scoped reset of one agent's online-eval state. The full 12-file CI suite
+ * shares a single postgres, so accumulated online_scores / quality_state from
+ * earlier files (or the boot prober's pre-readiness failures) can bleed into
+ * this file and push the knowledge agent's budget to `exhausted` before the
+ * probe test asserts `ok`. Delete ONLY the named agent's rows — never a global
+ * truncate or `down -v`. Tolerates the tables not yet existing (nothing to
+ * bleed) so setup stays deterministic.
+ */
+async function resetAgentEvalState(agentId: string): Promise<void> {
+  const db = (evalDb ??= new pg.Pool({ connectionString: DB_URL }));
+  for (const table of ['online_scores', 'quality_state']) {
+    try {
+      await db.query(`DELETE FROM ${table} WHERE agent_id = $1`, [agentId]);
+    } catch (err) {
+      // 42P01 = undefined_table: the eval service hasn't created it yet, so
+      // there is no bled state to clear. Re-throw anything else.
+      if ((err as { code?: string }).code !== '42P01') throw err;
+    }
+  }
+}
 
 async function getToken(
   clientId: string,
@@ -152,10 +178,14 @@ function runProbes(action: 'start' | 'stop', configPath: string): void {
 
 beforeAll(async () => {
   platform = await startPlatform();
+  // Clear any knowledge-agent eval state bled in from earlier suite files so the
+  // probe test observes a deterministic clean budget regardless of run order.
+  await resetAgentEvalState('knowledge-agent');
 }, 300_000);
 
-afterAll(() => {
+afterAll(async () => {
   stopPlatform(platform);
+  await evalDb?.end();
 });
 
 describe('online evaluation v0', () => {
