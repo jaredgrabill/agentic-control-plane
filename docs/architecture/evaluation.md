@@ -139,3 +139,102 @@ What exists today versus the target above:
   at zero tolerance because its suite is fully deterministic. Judge
   rubrics, calibration, shadow/canary (gates 4–5), online sampling, drift
   detection, and replay arrive with the Deployment Controller (Phase 3).
+
+## Online Evaluation v0 (Phase 3 item 6)
+
+The measurement instruments the target above describes now run online — a
+calibrated judge, synthetic probes, drift detection, and quality error
+budgets wired to real change-freezes and a degradation ladder.
+
+- **Judge harness (`@acp/judge`).** One committed rubric
+  (`answer-quality@1`), one prompt template used by BOTH venues
+  (`buildJudgePrompt` — "one rubric, two venues" enforced structurally), a
+  tolerant verdict parser (first balanced JSON object, Ajv-validated, score
+  clamped to [0,1] with the verdict recomputed from the 0.7 threshold), and a
+  **fail-closed calibration gate**. A judge scores NOTHING until a calibration
+  record — keyed on `{rubric_digest, model_class}` — proves agreement with
+  labels at/above the floor (0.85). A rubric edit or model-class swap
+  invalidates the record and the judge REFUSES to score (no LLM call). Every
+  `eval.score` carries the `rubric_digest` so a replay proves which exact
+  rubric produced a verdict.
+  - **Honest dev calibration.** `calibration/answer-quality@1/cases-dev.json`
+    embeds scripted `[[dev-llm]]` verdicts so the dev-echo provider yields
+    agreement 1.0. The committed `calibration.dev.json` proves the
+    calibration MACHINERY (rubric → prompt → parse → agreement) end to end —
+    it is deliberately NOT a judgement of a real model. **Real calibration
+    needs human-annotated cases scored by a real provider and is deferred to
+    provider onboarding.** The `calibrate` CLI (`apps/evaluation`) measures
+    agreement against a labelled set and exits 1 below the floor.
+- **Judge failures are never agent observations.** An uncalibrated judge,
+  a gateway error (`judge_error`), or an unreadable completion
+  (`unparseable_verdict`) is a JUDGE condition — audited for visibility but
+  INGESTING NOTHING, so a broken judge can never burn an agent's error
+  budget. A hard step failure IS a quality observation (`failed_step`,
+  `passed:false`, no LLM call).
+- **Sampled online scoring.** `resolveRoute` samples each step
+  deterministically per `(task_id, step_id)` — independent of the version
+  bucket, boosted to always-on during a shadow soak so the incumbent is
+  judged paired with the candidate. A sampled step spawns a
+  `JudgeScoreWorkflow` with `ParentClosePolicy.ABANDON`, never awaited, so a
+  slow or failing judge cannot touch the step's latency or outcome. Scoring
+  happens at step completion — the only place the full output exists (audit
+  keeps digests only). `ShadowStepWorkflow` scores the shadow output too;
+  **shadow-route scores feed ONLY the deployment gate, never the production
+  budget.** The judge's own LLM usage is a `model.invoked` with
+  `purpose:'judge'` — priced by the Cost Meter (platform cost center) but
+  never counted against the tenant task budget.
+- **Synthetic probes (`ProbeWorkflow`).** A singleton (`synthetic-prober`)
+  runs every configured known-answer probe through a REAL `TaskWorkflow`
+  child each cycle — the real trust path minus intake (a freshly-minted
+  svc-prober subject token → planner → Cedar → broker → agent). Checks are
+  deterministic and **judge-INDEPENDENT**, so probe signal survives an
+  unhealthy judge. It warns on active agents without probe coverage so
+  "every active agent is probed" is visible, not silently false. Probes hit
+  the ACTIVE version only. Runner-on-Temporal, brain-in-eval-service is a
+  documented deviation from agent-lifecycle's "Evaluation Service runs
+  probes".
+- **Scores service (`apps/evaluation serve`, port 7108, aud `acp:eval`).**
+  A Postgres+pgvector scores store and the single enforcement brain. Every
+  ingest recomputes the **error budget from the window** — there is no
+  sticky freeze; it self-heals as the window slides. Below `min_samples`
+  weighted observations the budget is `ok` (a budget that cannot measure
+  does not freeze — the deliberate inverse of the calibration gate).
+  `burn_ratio = bad_weighted / (total_weighted × (1 − SLO))`; SLO is the
+  manifest's `sla.quality_slo ?? 0.9`.
+- **Drift v0** over the shared `dev-hash-embed@1` embedding (a weak but
+  genuine lexical statistic, model-swappable). Per `(agent, capability)`, an
+  alert fires ONLY on the JOINT condition — input drift AND a score drop —
+  with a per-pair cooldown. Drift is alert-only; the budget rungs act on the
+  score independently. Behavioral (tool-selection) drift is deferred.
+- **Degradation ladder → real mechanisms.** On every ingest: a score dip →
+  `warning` (alert the owner); a burned budget → `exhausted` (change-freeze,
+  pull-enforced); sustained failure → `severe` (abort an in-flight
+  deployment via the item-4 API — a solo active version has no lateral
+  demote, an honest v0 limit); the SLO floor → auto-suspend = kill switch
+  tier 1 (`registry:suspend` → suspended) and page. Actions fire only on
+  ENTERING a rung, so a deployment is aborted once, not every ingest.
+- **Change freeze (fail-closed).** `DeploymentWorkflow` checks
+  `checkQualityFreeze` as STEP 1 (before candidate validation — the freeze
+  wins) and again before promotion. An exhausted budget refuses the
+  deployment (`deployment.failed reason change_freeze`); an unreachable eval
+  service ALSO refuses (`freeze_check_unavailable`) — matching the item-4
+  gate posture. Unfreeze is window recovery only (no manual override in v0).
+- **Deployment-gate quality (fills the item-4 seam).** The `GateEvaluator`
+  folds paired judged-quality means fetched from the scores store by
+  version+route+window — candidate on the shadow/canary route vs incumbent
+  on active — into `GateReport.metrics.quality`, breaching when the candidate
+  falls more than `max_quality_delta` below the incumbent. Too-few samples or
+  an uncalibrated (null) mean omits quality, so the gate stays
+  deterministic-only exactly as item 4 shipped. The `DeploymentWorkflow` is
+  untouched by the fold.
+- **New scope `registry:suspend`.** Valid ONLY on the `*→suspended` edge, so
+  the automated SLO-floor sanction cannot become a general `registry:admin`
+  capability. `svc-evaluation` holds `[registry:read, registry:suspend,
+  deploy:write]`.
+- **Protocol.** Four `eval.*` audit events (`eval.score`,
+  `eval.probe_result`, `eval.drift_detected`, `eval.budget_state_changed`);
+  `details` stays schema-open, so no other contract changed.
+- **Deferred:** real human calibration + provider judging; judged metrics in
+  the CI gate-2 (no gateway there); registry-stored judge artifacts;
+  behavioral drift; golden-suite-as-probes; a routing-weight demote for a
+  solo active version; human-feedback producers/UI; manual freeze override.
