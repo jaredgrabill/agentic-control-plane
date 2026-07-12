@@ -1,0 +1,15 @@
+{
+  "kind": "task_result",
+  "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+  "tenant": "acme",
+  "status": "partial",
+  "compensation": {
+    "status": "complete",
+    "trigger": "manual_rollback",
+    "compensated": [],
+    "failed": [],
+    "irreversible": []
+  },
+  "workflow_run_id": "task-0197a3b0-run-1",
+  "completed_at": "2026-07-11T09:00:41Z"
+}

@@ -69,8 +69,66 @@
         },
         "error": { "$ref": "#/$defs/capability_error" },
         "plan": { "$ref": "#/$defs/plan" },
+        "compensation": { "$ref": "#/$defs/compensation" },
         "workflow_run_id": { "type": "string" },
         "completed_at": { "$ref": "#/$defs/timestamp" }
+      }
+    },
+    "compensation": {
+      "type": "object",
+      "title": "CompensationReport",
+      "description": "Saga unwind summary, present iff a compensation trigger fired on a task that had completed R2+ writes with declared compensators. Compensators run in reverse (LIFO) of the order the writes completed; each entry names the original write and its compensating dispatch. Human-readable lines are additionally carried in `gaps`.",
+      "required": ["status", "trigger", "compensated", "failed", "irreversible"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["complete", "incomplete"],
+          "description": "complete = every pushed compensator succeeded; incomplete = at least one compensator failed or could not be dispatched (a write remains in effect)."
+        },
+        "trigger": {
+          "type": "string",
+          "enum": ["step_failure", "budget_exhausted", "cancellation"],
+          "description": "Why the unwind ran: a failed/skipped step, budget exhaustion, or task cancellation (incl. kill-switch-driven discovery failure)."
+        },
+        "compensated": {
+          "type": "array",
+          "description": "Writes successfully reversed, in the order the compensators ran (reverse of completion).",
+          "items": { "$ref": "#/$defs/compensation_entry" }
+        },
+        "failed": {
+          "type": "array",
+          "description": "Writes whose compensator failed or could not be dispatched — each remains in effect.",
+          "items": { "$ref": "#/$defs/compensation_entry" }
+        },
+        "irreversible": {
+          "type": "array",
+          "description": "Completed R2+ writes flagged irreversible: not compensable, listed for honest reporting.",
+          "items": {
+            "type": "object",
+            "required": ["step_id", "capability"],
+            "additionalProperties": false,
+            "properties": {
+              "step_id": { "$ref": "#/$defs/uuid" },
+              "capability": { "$ref": "#/$defs/capability_name" }
+            }
+          }
+        }
+      }
+    },
+    "compensation_entry": {
+      "type": "object",
+      "title": "CompensationEntry",
+      "required": ["original_step_id", "original_capability", "compensator"],
+      "additionalProperties": false,
+      "properties": {
+        "original_step_id": { "$ref": "#/$defs/uuid" },
+        "original_capability": { "$ref": "#/$defs/capability_name" },
+        "compensator": { "$ref": "#/$defs/capability_name" },
+        "error": {
+          "type": "string",
+          "description": "For a failed entry: why the compensator did not run to completion."
+        }
       }
     },
     "step_request": {

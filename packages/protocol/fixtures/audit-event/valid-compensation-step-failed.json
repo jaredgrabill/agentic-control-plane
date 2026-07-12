@@ -1,0 +1,23 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3fa1",
+  "occurred_at": "2026-07-11T09:05:02Z",
+  "tenant": "acme",
+  "event_type": "compensation.step_failed",
+  "actor": {
+    "principal": "svc:orchestrator",
+    "delegation_chain": [{ "sub": "user:jane.doe" }, { "sub": "svc:orchestrator" }]
+  },
+  "action": { "name": "compensation.step_failed" },
+  "reason": {
+    "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+    "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51"
+  },
+  "artifacts": { "workflow_run_id": "task-0197a3b0-run-1" },
+  "details": {
+    "original_step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51",
+    "original_capability": "gov.test_write",
+    "compensator": "gov.test_undo",
+    "effect": "compensation incomplete: gov.test_write (step 1) remains in effect — gov.test_undo failed: no active agent serves gov.test_undo in tenant acme",
+    "error": "no active agent serves gov.test_undo in tenant acme"
+  }
+}
