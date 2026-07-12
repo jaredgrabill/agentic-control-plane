@@ -15,6 +15,14 @@
     ]
   },
   {
+    "client_id": "cli-approver",
+    "client_secret": "approver-dev-secret",
+    "principal": "user:approver.ops",
+    "tenant": "acme",
+    "roles": ["tenant-approver"],
+    "scopes": ["approvals:decide", "audit:read"]
+  },
+  {
     "client_id": "svc-orchestrator",
     "client_secret": "orchestrator-dev-secret",
     "principal": "svc:orchestrator",
