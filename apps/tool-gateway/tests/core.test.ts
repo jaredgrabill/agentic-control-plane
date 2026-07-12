@@ -151,7 +151,13 @@ interface Harness {
   limiter: FakeLimiter;
   audit: AuditEvent[];
   scriptedCalls: { calls: number };
-  killSwitch: { fleet: boolean; suspended: Set<string>; denied: Set<string> };
+  killSwitch: {
+    fleet: boolean;
+    suspended: Set<string>;
+    denied: Set<string>;
+    capabilities: Set<string>;
+    risks: Set<string>;
+  };
   config: ToolServerConfig;
 }
 
@@ -206,12 +212,21 @@ function makeHarness(options: { scriptedTimeoutMs?: number; auditFails?: boolean
   const broker = new FakeBroker();
   const limiter = new FakeLimiter();
   const audit: AuditEvent[] = [];
-  const killSwitch = { fleet: false, suspended: new Set<string>(), denied: new Set<string>() };
+  const killSwitch = {
+    fleet: false,
+    suspended: new Set<string>(),
+    denied: new Set<string>(),
+    capabilities: new Set<string>(),
+    risks: new Set<string>(),
+  };
   const killSwitchView: KillSwitch = {
     fleetHalt: () => (killSwitch.fleet ? { active: true, reason: 'drill' } : undefined),
     agentSuspension: (agentId) =>
       killSwitch.suspended.has(agentId) ? { active: true } : undefined,
     principalDenied: (sub) => (killSwitch.denied.has(sub) ? { active: true } : undefined),
+    capabilitySuspension: (name) =>
+      killSwitch.capabilities.has(name) ? { active: true } : undefined,
+    riskClassSuspension: (risk) => (killSwitch.risks.has(risk) ? { active: true } : undefined),
   };
 
   const core = new ToolGatewayCore({
@@ -392,8 +407,8 @@ describe('pipeline order (fake call counts pin it)', () => {
   });
 });
 
-describe('kill switch (before everything, no audit — no decision to record)', () => {
-  it('fleet halt refuses every call', async () => {
+describe('kill switch (before Cedar; every refusal now AUDITED — 0a-QA #1)', () => {
+  it('fleet halt refuses every call and audits the refusal', async () => {
     h.killSwitch.fleet = true;
     const result = await h.core.callTool(userCaller(), 'scripted', 'probe', {}, {});
     expect(errorOf(result)).toMatchObject({
@@ -401,7 +416,17 @@ describe('kill switch (before everything, no audit — no decision to record)', 
       message: 'platform fleet halt is active — tool calls are refused',
     });
     expect(h.policy.requests).toHaveLength(0);
-    expect(h.audit).toHaveLength(0);
+    // 0a-QA #1: a kill-switch refusal now leaves a tool.called audit (denied),
+    // carrying no policy reference (it precedes Cedar) with the refusal fields.
+    expect(h.audit).toHaveLength(1);
+    expect(h.audit[0]!.event_type).toBe('tool.called');
+    expect(h.audit[0]!.reason?.policy).toBeUndefined();
+    expect(h.audit[0]!.details).toMatchObject({
+      outcome: 'error:upstream_auth',
+      refusal: 'killswitch',
+      tier: 'fleet',
+      target: 'fleet',
+    });
   });
 
   it('agent suspension refuses that agent only', async () => {
@@ -435,7 +460,12 @@ describe('kill switch (before everything, no audit — no decision to record)', 
       message: 'principal agent:cloud-agent@0.1.0 is denylisted (kill switch)',
     });
     expect(h.policy.requests).toHaveLength(0);
-    expect(h.audit).toHaveLength(0);
+    expect(h.audit).toHaveLength(1);
+    expect(h.audit[0]!.details).toMatchObject({
+      refusal: 'killswitch',
+      tier: 'principal',
+      target: 'agent:cloud-agent@0.1.0',
+    });
   });
 
   it('refuses when the ORIGINAL subject is denylisted, even acting as an agent', async () => {
@@ -1093,5 +1123,99 @@ describe('shadow suppression (step 2.5)', () => {
     );
     expect(envelopeOf(result)?.ok).toBe(true);
     expect(h.scriptedCalls.calls).toBe(1);
+  });
+});
+
+describe('tier-2 kill switch at the gateway (item 5) — audited, exemption matrix', () => {
+  const killDetails = () => h.audit.at(-1)!.details as Record<string, unknown>;
+
+  it('a named-capability flag blocks the executing capability, even for a compensator', async () => {
+    h.killSwitch.capabilities.add('change.step');
+    const result = await h.core.callTool(
+      capabilityAgentCaller({ name: 'change.step', risk: 'R2' }),
+      'scripted',
+      'write_probe',
+      {},
+      CORR,
+    );
+    expect(errorOf(result).code).toBe('upstream_auth');
+    expect(errorOf(result).message).toContain('change.step is halted by kill switch');
+    expect(h.policy.requests).toHaveLength(0); // refused before Cedar
+    expect(killDetails()).toMatchObject({
+      refusal: 'killswitch',
+      tier: 'capability',
+      target: 'change.step',
+    });
+
+    // Even a bound compensator is blocked by a NAMED flag (surgical intent).
+    const comp = await h.core.callTool(
+      capabilityAgentCaller(
+        { name: 'change.step', risk: 'R2' },
+        { compensation: { original_step_id: RISK_STEP_ID, original_capability: 'change.step' } },
+      ),
+      'scripted',
+      'write_probe',
+      {},
+      CORR,
+    );
+    expect(errorOf(comp).message).toContain('halted by kill switch');
+  });
+
+  it('a risk-class flag blocks the executing capability but EXEMPTs a bound compensator', async () => {
+    h.killSwitch.risks.add('R2');
+    const blocked = await h.core.callTool(
+      capabilityAgentCaller({ name: 'change.step', risk: 'R2' }),
+      'scripted',
+      'write_probe',
+      {},
+      CORR,
+    );
+    expect(errorOf(blocked).message).toContain('risk class R2 is halted');
+    expect(killDetails()).toMatchObject({ refusal: 'killswitch', tier: 'risk', target: 'R2' });
+
+    // A compensator bound to THIS task is exempt — it reaches Cedar (which the
+    // FakePolicy allows), so the call proceeds.
+    const comp = await h.core.callTool(
+      capabilityAgentCaller(
+        { name: 'change.step', risk: 'R2' },
+        { compensation: { original_step_id: RISK_STEP_ID, original_capability: 'change.step' } },
+      ),
+      'scripted',
+      'write_probe',
+      {},
+      CORR,
+    );
+    expect(envelopeOf(comp)?.ok).toBe(true);
+  });
+
+  it('a risk-class flag blocks a direct user call via the TOOL risk (step 2.6, no capability claim)', async () => {
+    h.killSwitch.risks.add('R2');
+    // A plain user token has no capability claim; the write_probe tool is R2.
+    const result = await h.core.callTool(
+      userCaller('probe:write'),
+      'scripted',
+      'write_probe',
+      {},
+      CORR,
+    );
+    expect(errorOf(result).code).toBe('upstream_auth');
+    expect(errorOf(result).message).toContain('halted by kill switch (tool scripted/write_probe)');
+    expect(h.policy.requests).toHaveLength(0);
+    expect(killDetails()).toMatchObject({ refusal: 'killswitch', tier: 'risk', target: 'R2' });
+  });
+
+  it('a fleet halt EXEMPTs a bound compensator (unwind must run under the halt)', async () => {
+    h.killSwitch.fleet = true;
+    const comp = await h.core.callTool(
+      capabilityAgentCaller(
+        { name: 'change.step', risk: 'R2' },
+        { compensation: { original_step_id: RISK_STEP_ID, original_capability: 'change.step' } },
+      ),
+      'scripted',
+      'write_probe',
+      {},
+      CORR,
+    );
+    expect(envelopeOf(comp)?.ok).toBe(true);
   });
 });
