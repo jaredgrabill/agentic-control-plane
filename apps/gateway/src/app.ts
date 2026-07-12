@@ -268,11 +268,30 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
     // another tenant's budget nor raise its own cap (caps are platform
     // config). One atomic conditional UPDATE = no TOCTOU. An uncapped tenant
     // (no cap row) proceeds without a reservation. Fail-closed: pg
-    // unreachable → this throws → 500-class refusal, never a free pass.
+    // unreachable → this throws → 503 refusal below, never a free pass.
     const estMicros = Math.ceil(
       (body.budget?.max_cost_usd ?? deps.budgetDefaultEstUsd ?? DEFAULT_BUDGET_EST_USD) * 1_000_000,
     );
-    const admission = await deps.budget.reserve(task.tenant, task.task_id, estMicros);
+    // Task intake depends on Postgres for CAPPED tenants: reserve() is the
+    // cap gate and must fail CLOSED. A pg outage makes it throw; surface that
+    // as an honest 503 (retryable, budget DB unavailable) rather than letting
+    // it escape as a 500 — the budget.ts header promises 503. Fail-closed is
+    // preserved: a capped tenant is still refused, never given a free pass.
+    // (Trade-off: this couples ALL /v1/tasks intake, uncapped tenants
+    // included, to the budget DB — the gateway cannot know a tenant is
+    // uncapped without asking Postgres.)
+    let admission: BudgetReserveOutcome;
+    try {
+      admission = await deps.budget.reserve(task.tenant, task.task_id, estMicros);
+    } catch (err) {
+      deps.logger.error(
+        { err, tenant: task.tenant, task_id: task.task_id },
+        'budget reserve failed (budget DB unavailable) — refusing intake 503 (fail-closed)',
+      );
+      return reply.status(503).send({
+        error: { message: 'budget admission is temporarily unavailable — retry', status: 503 },
+      });
+    }
     if (admission === 'over_budget') {
       const period = (deps.now?.() ?? new Date()).toISOString().slice(0, 7);
       await auditTaskRejected(deps, claims, 'budget_exhausted', task.task_id);

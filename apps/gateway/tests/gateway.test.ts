@@ -30,6 +30,8 @@ let fleetHalt: KillSwitchState | undefined;
 const haltedTenants = new Map<string, KillSwitchState>();
 /** Scripted budget admission (the stubbed Postgres reserve/release seam). */
 let reserveOutcome: BudgetReserveOutcome;
+/** When set, budget.reserve rejects once (budget DB outage → fail-closed 503). */
+let reserveError: Error | undefined;
 const reserveCalls: { tenant: string; taskId: string; estMicros: number }[] = [];
 const releaseCalls: { tenant: string; taskId: string }[] = [];
 /** When set, starter.start throws once (reserve-then-start-fail compensation). */
@@ -118,6 +120,7 @@ beforeAll(async () => {
     budget: {
       reserve: (tenant, taskId, estMicros) => {
         reserveCalls.push({ tenant, taskId, estMicros });
+        if (reserveError !== undefined) return Promise.reject(reserveError);
         return Promise.resolve(reserveOutcome);
       },
       release: (tenant, taskId) => {
@@ -141,6 +144,7 @@ beforeEach(() => {
   fleetHalt = undefined;
   haltedTenants.clear();
   reserveOutcome = 'no_cap';
+  reserveError = undefined;
   reserveCalls.length = 0;
   releaseCalls.length = 0;
   startError = undefined;
@@ -355,6 +359,17 @@ describe('POST /v1/tasks', () => {
       startError = new Error('temporal down');
       const res = await submit(await makeToken(), { text: QUESTION });
       expect(res.statusCode).toBe(500);
+      expect(releaseCalls).toHaveLength(0);
+    });
+
+    it('503s (fail-closed) when the budget DB is unavailable — never a free pass (B4)', async () => {
+      reserveError = new Error('pg down');
+      const res = await submit(await makeToken(), { text: QUESTION });
+      // Honest 503, not a 500 (budget.ts promises 503) — and the task is never
+      // started, so a capped tenant cannot slip past the cap on a DB outage.
+      expect(res.statusCode).toBe(503);
+      expect(res.json<{ error: { status: number } }>().error.status).toBe(503);
+      expect(started).toHaveLength(0);
       expect(releaseCalls).toHaveLength(0);
     });
   });
