@@ -418,9 +418,7 @@ export class TokenIssuer {
         ? undefined
         : buildApprovalClaim(request.approval, subject.sub);
     const compensationClaim =
-      request.compensation === undefined
-        ? undefined
-        : buildCompensationClaim(request.compensation);
+      request.compensation === undefined ? undefined : buildCompensationClaim(request.compensation);
 
     // Explicit-or-nothing: no "default to the snapshot" branch. A toolless
     // agent (requested = []) mints a token with zero scopes, keeping the

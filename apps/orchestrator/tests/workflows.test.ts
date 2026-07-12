@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import type {
   AgentCard,
   Plan,
+  PlanStep,
   StepRequest,
   StepResult,
   TaskRequest,
@@ -1222,7 +1223,12 @@ const COMP_STEP_IDS = [
   '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f64',
 ] as const;
 
-type CapSpec = { name: string; risk: string; compensator?: string; irreversible?: boolean };
+interface CapSpec {
+  name: string;
+  risk: string;
+  compensator?: string;
+  irreversible?: boolean;
+}
 const SAGA_CAPS: CapSpec[] = [
   { name: 'gov.write_a', risk: 'R2', compensator: 'gov.undo_a' },
   { name: 'gov.undo_a', risk: 'R2', compensator: 'gov.write_a' },
@@ -1250,7 +1256,7 @@ const sagaCard: AgentCard = {
       sla: { p95_latency_s: 5 },
       ...(c.compensator === undefined ? {} : { compensator: c.compensator }),
       ...(c.irreversible === undefined ? {} : { irreversible: c.irreversible }),
-    })),
+    })) as unknown as AgentCard['manifest']['capabilities'],
     tools: [{ server: 'saga-tools', scopes: ['gov:test:write'] }],
   },
   version: '0.1.0',
@@ -1265,7 +1271,7 @@ HANDLERS['saga-agent'] = sagaExec;
 
 /** A chained plan: each capability depends on the previous (sequential). */
 function chainPlan(capabilities: string[]): Plan {
-  const steps = capabilities.map((capability, i) => ({
+  const steps: PlanStep[] = capabilities.map((capability, i) => ({
     step_id: COMP_STEP_IDS[i]!,
     capability,
     input: { target: `rec-${i}` },
@@ -1283,7 +1289,7 @@ function chainPlan(capabilities: string[]): Plan {
 
 /** A parallel plan: all capabilities independent (one wave). */
 function parallelPlan(capabilities: string[]): Plan {
-  const steps = capabilities.map((capability, i) => ({
+  const steps: PlanStep[] = capabilities.map((capability, i) => ({
     step_id: COMP_STEP_IDS[i]!,
     capability,
     input: { target: `rec-${i}` },
@@ -1336,11 +1342,11 @@ function scriptSaga(opts: { discoverNull?: string[]; requireApprovalOnComp?: boo
       return Promise.resolve(failedStep(req, { class: 'permanent', message: 'planned failure' }));
     }
     return Promise.resolve(
-      completedStep(
-        req,
-        answerOutput(`${req.capability} applied [1]`, ['gov/rec'], 0.9),
-        { input_tokens: 10, output_tokens: 0, llm_calls: 0 },
-      ),
+      completedStep(req, answerOutput(`${req.capability} applied [1]`, ['gov/rec'], 0.9), {
+        input_tokens: 10,
+        output_tokens: 0,
+        llm_calls: 0,
+      }),
     );
   });
 }
@@ -1394,7 +1400,10 @@ describe('TaskWorkflow compensation (saga stack)', () => {
       'gov.undo_a',
     ]);
     // Audit: started (entries in unwind order, stack_depth 3) → completed.
-    const started = compDetails('compensation.started') as { stack_depth: number; entries: unknown[] };
+    const started = compDetails('compensation.started') as {
+      stack_depth: number;
+      entries: unknown[];
+    };
     expect(started.stack_depth).toBe(3);
     expect((started.entries as { compensator: string }[]).map((e) => e.compensator)).toEqual([
       'gov.undo_c',
@@ -1573,9 +1582,7 @@ describe('TaskWorkflow compensation (saga stack)', () => {
     ]);
     expect(result.compensation?.compensated).toEqual([]);
     // No compensator dispatched for the irreversible write.
-    expect(sagaExec.mock.calls.some((c) => String(c[0].capability).startsWith('gov.undo'))).toBe(
-      false,
-    );
+    expect(sagaExec.mock.calls.some((c) => c[0].capability.startsWith('gov.undo'))).toBe(false);
     expect(result.gaps?.some((g) => g.includes('irreversible') && g.includes('not undone'))).toBe(
       true,
     );
@@ -1620,13 +1627,13 @@ describe('TaskWorkflow compensation (saga stack)', () => {
         tenant: 'acme',
         planner: 'rule-planner@1',
         steps: [
-          { step_id: COMP_STEP_IDS[0]!, capability: 'gov.write_a', input: {} },
-          { step_id: COMP_STEP_IDS[1]!, capability: 'gov.write_b', input: {} },
+          { step_id: COMP_STEP_IDS[0], capability: 'gov.write_a', input: {} },
+          { step_id: COMP_STEP_IDS[1], capability: 'gov.write_b', input: {} },
           {
-            step_id: COMP_STEP_IDS[2]!,
+            step_id: COMP_STEP_IDS[2],
             capability: 'gov.read',
             input: {},
-            depends_on: [COMP_STEP_IDS[0]!, COMP_STEP_IDS[1]!],
+            depends_on: [COMP_STEP_IDS[0], COMP_STEP_IDS[1]],
           },
         ] as Plan['steps'],
         created_at: '2026-07-11T09:00:00Z',
@@ -1703,7 +1710,7 @@ describe('planner sequence shape', () => {
             inputs: [{ target: 'rec-1' }, { target: 'rec-2' }],
           },
         },
-      } as TaskRequest,
+      },
       servable,
     );
     expect(specs.map((s) => s.capability)).toEqual(['gov.write_a', 'gov.undo_a']);
@@ -1721,7 +1728,7 @@ describe('planner sequence shape', () => {
         tenant: 'acme',
         principal: 'user:jane.doe',
         input: { text: 'hi', context: { sequence: ['only-one'] } },
-      } as TaskRequest,
+      },
       new Set(),
     );
     expect(specs).toHaveLength(1);

@@ -59,7 +59,10 @@ export async function startApprovalAgent(): Promise<RunningAgent> {
   agent.capability('gov.test_fail', (_ctx: unknown, input: Record<string, unknown>) => {
     calls.push({ capability: 'gov.test_fail', input });
     return Promise.reject(
-      new CapabilityError(ErrorClass.Permanent, 'gov.test_fail always fails (compensation trigger)'),
+      new CapabilityError(
+        ErrorClass.Permanent,
+        'gov.test_fail always fails (compensation trigger)',
+      ),
     );
   });
 

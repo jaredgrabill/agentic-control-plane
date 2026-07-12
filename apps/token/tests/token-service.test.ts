@@ -739,7 +739,9 @@ describe('compensation binding (item 2)', () => {
       },
     });
     expect(res.statusCode).toBe(200);
-    expect(decodeJwt(res.json<{ access_token: string }>().access_token).compensation).toBeUndefined();
+    expect(
+      decodeJwt(res.json<{ access_token: string }>().access_token).compensation,
+    ).toBeUndefined();
   });
 
   it('emits token.brokered audit carrying the compensation grounds and original step_id', async () => {

@@ -236,7 +236,10 @@ describe('registration', () => {
   it('rejects a compensator+irreversible contradiction', async () => {
     const res = await register({
       manifest: manifest({
-        capabilities: [r2Cap({ compensator: 'change.withdraw', irreversible: true }), withdrawCap()],
+        capabilities: [
+          r2Cap({ compensator: 'change.withdraw', irreversible: true }),
+          withdrawCap(),
+        ],
       }),
       version: '0.1.0',
     });
@@ -265,10 +268,7 @@ describe('registration', () => {
   it('rejects a compensator whose own risk is R0 or R3, accepts R1', async () => {
     const r0Comp = await register({
       manifest: manifest({
-        capabilities: [
-          r2Cap({ compensator: 'change.withdraw' }),
-          withdrawCap({ risk: 'R0' }),
-        ],
+        capabilities: [r2Cap({ compensator: 'change.withdraw' }), withdrawCap({ risk: 'R0' })],
       }),
       version: '0.1.0',
     });
@@ -299,7 +299,7 @@ describe('registration', () => {
     const comp = await register({
       manifest: manifest({
         capabilities: [
-          { ...manifest().capabilities[0]!, compensator: 'change.withdraw' },
+          { ...manifest().capabilities[0], compensator: 'change.withdraw' },
           withdrawCap(),
         ],
       }),
@@ -310,7 +310,7 @@ describe('registration', () => {
 
     const irr = await register({
       manifest: manifest({
-        capabilities: [{ ...manifest().capabilities[0]!, irreversible: true }],
+        capabilities: [{ ...manifest().capabilities[0], irreversible: true }],
       }),
       version: '0.1.0',
     });

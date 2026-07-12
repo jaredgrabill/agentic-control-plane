@@ -58,7 +58,10 @@ const ciToken = (audience: string, scope: string) =>
   getToken('svc-ci', 'ci-dev-secret', audience, scope);
 
 /** Submits a governed sequence: gov.test_write (approval) then a dependent step. */
-async function submitSequence(sequence: string[], inputs: Record<string, unknown>[]): Promise<string> {
+async function submitSequence(
+  sequence: string[],
+  inputs: Record<string, unknown>[],
+): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/v1/tasks`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${await janeToken()}` },
@@ -75,7 +78,10 @@ async function submitWrite(target: string): Promise<string> {
   const res = await fetch(`${GATEWAY_URL}/v1/tasks`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${await janeToken()}` },
-    body: JSON.stringify({ text: `apply governed write to ${target}`, capability: 'gov.test_write' }),
+    body: JSON.stringify({
+      text: `apply governed write to ${target}`,
+      capability: 'gov.test_write',
+    }),
   });
   expect(res.status, await res.clone().text()).toBe(202);
   return ((await res.json()) as { task_id: string }).task_id;
@@ -107,7 +113,8 @@ async function waitForResult(taskId: string, timeoutMs = 90_000): Promise<TaskRe
       headers: { authorization: `Bearer ${await janeToken()}` },
     });
     const body = (await res.json()) as { status: string; result: TaskResult | null };
-    if (['completed', 'failed', 'cancelled'].includes(body.status) && body.result) return body.result;
+    if (['completed', 'failed', 'cancelled'].includes(body.status) && body.result)
+      return body.result;
     if (Date.now() > deadline) throw new Error(`task ${taskId} still ${body.status}`);
     await new Promise((r) => setTimeout(r, 1000));
   }
@@ -214,7 +221,7 @@ describe('compensation slice', () => {
 
     const events = await auditEvents(taskId);
     expect(events.some((e) => e.event_type === 'task.cancel_requested')).toBe(true);
-    expect(events.some((e) => String(e.event_type).startsWith('compensation.'))).toBe(false);
+    expect(events.some((e) => e.event_type.startsWith('compensation.'))).toBe(false);
     // Nothing executed: no step.completed for the gated write.
     expect(events.some((e) => e.event_type === 'step.completed')).toBe(false);
   }, 180_000);

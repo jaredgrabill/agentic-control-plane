@@ -79,15 +79,14 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
     waveScope?.cancel();
   });
 
-  return CancellationScope.nonCancellable(
-    (): Promise<TaskResult> =>
-      runTaskBody(
-        task,
-        () => cancellationRequested,
-        (scope) => {
-          waveScope = scope;
-        },
-      ),
+  return CancellationScope.nonCancellable((): Promise<TaskResult> =>
+    runTaskBody(
+      task,
+      () => cancellationRequested,
+      (scope) => {
+        waveScope = scope;
+      },
+    ),
   );
 }
 
@@ -192,8 +191,7 @@ async function runTaskBody(
   // separately for honest reporting — they are never dispatched.
   const compensationStack: CompensationEntry[] = [];
   const irreversibleWrites: { step_id: string; capability: string }[] = [];
-  const stepNumberOf = (stepId: string): number =>
-    steps.findIndex((s) => s.step_id === stepId) + 1;
+  const stepNumberOf = (stepId: string): number => steps.findIndex((s) => s.step_id === stepId) + 1;
 
   const emitSkipped = async (step: PlanStep, gap: string): Promise<void> => {
     skipped.set(step.step_id, gap);
@@ -325,8 +323,10 @@ async function runTaskBody(
       );
       // Tally + push in WAVE order (deterministic under replay).
       for (let i = 0; i < wave.length; i += 1) {
-        const step = wave[i]!;
-        const { result, executed } = waveResults[i]!;
+        const step = wave[i];
+        const execution = waveResults[i];
+        if (step === undefined || execution === undefined) continue;
+        const { result, executed } = execution;
         results.set(result.step_id, result);
         ledger.inputTokens += result.usage?.input_tokens ?? 0;
         ledger.outputTokens += result.usage?.output_tokens ?? 0;
@@ -342,7 +342,11 @@ async function runTaskBody(
         // compensator is pushed (a failed write's side-effect state is unknown
         // — not compensated v1). An irreversible completed write is recorded
         // separately for honest reporting; it is never dispatched.
-        if (result.status === 'completed' && executed !== undefined && WRITE_RISKS.has(executed.risk)) {
+        if (
+          result.status === 'completed' &&
+          executed !== undefined &&
+          WRITE_RISKS.has(executed.risk)
+        ) {
           if (executed.compensator !== undefined) {
             compensationStack.push({
               originalStepId: step.step_id,
@@ -631,9 +635,7 @@ async function runStep(dispatch: StepDispatch): Promise<StepExecution> {
   } catch (err) {
     // Even a child that fails with CancelledFailure (or any envelope) becomes a
     // typed failed result here — a failed branch is a gap, not a dead task.
-    const message = isCancellation(err)
-      ? 'task cancelled — step not executed'
-      : rootMessage(err);
+    const message = isCancellation(err) ? 'task cancelled — step not executed' : rootMessage(err);
     return {
       result: {
         kind: 'step_result',
@@ -651,7 +653,7 @@ async function runStep(dispatch: StepDispatch): Promise<StepExecution> {
 }
 
 export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepExecution> {
-  const { planStep, snapshot } = dispatch;
+  const { planStep } = dispatch;
   const failed = (error: NonNullable<StepResult['error']>): StepExecution => ({
     result: {
       kind: 'step_result',

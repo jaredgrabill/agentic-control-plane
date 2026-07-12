@@ -302,8 +302,8 @@ export function validateRegistrationRules(manifest: AgentManifest): void {
       );
     }
 
-    if (hasCompensator) {
-      const compensator = cap.compensator as string;
+    const compensator = cap.compensator;
+    if (compensator !== undefined) {
       // Rule 4: a capability may not name itself as its own compensator —
       // running the write again does not undo it.
       if (compensator === cap.name) {
