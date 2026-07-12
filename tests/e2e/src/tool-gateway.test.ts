@@ -122,10 +122,9 @@ describe('phase 2 tool gateway scenario', () => {
     expect(wrongAudience.errorClass).toBe('policy_denied');
   });
 
-  it('Cedar denies an agent calling a tool outside its manifest scopes — before the upstream', async () => {
-    // Forge the exact shape a compromised orchestration path could mint:
-    // jane's token exchanged (by the platform-role svc-ci) into the
-    // cloud-agent's identity with only cloud scopes…
+  it('the old acp:agent:{id} delegated-token shape is refused at the door (post-0c flip)', async () => {
+    // Before 0c the gateway accepted acp:agent:* audiences; now a stolen
+    // delegated step token opens nothing — audience refused, no Cedar reached.
     const subjectToken = await getToken('cli-jane', 'jane-dev-secret', 'acp:gateway');
     const exchange = await fetch(`${TOKEN_URL}/v1/token/exchange`, {
       method: 'POST',
@@ -143,8 +142,89 @@ describe('phase 2 tool gateway scenario', () => {
     expect(exchange.status, await exchange.clone().text()).toBe(200);
     const { access_token } = (await exchange.json()) as { access_token: string };
 
-    // …then aim it at code-forge. The gateway authenticates it (consistent
-    // aud↔actor) and Cedar refuses: no permit accepts cloud scopes there.
+    const refused = await failureOf(
+      gatewayClient('code-forge').call(
+        'code-forge',
+        'repo_dependencies',
+        { repo: 'acme/payments-service' },
+        { delegatedToken: access_token },
+      ),
+    );
+    // 401 at the door (audience not accepted), mapped policy_denied.
+    expect(refused.errorClass).toBe('policy_denied');
+    expect(refused.message).toBe('tool server code-forge refused the call (401)');
+  });
+
+  it('a tools token acting as an agent with no orchestrator chain is refused at the door', async () => {
+    // The agent-secret + stolen-subject-token forge: acp:tools, agent actor,
+    // but the chain has no svc:orchestrator hop. Refused before Cedar.
+    const subjectToken = await getToken('cli-jane', 'jane-dev-secret', 'acp:gateway');
+    const exchange = await fetch(`${TOKEN_URL}/v1/token/exchange`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+        client_id: 'svc-ci',
+        client_secret: 'ci-dev-secret',
+        subject_token: subjectToken,
+        audience: 'acp:tools',
+        actor: 'agent:cloud-agent@0.1.0',
+      }),
+    });
+    expect(exchange.status, await exchange.clone().text()).toBe(200);
+    const { access_token } = (await exchange.json()) as { access_token: string };
+
+    const refused = await failureOf(
+      gatewayClient('code-forge').call(
+        'code-forge',
+        'repo_dependencies',
+        { repo: 'acme/payments-service' },
+        { delegatedToken: access_token },
+      ),
+    );
+    expect(refused.errorClass).toBe('policy_denied');
+    expect(refused.message).toBe('tool server code-forge refused the call (401)');
+  });
+
+  it('Cedar denies an agent calling a tool outside its manifest scopes — before the upstream', async () => {
+    // A two-hop platform-role forge that DOES authenticate: svc-ci builds a
+    // full chain (actor svc:orchestrator, then actor agent:cloud-agent) on an
+    // acp:tools token, so the orchestrator-chain check passes. This is a
+    // trusted-infra tier concern (a platform client can fabricate a chain) —
+    // Cedar is the backstop: no permit accepts cloud scopes at code-forge, so
+    // the denial lands before the upstream is ever contacted.
+    const subjectToken = await getToken('cli-jane', 'jane-dev-secret', 'acp:gateway');
+    const hop1 = await fetch(`${TOKEN_URL}/v1/token/exchange`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+        client_id: 'svc-ci',
+        client_secret: 'ci-dev-secret',
+        subject_token: subjectToken,
+        audience: 'acp:orchestrator',
+        actor: 'svc:orchestrator',
+      }),
+    });
+    expect(hop1.status, await hop1.clone().text()).toBe(200);
+    const hop1Token = ((await hop1.json()) as { access_token: string }).access_token;
+
+    const hop2 = await fetch(`${TOKEN_URL}/v1/token/exchange`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+        client_id: 'svc-ci',
+        client_secret: 'ci-dev-secret',
+        subject_token: hop1Token,
+        audience: 'acp:tools',
+        scope: 'cloud:inventory:read',
+        actor: 'agent:cloud-agent@0.1.0',
+      }),
+    });
+    expect(hop2.status, await hop2.clone().text()).toBe(200);
+    const { access_token } = (await hop2.json()) as { access_token: string };
+
     const taskId = randomUUID();
     const denial = await failureOf(
       gatewayClient('code-forge').call(

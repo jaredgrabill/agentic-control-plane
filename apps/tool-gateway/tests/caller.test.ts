@@ -16,8 +16,9 @@ function claims(overrides: Partial<PlatformClaims> = {}): PlatformClaims {
 describe('acceptToolsAudience', () => {
   it.each([
     ['acp:tools', true],
-    ['acp:agent:cloud-agent', true],
-    ['acp:agent:', true],
+    // Phase 3 flip: the agent audience family is no longer accepted.
+    ['acp:agent:cloud-agent', false],
+    ['acp:agent:', false],
     ['acp:gateway', false],
     ['acp:knowledge', false],
     ['', false],
@@ -27,7 +28,7 @@ describe('acceptToolsAudience', () => {
 });
 
 describe('resolveCaller', () => {
-  it('resolves a plain user token: principal is the sub, no agent id', () => {
+  it('resolves a plain user token: principal is the sub, no agent id, no chain required', () => {
     const caller = resolveCaller(claims(), 'raw-token');
     expect(caller).toMatchObject({
       sub: 'user:jane.doe',
@@ -40,10 +41,9 @@ describe('resolveCaller', () => {
     expect(caller.agentId).toBeUndefined();
   });
 
-  it('resolves an agent-audience delegated token: acting agent is the principal', () => {
+  it('resolves an agent tools token whose chain terminates at the orchestrator', () => {
     const caller = resolveCaller(
       claims({
-        aud: 'acp:agent:cloud-agent',
         scope: 'cloud:inventory:read cloud:cost:read',
         act: { sub: 'agent:cloud-agent@0.1.0', act: { sub: 'svc:orchestrator' } },
       }),
@@ -57,36 +57,46 @@ describe('resolveCaller', () => {
     });
   });
 
-  it('refuses an agent audience whose act.sub names a different agent', () => {
+  it('refuses an agent-principal token with no delegation chain at all', () => {
+    expect(() =>
+      resolveCaller(claims({ sub: 'agent:cloud-agent@0.1.0' }), 't'),
+    ).toThrow(/no delegation chain terminating at svc:orchestrator/);
+  });
+
+  it('refuses an agent-principal token whose chain does not bottom out at the orchestrator', () => {
+    // A fabricated chain: agent acting for a user, but no broker hop —
+    // the shape an agent secret + stolen user token would forge.
+    expect(() =>
+      resolveCaller(claims({ act: { sub: 'agent:cloud-agent@0.1.0' } }), 't'),
+    ).toThrow(AuthError);
     expect(() =>
       resolveCaller(
-        claims({
-          aud: 'acp:agent:cloud-agent',
-          act: { sub: 'agent:code-agent@0.1.0', act: { sub: 'svc:orchestrator' } },
-        }),
+        claims({ act: { sub: 'agent:cloud-agent@0.1.0', act: { sub: 'svc:some-other' } } }),
         't',
       ),
-    ).toThrow(AuthError);
+    ).toThrow(/svc:orchestrator/);
   });
 
-  it('refuses an agent audience with no act chain at all (stolen bare token shape)', () => {
-    expect(() => resolveCaller(claims({ aud: 'acp:agent:cloud-agent' }), 't')).toThrow(
-      /does not match its actor/,
-    );
-  });
-
-  it('derives the agent id from the principal for acp:tools agent tokens (kill-switch key)', () => {
+  it('accepts a deep chain as long as its innermost actor is the orchestrator', () => {
     const caller = resolveCaller(
-      claims({ aud: 'acp:tools', act: { sub: 'agent:code-agent@0.1.0' } }),
+      claims({
+        act: {
+          sub: 'agent:code-agent@0.1.0',
+          act: { sub: 'agent:planner@0.1.0', act: { sub: 'svc:orchestrator' } },
+        },
+      }),
       't',
     );
     expect(caller.entityType).toBe('Agent');
     expect(caller.agentId).toBe('code-agent');
   });
 
-  it('classifies service principals', () => {
-    const caller = resolveCaller(claims({ sub: 'svc:ci', scope: '' }), 't');
-    expect(caller.entityType).toBe('Service');
-    expect(caller.scopes).toEqual([]);
+  it('exempts user and service principals from the orchestrator-chain check', () => {
+    // IDE users mint acp:tools directly (Cedar gates them); no chain.
+    const user = resolveCaller(claims({ sub: 'user:jane.doe' }), 't');
+    expect(user.entityType).toBe('User');
+    const svc = resolveCaller(claims({ sub: 'svc:ci', scope: '' }), 't');
+    expect(svc.entityType).toBe('Service');
+    expect(svc.scopes).toEqual([]);
   });
 });

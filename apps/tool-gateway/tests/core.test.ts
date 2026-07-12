@@ -55,11 +55,13 @@ function claimsFor(overrides: Partial<PlatformClaims>): PlatformClaims {
 const agentCaller = (scope = 'cloud:inventory:read cloud:cost:read'): Caller =>
   resolveCaller(
     claimsFor({
-      aud: 'acp:agent:cloud-agent',
+      // Post-0c: an agent presents an acp:tools token whose chain terminates
+      // at the orchestrator; the Agent principal derives from act.sub.
+      aud: 'acp:tools',
       scope,
       act: { sub: 'agent:cloud-agent@0.1.0', act: { sub: 'svc:orchestrator' } },
     }),
-    'raw-delegated-jwt',
+    'raw-tools-jwt',
   );
 
 const userCaller = (scope = 'probe:read'): Caller =>
@@ -627,7 +629,7 @@ describe('DevCredentialBroker token-exchange mode (injected fetch)', () => {
       grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
       client_id: 'svc-tool-gateway',
       client_secret: 'tool-gateway-dev-secret',
-      subject_token: 'raw-delegated-jwt',
+      subject_token: 'raw-tools-jwt',
       subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
       audience: 'acp:knowledge',
       scope: 'knowledge:search:read',
