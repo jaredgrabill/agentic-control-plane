@@ -233,27 +233,29 @@ export function intersectScopes(requested: string[], held: string[]): string[] {
 }
 
 /**
- * Whether the caller is a platform operator: any role in the platform family
- * (`platform`, `platform-admin`, `platform-*`) or a platform service principal
- * (`svc:*`). Platform callers may read/target any tenant; everyone else is
- * bound to their own token tenant (see assertTenantAccess). The family match
- * covers both the literal `platform` role the token service issues to service
- * clients and operator roles like `platform-admin` minted for human auditors.
+ * Whether the caller is a platform operator: a role in the platform family
+ * (`platform`, `platform-admin`, `platform-*`). Platform callers may
+ * read/target any tenant; everyone else is bound to their own token tenant
+ * (see assertTenantAccess). The family match covers both the literal `platform`
+ * role the token service issues to service clients and operator roles like
+ * `platform-admin` minted for human auditors.
+ *
+ * Authority derives from the role, never the principal-name shape: a `svc:*`
+ * sub is NOT platform on its own — a tenant-scoped service principal (e.g. a
+ * per-tenant exporter) must not gain cross-tenant reach just by its name.
+ * Every legitimate platform service carries the `platform` role.
  */
 export function isPlatformRole(claims: Pick<PlatformClaims, 'sub' | 'roles'>): boolean {
-  return (
-    claims.sub.startsWith('svc:') ||
-    claims.roles.some((r) => r === 'platform' || r.startsWith('platform-'))
-  );
+  return claims.roles.some((r) => r === 'platform' || r.startsWith('platform-'));
 }
 
 /**
  * Tenant-parameter binding (Phase 4 item 0): a route that takes a tenant
  * parameter must not let a non-platform caller read or act on another
  * tenant just by naming it. Call AFTER requireScope — scope says what the
- * caller may do, this says on whose data. Platform-family roles and `svc:*`
- * principals are exempt (legitimate cross-tenant operators); any other
- * caller whose token tenant differs from the requested tenant gets a 403.
+ * caller may do, this says on whose data. Platform-family roles are exempt
+ * (legitimate cross-tenant operators); any other caller whose token tenant
+ * differs from the requested tenant gets a 403.
  */
 export function assertTenantAccess(
   claims: Pick<PlatformClaims, 'sub' | 'tenant' | 'roles'>,

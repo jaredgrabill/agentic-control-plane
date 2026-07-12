@@ -136,13 +136,19 @@ describe('scopes', () => {
 describe('isPlatformRole / assertTenantAccess', () => {
   const platformSvc = { sub: 'svc:orchestrator', tenant: 'platform', roles: ['platform'] };
   const platformAdmin = { sub: 'user:auditor', tenant: 'acme', roles: ['platform-admin'] };
-  const svcPrincipal = { sub: 'svc:agent-ci', tenant: 'platform', roles: [] as string[] };
+  // A tenant-scoped service principal: `svc:*` sub but NO platform role. Its
+  // name must NOT confer cross-tenant authority (would be a tenant-isolation
+  // hole — a per-tenant exporter could read every tenant's audit trail).
+  const tenantSvc = { sub: 'svc:prober', tenant: 'acme', roles: ['tenant-user'] };
   const tenantUser = { sub: 'user:jane.doe', tenant: 'acme', roles: ['tenant-user'] };
 
-  it('recognizes the platform role family and svc:* principals', () => {
+  it('recognizes the platform role family, not the principal-name shape', () => {
     expect(isPlatformRole(platformSvc)).toBe(true);
     expect(isPlatformRole(platformAdmin)).toBe(true);
-    expect(isPlatformRole(svcPrincipal)).toBe(true);
+    // authority is the role, never the `svc:` name: a role-less service or a
+    // tenant-scoped `svc:` principal is not a platform operator.
+    expect(isPlatformRole(tenantSvc)).toBe(false);
+    expect(isPlatformRole({ sub: 'svc:agent-ci', roles: [] as string[] })).toBe(false);
     expect(isPlatformRole(tenantUser)).toBe(false);
     // 'platform' must be a role or role prefix, not a substring/tenant match.
     expect(isPlatformRole({ sub: 'user:eve', roles: ['not-platform'] })).toBe(false);
@@ -155,9 +161,19 @@ describe('isPlatformRole / assertTenantAccess', () => {
     expect(() => {
       assertTenantAccess(platformAdmin, 'other-tenant');
     }).not.toThrow();
+  });
+
+  it('binds a tenant-scoped svc principal to its own tenant', () => {
     expect(() => {
-      assertTenantAccess(svcPrincipal, 'globex');
+      assertTenantAccess(tenantSvc, 'acme');
     }).not.toThrow();
+    try {
+      assertTenantAccess(tenantSvc, 'globex');
+      expect.unreachable('a svc:* name must not grant cross-tenant access');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as AuthError).statusCode).toBe(403);
+    }
   });
 
   it('binds a non-platform caller to its own token tenant', () => {
