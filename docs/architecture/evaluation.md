@@ -213,6 +213,20 @@ budgets wired to real change-freezes and a degradation ladder.
   demote, an honest v0 limit); the SLO floor → auto-suspend = kill switch
   tier 1 (`registry:suspend` → suspended) and page. Actions fire only on
   ENTERING a rung, so a deployment is aborted once, not every ingest.
+- **Auto-suspend requires golden-probe corroboration (cross-tenant DoS
+  guard).** The floor/auto-suspend rung is COARSE (whole `agent_id`, every
+  version and tenant — the budget carries no tenant dimension) and
+  IRREVERSIBLE (a human admin must reinstate). It therefore fires ONLY on
+  consecutive full-cycle **probe** failures — the trusted, fixed-input golden
+  signal. Judge-burn (`burn_ratio`) scores ATTACKER-CHOSEN inputs, so it is
+  deliberately capped at the REVERSIBLE rungs: `exhausted` (freeze) and, at
+  catastrophic `burn_ratio ≥ floor_burn_ratio`, `severe` (deployment-abort).
+  Without this cap, one tenant sending adversarial inputs to a SHARED agent
+  (e.g. one sampled at 100%) could make the judge honestly score them bad and
+  force a platform-wide, human-gated suspend that also takes down other
+  tenants. Fixed golden probes are inputs the attacker cannot influence, so
+  only genuine degradation — not adversarial input volume — auto-suspends.
+  (Per-`(agent, tenant)` budget scoping is the larger fix, deferred.)
 - **Change freeze (fail-closed).** `DeploymentWorkflow` checks
   `checkQualityFreeze` as STEP 1 (before candidate validation — the freeze
   wins) and again before promotion. An exhausted budget refuses the

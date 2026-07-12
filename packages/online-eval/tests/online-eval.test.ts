@@ -293,13 +293,30 @@ describe('degradation ladder', () => {
   it('severe when window judge mean falls below SLO−0.2', () => {
     expect(computeLadderLevel({ ...base, windowJudgeMean: 0.65 }).level).toBe('severe');
   });
-  it('floor on full-cycle probe failures', () => {
+  it('floor on full-cycle probe failures (the trusted golden-probe signal)', () => {
     expect(computeLadderLevel({ ...base, consecutiveProbeCycles: 4 }).level).toBe('floor');
   });
-  it('floor on burn_ratio >= floor threshold', () => {
+  it('judge-burn ALONE (burn_ratio >= floor, zero probe failures) reaches severe, NOT floor', () => {
+    // SECURITY (cross-tenant DoS): burn_ratio is judge-derived on attacker-chosen
+    // inputs. It must escalate at most to the REVERSIBLE severe rung — never to
+    // the irreversible floor/auto-suspend — so adversarial input volume against a
+    // shared agent cannot force a platform-wide suspend.
+    const judgeBurnOnly = computeLadderLevel({
+      ...base,
+      consecutiveProbeFailures: 0,
+      consecutiveProbeCycles: 0,
+      windowJudgeMean: 0.1,
+      budget: { ...base.budget, state: 'exhausted', burn_ratio: 2.1, measurable: true },
+    });
+    expect(judgeBurnOnly.level).toBe('severe');
+    expect(judgeBurnOnly.level).not.toBe('floor');
+  });
+  it('judge-burn + full-cycle probe failures still floors (probes corroborate)', () => {
     expect(
       computeLadderLevel({
         ...base,
+        consecutiveProbeFailures: 4,
+        consecutiveProbeCycles: 4,
         budget: { ...base.budget, state: 'exhausted', burn_ratio: 2.1, measurable: true },
       }).level,
     ).toBe('floor');

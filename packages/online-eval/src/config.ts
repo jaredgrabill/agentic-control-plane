@@ -66,7 +66,12 @@ export interface OnlineEvalConfig {
     severe_probe_failures: number;
     /** Consecutive full-cycle probe failures that trip the FLOOR rung (auto-suspend). */
     floor_probe_cycles: number;
-    /** burn_ratio at/above which the FLOOR rung trips regardless of probes. */
+    /**
+     * burn_ratio at/above which judge-burn escalates to the REVERSIBLE severe rung
+     * (deployment-abort). It deliberately does NOT reach the floor/auto-suspend —
+     * that requires golden-probe corroboration so a tenant's adversarial inputs to
+     * a shared agent cannot force a platform-wide irreversible suspend.
+     */
     floor_burn_ratio: number;
   };
 }

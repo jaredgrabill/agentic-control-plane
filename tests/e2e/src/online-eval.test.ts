@@ -297,11 +297,15 @@ describe('online evaluation v0', () => {
       weight: 5,
     });
 
-    // Two failing probes (weight 10 = min_samples) → measurable, burn_ratio 10,
-    // far above the SLO-floor threshold (2.0). All-failing observations trip the
-    // FLOOR directly (the severe rung's deployment-abort still fires within the
-    // same ok→floor transition — asserted distinctly in the unit tests). The
-    // budget is now frozen AND the floor pages.
+    // Four failing PROBES trip the FLOOR via consecutive full-cycle probe
+    // failures (floor_probe_cycles=4) — the trusted golden-probe signal. Note the
+    // floor deliberately requires this probe corroboration: judge-burn alone
+    // (attacker-chosen inputs) can only reach the reversible severe rung, never
+    // this irreversible auto-suspend (the cross-tenant DoS guard; asserted in the
+    // unit/service tests). The climb crosses severe first (deployment-abort) then
+    // reaches floor; the budget is frozen throughout AND the floor pages.
+    await postScore(failScore());
+    await postScore(failScore());
     await postScore(failScore());
     await postScore(failScore());
     const floor = await waitForAudit(

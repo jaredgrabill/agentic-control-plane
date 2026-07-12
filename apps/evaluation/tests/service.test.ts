@@ -212,6 +212,45 @@ describe('degradation ladder over ingests', () => {
     expect(detailsOf(pageEvent).owner).toBe('team:knowledge');
   });
 
+  it('judge-burn alone freezes (severe) but NEVER auto-suspends — cross-tenant DoS guard', async () => {
+    // SECURITY: judge samples score attacker-chosen inputs to a SHARED agent.
+    // Ten bad judged samples (score 0.1, weight 1 each) drive burn_ratio to 10 —
+    // far above floor_burn_ratio (2.0) — with ZERO probe failures. The floor
+    // (irreversible, coarse auto-suspend) must NOT be reached from judge-burn.
+    const { app, audits, abortDeployment, suspendAgent } = harness();
+    const judgeBad = (id: string): ScoreIngest => ({
+      id,
+      agent_id: 'poison-agent',
+      agent_version: '0.1.0',
+      capability: 'knowledge.search',
+      tenant: 'attacker-tenant',
+      source: 'judge',
+      route: 'active',
+      score: 0.1,
+      passed: null,
+      weight: 1,
+    });
+    for (let i = 0; i < 10; i++) {
+      await app.inject({
+        method: 'POST',
+        url: '/v1/scores',
+        headers: AUTH,
+        payload: judgeBad(`j${i}`),
+      });
+    }
+    // Reversible severe reached (deployment-abort), but no suspend and no page.
+    expect(suspendAgent).not.toHaveBeenCalled();
+    expect(abortDeployment).toHaveBeenCalledTimes(1);
+    const floorPage = audits.find(
+      (e) => e.event_type === 'eval.budget_state_changed' && detailsOf(e).to === 'floor',
+    );
+    expect(floorPage).toBeUndefined();
+    const severe = audits.find(
+      (e) => e.event_type === 'eval.budget_state_changed' && detailsOf(e).to === 'severe',
+    );
+    expect(detailsOf(severe).page).toBe(false);
+  });
+
   it('is fail-open below min_samples (a budget that cannot measure does not freeze)', async () => {
     const { app, audits } = harness();
     // One judged bad sample, weight 1 < min_samples 5 → not measurable → ok.
