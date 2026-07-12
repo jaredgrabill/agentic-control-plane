@@ -23,7 +23,7 @@ import { createJudge, loadDevCalibration, type Judge } from '@acp/judge';
 import { decideJudgeSample, type OnlineEvalConfig, type ScoreIngest } from '@acp/online-eval';
 import { RULE_PLANNER, buildPlanSteps } from './planner.js';
 import { checkProbe } from './probe-checks.js';
-import { GateEvaluator, type GateReport } from './deployment-gates.js';
+import { GateEvaluator, type GateReport, type QualityInput } from './deployment-gates.js';
 import type {
   ControlActivities,
   DeploymentPreflight,
@@ -122,6 +122,52 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
       minAgreement: deps.onlineEval?.judge.min_agreement ?? 0.85,
     });
     return judge;
+  }
+
+  /** Fetches the paired judged-quality means for a deployment gate (item 6, D8). */
+  async function fetchGateQuality(input: {
+    kind: 'shadow' | 'canary';
+    agentId?: string;
+    candidateVersion: string;
+    incumbentVersion?: string;
+    since: string;
+  }): Promise<QualityInput | undefined> {
+    if (
+      deps.evaluationUrl === undefined ||
+      input.agentId === undefined ||
+      input.incumbentVersion === undefined
+    ) {
+      return undefined;
+    }
+    const candidateRoute = input.kind === 'shadow' ? 'shadow' : 'canary';
+    try {
+      const token = await serviceToken('acp:eval', 'eval:read');
+      const aggregate = async (
+        version: string,
+        route: string,
+      ): Promise<{ mean: number | null; n: number }> => {
+        const res = await doFetch(
+          `${deps.evaluationUrl ?? ''}/v1/scores/aggregate` +
+            `?agent_id=${encodeURIComponent(input.agentId ?? '')}` +
+            `&agent_version=${encodeURIComponent(version)}&route=${route}` +
+            `&since=${encodeURIComponent(input.since)}`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) return { mean: null, n: 0 };
+        return (await res.json()) as { mean: number | null; n: number };
+      };
+      const cand = await aggregate(input.candidateVersion, candidateRoute);
+      const inc = await aggregate(input.incumbentVersion, 'active');
+      return {
+        candidateMean: cand.mean,
+        incumbentMean: inc.mean,
+        candidateN: cand.n,
+        incumbentN: inc.n,
+      };
+    } catch (err) {
+      deps.logger.warn({ err, agentId: input.agentId }, 'gate quality fold unavailable — omitting');
+      return undefined;
+    }
   }
 
   async function postScore(ingest: ScoreIngest): Promise<void> {
@@ -489,6 +535,36 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
       return { passed: check.passed };
     },
 
+    async checkQualityFreeze(
+      agentId,
+    ): Promise<{ frozen: boolean; reason?: string; burn_ratio?: number }> {
+      try {
+        const token = await serviceToken('acp:eval', 'eval:read');
+        const res = await doFetch(
+          `${deps.evaluationUrl ?? ''}/v1/agents/${encodeURIComponent(agentId)}/quality`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) {
+          // A non-2xx (eval reachable but erroring) is fail-closed too.
+          return { frozen: true, reason: 'freeze_check_unavailable' };
+        }
+        const body = (await res.json()) as {
+          frozen?: boolean;
+          budget?: { burn_ratio?: number; state?: string };
+        };
+        return {
+          frozen: body.frozen === true,
+          ...(body.frozen === true ? { reason: 'change_freeze' } : {}),
+          ...(body.budget?.burn_ratio !== undefined ? { burn_ratio: body.budget.burn_ratio } : {}),
+        };
+      } catch (err) {
+        // Fail-closed: the eval service is unreachable, so the safety signal is
+        // unavailable — refuse the deployment rather than proceed blind.
+        deps.logger.warn({ err, agentId }, 'quality freeze check unavailable — failing closed');
+        return { frozen: true, reason: 'freeze_check_unavailable' };
+      }
+    },
+
     async listProbeTargets(input): Promise<{ uncovered: string[] }> {
       try {
         const token = await serviceToken('acp:registry', 'registry:read');
@@ -818,14 +894,26 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
       } catch {
         book = undefined;
       }
+
+      // Item 6 (D8): fold paired judged quality from the eval scores store. The
+      // candidate's route is 'shadow' (shadow soak) or 'canary' (ramp); the
+      // incumbent is always the 'active' route. Any error omits quality — the
+      // gate stays deterministic-only (exactly as item 4 shipped).
+      const quality = await fetchGateQuality(input);
+
       const evaluator = new GateEvaluator();
       return input.kind === 'shadow'
-        ? evaluator.evaluateShadow(events, { thresholds: input.thresholds, priceBook: book })
+        ? evaluator.evaluateShadow(events, {
+            thresholds: input.thresholds,
+            priceBook: book,
+            ...(quality === undefined ? {} : { quality }),
+          })
         : evaluator.evaluateCanary(events, {
             candidateVersion: input.candidateVersion,
             incumbentVersion: input.incumbentVersion ?? '',
             thresholds: input.thresholds,
             priceBook: book,
+            ...(quality === undefined ? {} : { quality }),
           });
     },
 

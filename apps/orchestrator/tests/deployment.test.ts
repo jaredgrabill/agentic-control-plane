@@ -23,6 +23,8 @@ const CONFIG: DeploymentConfig = {
     max_cost_ratio: 1.25,
     min_shadow_completion: 0.9,
     min_shadow_samples: 2,
+    max_quality_delta: 0.1,
+    min_quality_samples: 2,
   },
 };
 
@@ -63,6 +65,7 @@ const control: ControlActivities = {
   mintProbeSubject: vi.fn(),
   recordProbeResult: vi.fn(() => Promise.resolve({ passed: true })),
   listProbeTargets: vi.fn(() => Promise.resolve({ uncovered: [] })),
+  checkQualityFreeze: vi.fn(() => Promise.resolve({ frozen: false })),
   now: vi.fn().mockResolvedValue({ iso: '2026-07-11T10:00:00Z' }),
 };
 

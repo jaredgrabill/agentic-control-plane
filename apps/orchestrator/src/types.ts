@@ -344,6 +344,8 @@ export const DEFAULT_DEPLOYMENT_CONFIG: DeploymentConfig = {
     max_cost_ratio: 1.25,
     min_shadow_completion: 0.9,
     min_shadow_samples: 5,
+    max_quality_delta: 0.1,
+    min_quality_samples: 5,
   },
 };
 
@@ -473,6 +475,19 @@ export interface ControlActivities {
    */
   listProbeTargets(input: { covered: string[] }): Promise<{ uncovered: string[] }>;
   /**
+   * Online-eval change freeze (item 6, D5). Reads the agent's quality budget
+   * from the eval service. FAIL-CLOSED: an unreachable eval service returns
+   * frozen:true (reason freeze_check_unavailable) — a deployment must not
+   * proceed when the safety signal is unavailable (matches the item-4 gate
+   * posture). DeploymentWorkflow calls it before candidate validation and again
+   * before promotion.
+   */
+  checkQualityFreeze(agentId: string): Promise<{
+    frozen: boolean;
+    reason?: string;
+    burn_ratio?: number;
+  }>;
+  /**
    * Cedar decision for one delegation. The orchestrator is the PEP for
    * agent-to-agent and user-to-agent delegation. Presents the principal's
    * actually-held scopes from the intake snapshot — never the manifest's
@@ -575,6 +590,8 @@ export interface ControlActivities {
     kind: 'shadow' | 'canary';
     tenant: string;
     since: string;
+    /** The agent id, for the item-6 judged-quality fold (scores by version+route). */
+    agentId?: string;
     candidateVersion: string;
     incumbentVersion?: string;
     thresholds: GateThresholds;

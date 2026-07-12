@@ -9,6 +9,8 @@ const THRESHOLDS: GateThresholds = {
   max_cost_ratio: 1.25,
   min_shadow_completion: 0.9,
   min_shadow_samples: 2,
+  max_quality_delta: 0.1,
+  min_quality_samples: 2,
 };
 
 let seq = 0;
@@ -207,5 +209,78 @@ describe('shadow gate', () => {
     });
     expect(report.samples.candidate).toBe(0);
     expect(report.verdict).toBe('insufficient_data');
+  });
+});
+
+describe('judged quality fold (item 6)', () => {
+  const evaluator = new GateEvaluator();
+  const pairedShadow = () => {
+    const a = { taskId: uuid(), stepId: uuid() };
+    const b = { taskId: uuid(), stepId: uuid() };
+    return [
+      stepCompleted({ version: '0.1.0', ...a }),
+      stepCompleted({ version: '0.1.0', ...b }),
+      shadowResult(a),
+      shadowResult(b),
+    ];
+  };
+
+  it('fills metrics.quality and passes when the candidate is within delta', () => {
+    const report = evaluator.evaluateCanary(
+      Array.from({ length: 5 }, () => stepCompleted({ version: '0.2.0' })).concat(
+        Array.from({ length: 10 }, () => stepCompleted({ version: '0.1.0' })),
+      ),
+      {
+        candidateVersion: '0.2.0',
+        incumbentVersion: '0.1.0',
+        thresholds: THRESHOLDS,
+        quality: { candidateMean: 0.9, incumbentMean: 0.92, candidateN: 5, incumbentN: 20 },
+      },
+    );
+    expect(report.metrics.quality).toBe(0.9);
+    expect(report.verdict).toBe('pass');
+  });
+
+  it('breaches when candidate quality falls more than max_quality_delta below the incumbent', () => {
+    const report = evaluator.evaluateCanary(
+      Array.from({ length: 5 }, () => stepCompleted({ version: '0.2.0' })).concat(
+        Array.from({ length: 10 }, () => stepCompleted({ version: '0.1.0' })),
+      ),
+      {
+        candidateVersion: '0.2.0',
+        incumbentVersion: '0.1.0',
+        thresholds: THRESHOLDS,
+        quality: { candidateMean: 0.7, incumbentMean: 0.92, candidateN: 5, incumbentN: 20 },
+      },
+    );
+    expect(report.verdict).toBe('fail');
+    expect(report.reasons.join(' ')).toContain('judged quality');
+  });
+
+  it('omits quality when either side has too few samples', () => {
+    const report = evaluator.evaluateCanary([stepCompleted({ version: '0.2.0' })], {
+      candidateVersion: '0.2.0',
+      incumbentVersion: '0.1.0',
+      thresholds: THRESHOLDS,
+      quality: { candidateMean: 0.5, incumbentMean: 0.95, candidateN: 1, incumbentN: 20 },
+    });
+    expect(report.metrics.quality).toBeUndefined();
+  });
+
+  it('omits quality when a mean is null (uncalibrated / no scores)', () => {
+    const report = evaluator.evaluateShadow(pairedShadow(), {
+      thresholds: THRESHOLDS,
+      quality: { candidateMean: null, incumbentMean: 0.9, candidateN: 5, incumbentN: 5 },
+    });
+    expect(report.metrics.quality).toBeUndefined();
+  });
+
+  it('folds shadow-route quality into the shadow gate', () => {
+    const report = evaluator.evaluateShadow(pairedShadow(), {
+      thresholds: THRESHOLDS,
+      quality: { candidateMean: 0.6, incumbentMean: 0.95, candidateN: 5, incumbentN: 5 },
+    });
+    expect(report.metrics.quality).toBe(0.6);
+    expect(report.reasons.join(' ')).toContain('judged quality');
   });
 });

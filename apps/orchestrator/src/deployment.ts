@@ -100,6 +100,21 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
     ...(approvalId === undefined ? {} : { approval_id: approvalId }),
   });
 
+  // --- Quality change freeze (item 6, D5) — STEP 1 ---------------------------
+  // The freeze wins over everything: it is checked BEFORE candidate validation,
+  // and is FAIL-CLOSED (an unreachable eval service refuses the deployment).
+  const freeze = await control.checkQualityFreeze(agent_id);
+  if (freeze.frozen) {
+    await emit('deployment.failed', {
+      deployment_id,
+      deploy_phase: 'preflight',
+      reason: 'change_freeze',
+      freeze_reason: freeze.reason ?? 'change_freeze',
+      ...(freeze.burn_ratio === undefined ? {} : { burn_ratio: freeze.burn_ratio }),
+    });
+    return result('failed', `change freeze active (${freeze.reason ?? 'quality budget'})`);
+  }
+
   // --- Preflight -------------------------------------------------------------
   const pre = await control.beginDeployment({
     agentId: agent_id,
@@ -129,6 +144,7 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
   let shadow = await control.evaluateGate({
     kind: 'shadow',
     tenant,
+    agentId: agent_id,
     since: shadowSince,
     candidateVersion: candidate_version,
     ...(incumbent === undefined ? {} : { incumbentVersion: incumbent }),
@@ -141,6 +157,7 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
     shadow = await control.evaluateGate({
       kind: 'shadow',
       tenant,
+      agentId: agent_id,
       since: shadowSince,
       candidateVersion: candidate_version,
       ...(incumbent === undefined ? {} : { incumbentVersion: incumbent }),
@@ -194,6 +211,7 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
     const report = await control.evaluateGate({
       kind: 'canary',
       tenant,
+      agentId: agent_id,
       since: rampSince,
       candidateVersion: candidate_version,
       ...(incumbent === undefined ? {} : { incumbentVersion: incumbent }),
@@ -280,6 +298,16 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
     if (!outcome.granted) {
       return demoteToShadow(`owner approval ${outcome.reason} — promotion refused`);
     }
+  }
+
+  // --- Quality change freeze re-check before promotion (item 6, D5) ----------
+  // A freeze that opened DURING the ramp/approval must still stop the promote;
+  // fail-closed here too. The candidate keeps serving as canary/shadow.
+  const promoteFreeze = await control.checkQualityFreeze(agent_id);
+  if (promoteFreeze.frozen) {
+    return demoteToShadow(
+      `change freeze active before promotion (${promoteFreeze.reason ?? 'quality budget'})`,
+    );
   }
 
   // --- Promote + drain -------------------------------------------------------

@@ -168,6 +168,7 @@ const control: ControlActivities = {
   mintProbeSubject: vi.fn(),
   recordProbeResult: vi.fn(() => Promise.resolve({ passed: true })),
   listProbeTargets: vi.fn(() => Promise.resolve({ uncovered: [] })),
+  checkQualityFreeze: vi.fn(() => Promise.resolve({ frozen: false })),
   now: vi.fn(),
 };
 

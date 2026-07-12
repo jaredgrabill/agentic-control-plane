@@ -787,6 +787,128 @@ describe('probe activities (item 6)', () => {
   });
 });
 
+describe('checkQualityFreeze (item 6)', () => {
+  it('reads the eval quality endpoint and returns frozen when the budget is frozen', async () => {
+    const fetchImpl = vi.fn((url: string | URL) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      return jsonResponse({ frozen: true, budget: { burn_ratio: 1.4, state: 'exhausted' } });
+    }) as unknown as typeof fetch;
+    const r = await makeActivities(fetchImpl).checkQualityFreeze('knowledge-agent');
+    expect(r.frozen).toBe(true);
+    expect(r.reason).toBe('change_freeze');
+    expect(r.burn_ratio).toBe(1.4);
+  });
+
+  it('returns not-frozen when the budget is healthy', async () => {
+    const fetchImpl = vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token')
+        ? jsonResponse({ access_token: 't' })
+        : jsonResponse({ frozen: false, budget: { burn_ratio: 0, state: 'ok' } }),
+    ) as unknown as typeof fetch;
+    const r = await makeActivities(fetchImpl).checkQualityFreeze('knowledge-agent');
+    expect(r.frozen).toBe(false);
+  });
+
+  it('FAILS CLOSED (frozen) when the eval service is unreachable', async () => {
+    const fetchImpl = vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token')
+        ? jsonResponse({ access_token: 't' })
+        : Promise.reject(new Error('eval down')),
+    ) as unknown as typeof fetch;
+    const r = await makeActivities(fetchImpl).checkQualityFreeze('knowledge-agent');
+    expect(r.frozen).toBe(true);
+    expect(r.reason).toBe('freeze_check_unavailable');
+  });
+
+  it('reports frozen without a burn_ratio when the budget omits it', async () => {
+    const fetchImpl = vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token')
+        ? jsonResponse({ access_token: 't' })
+        : jsonResponse({ frozen: true }),
+    ) as unknown as typeof fetch;
+    const r = await makeActivities(fetchImpl).checkQualityFreeze('knowledge-agent');
+    expect(r.frozen).toBe(true);
+    expect(r.burn_ratio).toBeUndefined();
+  });
+
+  it('FAILS CLOSED on a non-2xx from the eval service', async () => {
+    const fetchImpl = vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token')
+        ? jsonResponse({ access_token: 't' })
+        : jsonResponse({}, 500),
+    ) as unknown as typeof fetch;
+    const r = await makeActivities(fetchImpl).checkQualityFreeze('knowledge-agent');
+    expect(r.frozen).toBe(true);
+    expect(r.reason).toBe('freeze_check_unavailable');
+  });
+});
+
+describe('evaluateGate quality fold (item 6)', () => {
+  it('folds paired judged quality from the scores store into the shadow gate report', async () => {
+    const fetchImpl = vi.fn((url: string | URL) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      if (s.includes('/v1/events')) return jsonResponse({ events: [] });
+      if (s.includes('/v1/scores/aggregate')) {
+        // Candidate (shadow route) low, incumbent (active) high → breach.
+        const route = new URL(s).searchParams.get('route');
+        return route === 'shadow'
+          ? jsonResponse({ mean: 0.6, n: 5 })
+          : jsonResponse({ mean: 0.95, n: 20 });
+      }
+      return jsonResponse({}, 404);
+    }) as unknown as typeof fetch;
+    const report = await makeActivities(fetchImpl).evaluateGate({
+      kind: 'shadow',
+      tenant: 'acme',
+      agentId: 'knowledge-agent',
+      since: '2026-07-11T10:00:00Z',
+      candidateVersion: '0.2.0',
+      incumbentVersion: '0.1.0',
+      thresholds: {
+        max_success_delta: 0.05,
+        max_p95_ratio: 1.5,
+        max_cost_ratio: 1.25,
+        min_shadow_completion: 0.9,
+        min_shadow_samples: 5,
+        max_quality_delta: 0.1,
+        min_quality_samples: 5,
+      },
+    });
+    // No audit events → insufficient_data, but quality fetch still ran (fold is
+    // omitted only on the report path; the request path is exercised).
+    expect(report.verdict).toBe('insufficient_data');
+  });
+
+  it('omits the quality fold entirely when no agentId is supplied (canary)', async () => {
+    const fetchImpl = vi.fn((url: string | URL) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      if (s.includes('/v1/events')) return jsonResponse({ events: [] });
+      // /v1/scores/aggregate must NOT be called without an agentId.
+      return jsonResponse({ mean: 0.1, n: 99 });
+    }) as unknown as typeof fetch;
+    const report = await makeActivities(fetchImpl).evaluateGate({
+      kind: 'canary',
+      tenant: 'acme',
+      since: '2026-07-11T10:00:00Z',
+      candidateVersion: '0.2.0',
+      incumbentVersion: '0.1.0',
+      thresholds: {
+        max_success_delta: 0.05,
+        max_p95_ratio: 1.5,
+        max_cost_ratio: 1.25,
+        min_shadow_completion: 0.9,
+        min_shadow_samples: 5,
+        max_quality_delta: 0.1,
+        min_quality_samples: 5,
+      },
+    });
+    expect(report.metrics.quality).toBeUndefined();
+  });
+});
+
 describe('digestValue', () => {
   it('is a stable sha256 over the canonical value (key-order independent)', async () => {
     const acts = makeActivities(vi.fn());
@@ -947,6 +1069,8 @@ describe('deployment activities', () => {
         max_cost_ratio: 1.25,
         min_shadow_completion: 0.9,
         min_shadow_samples: 2,
+        max_quality_delta: 0.1,
+        min_quality_samples: 2,
       },
     });
     expect(report.samples.candidate).toBe(1);
