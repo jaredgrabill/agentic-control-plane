@@ -388,7 +388,11 @@
       "expect": "allow",
       "determined_by": "allow-tool-itsm-change-get",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_get",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": { "scopes": ["itsm:change:read"], "tenant": "acme" }
@@ -399,7 +403,11 @@
       "expect": "allow",
       "determined_by": "allow-tool-itsm-calendar-conflicts",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:calendar_conflicts",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": { "scopes": ["itsm:calendar:read"], "tenant": "acme" }
@@ -410,7 +418,11 @@
       "expect": "allow",
       "determined_by": "allow-tool-itsm-change-draft",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_create_draft",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": { "scopes": ["itsm:change:draft"], "tenant": "acme" }
@@ -421,13 +433,22 @@
       "expect": "allow",
       "determined_by": "permit-tool-itsm-change-submit",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_submit",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": {
           "scopes": ["itsm:change:submit"],
           "tenant": "acme",
-          "approval": { "granted": true, "capability": "change.submit", "approval_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90", "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51" },
+          "approval": {
+            "granted": true,
+            "capability": "change.submit",
+            "approval_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90",
+            "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51"
+          },
           "compensation": { "active": false }
         }
       }
@@ -437,7 +458,11 @@
       "expect": "require-approval",
       "determined_by": "gate-tool-itsm-change-submit",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_submit",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": {
@@ -453,7 +478,11 @@
       "expect": "require-approval",
       "determined_by": "gate-tool-itsm-change-submit",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_submit",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": {
@@ -468,17 +497,30 @@
       "name": "change_submit without the submit scope is denied (never gated)",
       "expect": "deny",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_submit",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
-        "context": { "scopes": ["itsm:change:read"], "tenant": "acme", "approval": { "granted": false }, "compensation": { "active": false } }
+        "context": {
+          "scopes": ["itsm:change:read"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": { "active": false }
+        }
       }
     },
     {
       "name": "change_submit cross-tenant is denied",
       "expect": "deny",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "globex" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "globex" }
+        },
         "action": "tool:itsm:change_submit",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": {
@@ -494,7 +536,11 @@
       "expect": "allow",
       "determined_by": "permit-tool-itsm-change-withdraw",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_withdraw",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": {
@@ -510,14 +556,22 @@
       "expect": "allow",
       "determined_by": "permit-tool-itsm-change-withdraw",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_withdraw",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": {
           "scopes": ["itsm:change:withdraw"],
           "tenant": "acme",
           "approval": { "granted": false },
-          "compensation": { "active": true, "original_capability": "change.submit", "original_step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51" }
+          "compensation": {
+            "active": true,
+            "original_capability": "change.submit",
+            "original_step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51"
+          }
         }
       }
     },
@@ -526,7 +580,11 @@
       "expect": "require-approval",
       "determined_by": "gate-tool-itsm-change-withdraw",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_withdraw",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": {
@@ -542,7 +600,11 @@
       "expect": "require-approval",
       "determined_by": "gate-tool-itsm-change-withdraw",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_withdraw",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
         "context": {
@@ -557,10 +619,19 @@
       "name": "change_withdraw without the withdraw scope is denied",
       "expect": "deny",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:change-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:itsm:change_withdraw",
         "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
-        "context": { "scopes": ["itsm:change:read"], "tenant": "acme", "approval": { "granted": false }, "compensation": { "active": false } }
+        "context": {
+          "scopes": ["itsm:change:read"],
+          "tenant": "acme",
+          "approval": { "granted": false },
+          "compensation": { "active": false }
+        }
       }
     },
     {
@@ -568,7 +639,11 @@
       "expect": "allow",
       "determined_by": "permit-tool-cloud-estate-tag-apply",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:cloud-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:cloud-estate:tag_apply",
         "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
         "context": {
@@ -584,7 +659,11 @@
       "expect": "allow",
       "determined_by": "permit-tool-cloud-estate-tag-apply",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:cloud-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:cloud-estate:tag_apply",
         "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
         "context": {
@@ -600,7 +679,11 @@
       "expect": "allow",
       "determined_by": "permit-tool-cloud-estate-tag-apply",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:cloud-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:cloud-estate:tag_apply",
         "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
         "context": {
@@ -616,7 +699,11 @@
       "expect": "require-approval",
       "determined_by": "gate-tool-cloud-estate-tag-apply",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:cloud-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:cloud-estate:tag_apply",
         "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
         "context": {
@@ -631,7 +718,11 @@
       "name": "tag_apply without the cloud:tag:write scope is denied",
       "expect": "deny",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:cloud-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:cloud-estate:tag_apply",
         "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
         "context": {
@@ -647,7 +738,11 @@
       "expect": "allow",
       "determined_by": "permit-tool-cloud-estate-tag-remove",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:cloud-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:cloud-estate:tag_remove",
         "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
         "context": {
@@ -663,7 +758,11 @@
       "expect": "allow",
       "determined_by": "permit-tool-cloud-estate-tag-remove",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:cloud-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:cloud-estate:tag_remove",
         "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
         "context": {
@@ -679,7 +778,11 @@
       "expect": "require-approval",
       "determined_by": "gate-tool-cloud-estate-tag-remove",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:cloud-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:cloud-estate:tag_remove",
         "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
         "context": {
@@ -694,7 +797,11 @@
       "name": "tag_remove without the cloud:tag:write scope is denied",
       "expect": "deny",
       "request": {
-        "principal": { "type": "Agent", "id": "agent:cloud-agent@0.1.0", "attrs": { "tenant": "acme" } },
+        "principal": {
+          "type": "Agent",
+          "id": "agent:cloud-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
         "action": "tool:cloud-estate:tag_remove",
         "resource": { "type": "Service", "id": "svc:cloud-estate", "attrs": {} },
         "context": {

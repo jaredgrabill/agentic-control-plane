@@ -227,8 +227,7 @@ describe('governed writes slice', () => {
     expect((brokered!.details as { capability: { risk: string } }).capability.risk).toBe('R2');
     const toolCalled = events.find(
       (e) =>
-        e.event_type === 'tool.called' &&
-        (e.details as { tool?: string }).tool === 'change_submit',
+        e.event_type === 'tool.called' && (e.details as { tool?: string }).tool === 'change_submit',
     );
     expect(toolCalled, 'a tool.called for change_submit must exist').toBeDefined();
     expect((toolCalled!.details as { outcome: string }).outcome).toBe('ok');

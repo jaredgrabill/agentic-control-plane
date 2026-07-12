@@ -38,7 +38,9 @@ describe('ItsmStore read tools', () => {
         window: { start: '2026-07-14T02:00:00Z', end: '2026-07-14T03:00:00Z' },
       }),
     );
-    expect((data.conflicts as { change_id: string }[]).map((c) => c.change_id)).toEqual(['CHG-0990']);
+    expect((data.conflicts as { change_id: string }[]).map((c) => c.change_id)).toEqual([
+      'CHG-0990',
+    ]);
     expect(data.within_coverage).toBe(true);
     expect(data.freezes).toEqual([]);
   });
@@ -90,7 +92,10 @@ describe('ItsmStore write state machine', () => {
   it('creates a draft with a fresh CHG id then submits and withdraws it', () => {
     const store = freshStore();
     const draft = okData(
-      store.createDraft({ title: 'Rotate the API gateway certificate', idempotency_key: 'step-draft-1' }),
+      store.createDraft({
+        title: 'Rotate the API gateway certificate',
+        idempotency_key: 'step-draft-1',
+      }),
     );
     expect(draft.change_id).toBe('CHG-2001');
     expect(draft.status).toBe('draft');
@@ -99,7 +104,9 @@ describe('ItsmStore write state machine', () => {
       status: 'draft',
     });
 
-    const submitted = okData(store.submit({ change_id: 'CHG-2001', idempotency_key: 'step-sub-1' }));
+    const submitted = okData(
+      store.submit({ change_id: 'CHG-2001', idempotency_key: 'step-sub-1' }),
+    );
     expect(submitted).toMatchObject({ status: 'submitted', previous_status: 'draft' });
 
     const withdrawn = okData(
@@ -202,13 +209,16 @@ describe('ItsmStore dry_run', () => {
 
   it('dry_run draft reserves no id and surfaces typed validation errors', () => {
     const store = freshStore();
-    const dry = okData(store.createDraft({ title: 'A perfectly valid change title', dry_run: true }));
+    const dry = okData(
+      store.createDraft({ title: 'A perfectly valid change title', dry_run: true }),
+    );
     expect(dry.dry_run).toBe(true);
     expect(dry.change_id).toBeUndefined();
     // The next REAL draft still gets CHG-2001 (nothing was reserved).
     expect(
-      okData(store.createDraft({ title: 'The first real draft here', idempotency_key: 'k-real-01' }))
-        .change_id,
+      okData(
+        store.createDraft({ title: 'The first real draft here', idempotency_key: 'k-real-01' }),
+      ).change_id,
     ).toBe('CHG-2001');
     expect(store.createDraft({ title: 'no', dry_run: true }).kind).toBe('invalid_input');
   });

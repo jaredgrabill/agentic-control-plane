@@ -61,7 +61,9 @@ export class CloudStore {
       }
       const resource = this.byId.get(resourceId);
       if (resource === undefined) {
-        return { outcome: { kind: 'not_found', message: `resource ${resourceId} is not in the inventory` } };
+        return {
+          outcome: { kind: 'not_found', message: `resource ${resourceId} is not in the inventory` },
+        };
       }
       const tags = args.tags;
       const entries = tags === undefined ? [] : Object.entries(tags);
@@ -100,7 +102,9 @@ export class CloudStore {
       }
       const resource = this.byId.get(resourceId);
       if (resource === undefined) {
-        return { outcome: { kind: 'not_found', message: `resource ${resourceId} is not in the inventory` } };
+        return {
+          outcome: { kind: 'not_found', message: `resource ${resourceId} is not in the inventory` },
+        };
       }
       const keys = args.keys;
       if (!Array.isArray(keys) || keys.length < 1 || !keys.every((k) => typeof k === 'string')) {

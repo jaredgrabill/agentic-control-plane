@@ -499,8 +499,7 @@ interface CapabilityContext {
 
 /** Cedar context for a compensation unwind, active only when bound to this task. */
 type CompensationContext =
-  | { active: true; original_capability: string; original_step_id: string }
-  | { active: false };
+  { active: true; original_capability: string; original_step_id: string } | { active: false };
 
 /** A structural risk-class refusal (step 3.5) and its audit fields. */
 interface RiskRefusal {
@@ -539,7 +538,8 @@ function enforceRiskClass(
   if (rankOf(toolRisk) >= rankOf('R3')) {
     return {
       reason: 'R3 tools are disabled platform-wide',
-      capabilityDescription: capability === undefined ? 'none' : `${capability.name} (${capability.risk})`,
+      capabilityDescription:
+        capability === undefined ? 'none' : `${capability.name} (${capability.risk})`,
       toolRisk,
       capability: capability?.name ?? '',
       capabilityRisk: capability?.risk ?? '',
@@ -548,7 +548,8 @@ function enforceRiskClass(
   if (capability === undefined) {
     if (rankOf(toolRisk) >= rankOf('R2')) {
       return {
-        reason: 'no capability context — an R2+ tool call outside the governed task path is refused',
+        reason:
+          'no capability context — an R2+ tool call outside the governed task path is refused',
         capabilityDescription: 'none',
         toolRisk,
         capability: '',

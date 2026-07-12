@@ -29,10 +29,7 @@ export function registerTagApply(agent: Agent, tools: ToolClient): void {
       Object.keys(tags).length < 1 ||
       !Object.values(tags).every((v) => typeof v === 'string')
     ) {
-      throw new CapabilityError(
-        ErrorClass.NeedsInput,
-        'tags must map 1..10 keys to string values',
-      );
+      throw new CapabilityError(ErrorClass.NeedsInput, 'tags must map 1..10 keys to string values');
     }
 
     const response = await tools.call(

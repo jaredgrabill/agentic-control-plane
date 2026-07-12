@@ -106,11 +106,18 @@ export class ItsmStore {
 
   calendarConflicts(args: CalendarConflictsArgs): ItsmOutcome {
     const window = args.window;
-    if (window === undefined || typeof window.start !== 'string' || typeof window.end !== 'string') {
+    if (
+      window === undefined ||
+      typeof window.start !== 'string' ||
+      typeof window.end !== 'string'
+    ) {
       return { kind: 'invalid_input', message: 'window with start and end (ISO 8601) is required' };
     }
     if (Number.isNaN(instant(window.start)) || Number.isNaN(instant(window.end))) {
-      return { kind: 'invalid_input', message: 'window.start and window.end must be ISO 8601 instants' };
+      return {
+        kind: 'invalid_input',
+        message: 'window.start and window.end must be ISO 8601 instants',
+      };
     }
     if (instant(window.start) >= instant(window.end)) {
       return { kind: 'invalid_input', message: 'window.start must be before window.end' };
@@ -218,7 +225,9 @@ export class ItsmStore {
     }
     const record = this.changes.get(changeId);
     if (record === undefined) {
-      return { outcome: { kind: 'not_found', message: `change ${changeId} is not in the change log` } };
+      return {
+        outcome: { kind: 'not_found', message: `change ${changeId} is not in the change log` },
+      };
     }
     if (record.status !== from) {
       return {

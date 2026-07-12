@@ -919,7 +919,13 @@ describe('structural risk-class enforcement (step 3.5)', () => {
   });
 
   it('refuses every R2+ tool when there is NO capability context (direct caller)', async () => {
-    const result = await h.core.callTool(userCaller('probe:write'), 'scripted', 'write_probe', {}, {});
+    const result = await h.core.callTool(
+      userCaller('probe:write'),
+      'scripted',
+      'write_probe',
+      {},
+      {},
+    );
     expect(errorOf(result).code).toBe('upstream_auth');
     expect(errorOf(result).message).toContain('no capability context');
     expect(h.scriptedCalls.calls).toBe(0);
@@ -992,7 +998,10 @@ describe('structural risk-class enforcement (step 3.5)', () => {
       CORR,
     );
     const bound = h.policy.requests.at(-1)!.context as { compensation: { active: boolean } };
-    expect(bound.compensation).toMatchObject({ active: true, original_capability: 'change.submit' });
+    expect(bound.compensation).toMatchObject({
+      active: true,
+      original_capability: 'change.submit',
+    });
 
     // Replayed onto a DIFFERENT task → inactive (cannot re-arm elsewhere).
     await h.core.callTool(

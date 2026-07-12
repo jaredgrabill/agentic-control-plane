@@ -871,7 +871,9 @@ describe('capability binding (item 3)', () => {
       },
     });
     expect(res.statusCode).toBe(200);
-    const claims = decodeJwt(res.json<{ access_token: string }>().access_token) as unknown as PlatformClaims;
+    const claims = decodeJwt(
+      res.json<{ access_token: string }>().access_token,
+    ) as unknown as PlatformClaims;
     expect(claims.capability).toEqual({ name: 'change.submit', risk: 'R2' });
     // The brokered task binding rides with it — the tool gateway needs both.
     expect(claims.brokered?.task_id).toBe('0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40');
@@ -891,9 +893,7 @@ describe('capability binding (item 3)', () => {
       },
     });
     expect(res.statusCode).toBe(200);
-    expect(
-      decodeJwt(res.json<{ access_token: string }>().access_token).capability,
-    ).toBeUndefined();
+    expect(decodeJwt(res.json<{ access_token: string }>().access_token).capability).toBeUndefined();
   });
 
   it('DROPS capability on a chain-free rescope (actor === subject, no chain)', async () => {

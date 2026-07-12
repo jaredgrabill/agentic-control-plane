@@ -188,7 +188,8 @@ describe('CloudStore tag writes', () => {
       idempotency_key: 'tag-apply-ryw',
     });
     const found = searchInventory(store.fixtures, { service: 'payments-api', env: 'prod' });
-    const resources = (found as { kind: 'ok'; data: { resources: CloudResource[] } }).data.resources;
+    const resources = (found as { kind: 'ok'; data: { resources: CloudResource[] } }).data
+      .resources;
     const target = resources.find((r) => r.resource_id === 'i-0a1f001');
     expect(target?.tags.owner).toBe('team-newowner');
   });
@@ -211,7 +212,9 @@ describe('CloudStore tag writes', () => {
 
   it('honest inverse: apply-then-restore returns the resource to its prior tags', () => {
     const store = new CloudStore(fx);
-    const before = { ...store.fixtures.inventory.resources.find((r) => r.resource_id === 'i-0a1f001')!.tags };
+    const before = {
+      ...store.fixtures.inventory.resources.find((r) => r.resource_id === 'i-0a1f001')!.tags,
+    };
     const applied = tagOk(
       store.tagApply({
         resource_id: 'i-0a1f001',
@@ -227,20 +230,31 @@ describe('CloudStore tag writes', () => {
     const restoreRemove = Object.entries(previous)
       .filter(([, v]) => v === null)
       .map(([k]) => k);
-    store.tagApply({ resource_id: 'i-0a1f001', tags: restoreApply, idempotency_key: 'tag-honest-restore-a' });
-    store.tagRemove({ resource_id: 'i-0a1f001', keys: restoreRemove, idempotency_key: 'tag-honest-restore-r' });
-    const after = store.fixtures.inventory.resources.find((r) => r.resource_id === 'i-0a1f001')!.tags;
+    store.tagApply({
+      resource_id: 'i-0a1f001',
+      tags: restoreApply,
+      idempotency_key: 'tag-honest-restore-a',
+    });
+    store.tagRemove({
+      resource_id: 'i-0a1f001',
+      keys: restoreRemove,
+      idempotency_key: 'tag-honest-restore-r',
+    });
+    const after = store.fixtures.inventory.resources.find(
+      (r) => r.resource_id === 'i-0a1f001',
+    )!.tags;
     expect(after).toEqual(before);
   });
 
   it('rejects unknown resources, empty/oversized tag sets, and non-string values', () => {
     const store = new CloudStore(fx);
-    expect(store.tagApply({ resource_id: 'i-ghost', tags: { a: 'b' }, idempotency_key: 'k-ghost-1' }).kind).toBe(
-      'not_found',
-    );
-    expect(store.tagApply({ resource_id: 'i-0a1f001', tags: {}, idempotency_key: 'k-empty-01' }).kind).toBe(
-      'invalid_input',
-    );
+    expect(
+      store.tagApply({ resource_id: 'i-ghost', tags: { a: 'b' }, idempotency_key: 'k-ghost-1' })
+        .kind,
+    ).toBe('not_found');
+    expect(
+      store.tagApply({ resource_id: 'i-0a1f001', tags: {}, idempotency_key: 'k-empty-01' }).kind,
+    ).toBe('invalid_input');
     expect(
       store.tagApply({
         resource_id: 'i-0a1f001',
@@ -252,30 +266,48 @@ describe('CloudStore tag writes', () => {
 
   it('tag_remove rejects unknown resources, empty key lists, and missing idempotency keys', () => {
     const store = new CloudStore(fx);
-    expect(store.tagRemove({ resource_id: 'i-ghost', keys: ['owner'], idempotency_key: 'k-rm-ghost' }).kind).toBe(
-      'not_found',
-    );
-    expect(store.tagRemove({ resource_id: 'i-0a1f001', keys: [], idempotency_key: 'k-rm-empty1' }).kind).toBe(
-      'invalid_input',
-    );
-    expect(store.tagRemove({ resource_id: 'i-0a1f001', keys: ['owner'], idempotency_key: 'no' }).kind).toBe(
-      'invalid_input',
-    );
+    expect(
+      store.tagRemove({ resource_id: 'i-ghost', keys: ['owner'], idempotency_key: 'k-rm-ghost' })
+        .kind,
+    ).toBe('not_found');
+    expect(
+      store.tagRemove({ resource_id: 'i-0a1f001', keys: [], idempotency_key: 'k-rm-empty1' }).kind,
+    ).toBe('invalid_input');
+    expect(
+      store.tagRemove({ resource_id: 'i-0a1f001', keys: ['owner'], idempotency_key: 'no' }).kind,
+    ).toBe('invalid_input');
   });
 
   it('idempotency: replays a stored tag_apply and rejects a key reused with different args', () => {
     const store = new CloudStore(fx);
-    const first = store.tagApply({ resource_id: 'i-0a1f001', tags: { owner: 'x' }, idempotency_key: 'idem-tag-1' });
-    const replay = store.tagApply({ resource_id: 'i-0a1f001', tags: { owner: 'x' }, idempotency_key: 'idem-tag-1' });
+    const first = store.tagApply({
+      resource_id: 'i-0a1f001',
+      tags: { owner: 'x' },
+      idempotency_key: 'idem-tag-1',
+    });
+    const replay = store.tagApply({
+      resource_id: 'i-0a1f001',
+      tags: { owner: 'x' },
+      idempotency_key: 'idem-tag-1',
+    });
     expect(replay).toEqual(first);
-    const conflict = store.tagApply({ resource_id: 'i-0a1f001', tags: { owner: 'y' }, idempotency_key: 'idem-tag-1' });
+    const conflict = store.tagApply({
+      resource_id: 'i-0a1f001',
+      tags: { owner: 'y' },
+      idempotency_key: 'idem-tag-1',
+    });
     expect(conflict.kind).toBe('invalid_input');
   });
 
   it('dry_run tag_apply validates without mutating or claiming the ledger key', () => {
     const store = new CloudStore(fx);
     const dry = tagOk(
-      store.tagApply({ resource_id: 'i-0a1f001', tags: { owner: 'z' }, idempotency_key: 'dry-tag-1', dry_run: true }),
+      store.tagApply({
+        resource_id: 'i-0a1f001',
+        tags: { owner: 'z' },
+        idempotency_key: 'dry-tag-1',
+        dry_run: true,
+      }),
     );
     expect(dry.dry_run).toBe(true);
     const target = store.fixtures.inventory.resources.find((r) => r.resource_id === 'i-0a1f001');

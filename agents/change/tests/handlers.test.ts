@@ -187,7 +187,10 @@ describe('change.submit', () => {
   it('a not_found from the tool surfaces as needs_input', async () => {
     const tools = new FakeToolClient({
       'itsm.change_submit': () => {
-        throw new CapabilityError(ErrorClass.NeedsInput, 'change CHG-9999 is not in the change log');
+        throw new CapabilityError(
+          ErrorClass.NeedsInput,
+          'change CHG-9999 is not in the change log',
+        );
       },
     });
     const step = await buildAgent(tools).execute(
