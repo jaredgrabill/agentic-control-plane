@@ -17,7 +17,11 @@
       "itsm:calendar:read",
       "itsm:change:draft",
       "itsm:change:submit",
-      "itsm:change:withdraw"
+      "itsm:change:withdraw",
+      "netsec:firewall:read",
+      "netsec:secgroup:read",
+      "netsec:ipam:read",
+      "netsec:vuln:read"
     ]
   },
   {
@@ -152,6 +156,14 @@
     "client_id": "agent-change-agent",
     "client_secret": "agent-change-dev-secret",
     "principal": "agent:change-agent@0.1.0",
+    "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
+    "client_id": "agent-netsec-agent",
+    "client_secret": "agent-netsec-dev-secret",
+    "principal": "agent:netsec-agent@0.1.0",
     "tenant": "acme",
     "roles": ["agent"],
     "scopes": []

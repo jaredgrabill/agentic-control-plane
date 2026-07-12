@@ -53,6 +53,23 @@
       "rate_limit": { "per_minute": 60, "burst": 20 }
     },
     {
+      "id": "netsec",
+      "url": "http://localhost:7304/mcp",
+      "auth": {
+        "mode": "static-headers",
+        "headers": {
+          "x-acp-broker-credential": "${ACP_TOOL_CRED_NETSEC:-netsec-dev-broker}"
+        }
+      },
+      "tools": {
+        "firewall_rules_search": { "scope": "netsec:firewall:read", "risk": "R0" },
+        "security_group_get": { "scope": "netsec:secgroup:read", "risk": "R0" },
+        "ipam_lookup": { "scope": "netsec:ipam:read", "risk": "R0" },
+        "vuln_scan_report": { "scope": "netsec:vuln:read", "risk": "R0" }
+      },
+      "rate_limit": { "per_minute": 60, "burst": 20 }
+    },
+    {
       "id": "knowledge",
       "url": "http://localhost:7105/mcp",
       "auth": {
