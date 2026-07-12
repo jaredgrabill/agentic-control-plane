@@ -430,6 +430,8 @@ export const auditEventSchema = {
         "token.issued",
         "token.exchanged",
         "token.brokered",
+        "token.denied",
+        "bus.auth",
         "agent.registered",
         "agent.lifecycle_changed",
         "agent.baseline_recorded",

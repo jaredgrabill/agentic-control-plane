@@ -24,6 +24,8 @@ class EventType(StrEnum):
     token_issued = "token.issued"
     token_exchanged = "token.exchanged"
     token_brokered = "token.brokered"
+    token_denied = "token.denied"
+    bus_auth = "bus.auth"
     agent_registered = "agent.registered"
     agent_lifecycle_changed = "agent.lifecycle_changed"
     agent_baseline_recorded = "agent.baseline_recorded"

@@ -2,6 +2,7 @@ import process from 'node:process';
 import {
   ensureAuditStream,
   AuditPublisher,
+  KillSwitchWatcher,
   connectBus,
   createLogger,
   env,
@@ -33,6 +34,11 @@ const nc = await connectBus({
 });
 await ensureAuditStream(nc);
 
+// ADR-0007 broker-time denylist: watch the control KV so delegate/exchange/
+// issue refuse revoked identities (halted fleet, suspended agents,
+// denylisted principals) in seconds, from memory.
+const killSwitch = await KillSwitchWatcher.start(nc, logger);
+
 const app = await buildTokenApp({
   keys,
   clients: ClientRegistry.fromJson(requireEnv('ACP_TOKEN_CLIENTS')),
@@ -40,6 +46,7 @@ const app = await buildTokenApp({
   audit: new AuditPublisher(nc, logger),
   logger,
   brokerMaxTaskAgeSeconds: envInt('ACP_BROKER_MAX_TASK_AGE_SECONDS', 86_400),
+  killSwitch,
 });
 
 const port = envInt('ACP_TOKEN_PORT', 7101);
@@ -49,6 +56,7 @@ logger.info({ port }, 'token service listening');
 for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     void (async () => {
+      killSwitch.stop();
       await app.close();
       await nc.drain();
       await telemetry.shutdown();

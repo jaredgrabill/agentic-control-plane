@@ -1,5 +1,5 @@
 import type { AuditEvent } from '@acp/protocol';
-import { JwtVerifier, createLogger, delegationChain } from '@acp/service-kit';
+import { JwtVerifier, createLogger, delegationChain, type PlatformClaims } from '@acp/service-kit';
 import type { FastifyInstance } from 'fastify';
 import { decodeJwt } from 'jose';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -371,9 +371,9 @@ describe('governance-claim exchange propagation (SPRINT cross-item contract)', (
       audience: 'acp:tools',
     });
     expect(res.statusCode).toBe(200);
-    const claims = decodeJwt(res.body.access_token);
+    const claims = decodeJwt(res.body.access_token) as unknown as PlatformClaims;
     expect(claims.aud).toBe('acp:tools');
-    const brokered = claims.brokered as { task_id: string; verified_at: string } | undefined;
+    const brokered = claims.brokered;
     expect(brokered?.task_id).toBe('0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40');
     // Chain preserved verbatim — no duplicate agent link.
     expect(delegationChain(claims).map((l) => l.sub)).toEqual([
@@ -746,5 +746,183 @@ describe('JWKS', () => {
     expect(jwks.keys).toHaveLength(1);
     expect(jwks.keys[0]!.kty).toBe('OKP');
     expect(jwks.keys[0]!.alg).toBe('EdDSA');
+  });
+});
+
+describe('ADR-0007 broker-time denylist', () => {
+  // A toggleable stub of the KillSwitchWatcher read side.
+  const state = { fleet: false, agents: new Set<string>(), principals: new Set<string>() };
+  const killSwitch = {
+    fleetHalt: () => (state.fleet ? { active: true } : undefined),
+    agentSuspension: (id: string) => (state.agents.has(id) ? { active: true } : undefined),
+    principalDenied: (sub: string) => (state.principals.has(sub) ? { active: true } : undefined),
+  };
+  const denied: AuditEvent[] = [];
+  let killApp: FastifyInstance;
+
+  beforeAll(async () => {
+    killApp = await buildTokenApp({
+      keys,
+      clients: new ClientRegistry(CLIENTS),
+      issuer: ISSUER,
+      audit: {
+        publish: (e) => {
+          denied.push(e);
+          return Promise.resolve();
+        },
+      },
+      logger: createLogger('token-denylist-test'),
+      killSwitch,
+    });
+  });
+
+  function reset() {
+    state.fleet = false;
+    state.agents.clear();
+    state.principals.clear();
+    denied.length = 0;
+  }
+
+  async function issue(id: string, secret: string, audience: string) {
+    const res = await killApp.inject({
+      method: 'POST',
+      url: '/v1/token',
+      headers: { authorization: basic(id, secret) },
+      payload: { grant_type: 'client_credentials', audience },
+    });
+    return res;
+  }
+
+  async function delegate(payload: Record<string, unknown>) {
+    return killApp.inject({
+      method: 'POST',
+      url: '/v1/token/delegate',
+      headers: { authorization: basic('svc-orchestrator', 'orch-secret') },
+      payload: { grant_type: BROKER_DELEGATION_GRANT, ...payload },
+    });
+  }
+
+  const SNAPSHOT = {
+    sub: 'user:jane.doe',
+    tenant: 'acme',
+    roles: ['tenant-user'],
+    scopes: ['cloud:cost:read'],
+  };
+  const grounds = () => ({
+    task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    verified_at: new Date().toISOString(),
+  });
+
+  const deniedEvent = () => denied.find((e) => e.event_type === 'token.denied');
+
+  it('issue(): a suspended agent gets no fresh acp:bus token, and token.denied is audited', async () => {
+    reset();
+    state.agents.add('something'); // agent:something@0.1.0
+    const res = await issue('agent-something', 'agent-secret', 'acp:bus');
+    expect(res.statusCode).toBe(403);
+    const event = deniedEvent();
+    expect(event, 'token.denied not emitted').toBeDefined();
+    expect(event!.details).toMatchObject({
+      grant: 'client_credentials',
+      audience: 'acp:bus',
+      reason: 'killswitch',
+      key: 'killswitch.agent.something',
+      principal: 'agent:something@0.1.0',
+    });
+    expect(event!.tenant).toBe('acme');
+  });
+
+  it('issue(): a fleet halt blocks agent bus mints but NOT platform service tokens', async () => {
+    reset();
+    state.fleet = true;
+    const agent = await issue('agent-something', 'agent-secret', 'acp:bus');
+    expect(agent.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({ reason: 'fleet_halt', key: 'killswitch.fleet' });
+    // A platform service (the control plane itself) must keep minting.
+    denied.length = 0;
+    const svc = await issue('svc-orchestrator', 'orch-secret', 'acp:registry');
+    expect(svc.statusCode).toBe(200);
+    expect(deniedEvent()).toBeUndefined();
+  });
+
+  it('issue(): a denylisted principal is refused (principal_denylist)', async () => {
+    reset();
+    state.principals.add('agent:something@0.1.0');
+    const res = await issue('agent-something', 'agent-secret', 'acp:bus');
+    expect(res.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({
+      reason: 'principal_denylist',
+      key: 'killswitch.principal.agent:something@0.1.0',
+    });
+  });
+
+  it('delegate(): refuses a suspended target agent and a denylisted subject', async () => {
+    reset();
+    state.agents.add('cloud-agent');
+    const suspended = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
+      actor: 'agent:cloud-agent@0.1.0',
+      grounds: grounds(),
+    });
+    expect(suspended.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({
+      reason: 'killswitch',
+      key: 'killswitch.agent.cloud-agent',
+      principal: 'agent:cloud-agent@0.1.0',
+    });
+
+    reset();
+    state.principals.add('user:jane.doe');
+    const denylisted = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
+      actor: 'agent:cloud-agent@0.1.0',
+      grounds: grounds(),
+    });
+    expect(denylisted.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({
+      reason: 'principal_denylist',
+      key: 'killswitch.principal.user:jane.doe',
+    });
+  });
+
+  it('exchange(): a suspended effective actor cannot convert a token it holds', async () => {
+    reset();
+    state.agents.add('something');
+    // agent-something exchanges its own token toward acp:tools.
+    const userToken = await issueUserToken();
+    const res = await killApp.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('agent-something', 'agent-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: userToken,
+        audience: 'acp:tools',
+      },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({
+      reason: 'killswitch',
+      key: 'killswitch.agent.something',
+    });
+  });
+
+  it('a clean kill switch leaves every grant untouched (no false positives)', async () => {
+    reset();
+    const iss = await issue('agent-something', 'agent-secret', 'acp:bus');
+    expect(iss.statusCode).toBe(200);
+    const del = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
+      actor: 'agent:cloud-agent@0.1.0',
+      grounds: grounds(),
+    });
+    expect(del.statusCode).toBe(200);
+    expect(deniedEvent()).toBeUndefined();
   });
 });

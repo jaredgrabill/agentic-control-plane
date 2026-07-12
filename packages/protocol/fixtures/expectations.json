@@ -107,6 +107,8 @@
     { "file": "audit-event/valid-task-planned.json", "schema": "audit-event", "valid": true },
     { "file": "audit-event/valid-step-skipped.json", "schema": "audit-event", "valid": true },
     { "file": "audit-event/valid-token-brokered.json", "schema": "audit-event", "valid": true },
+    { "file": "audit-event/valid-token-denied.json", "schema": "audit-event", "valid": true },
+    { "file": "audit-event/valid-bus-auth.json", "schema": "audit-event", "valid": true },
     { "file": "audit-event/valid-model-invoked.json", "schema": "audit-event", "valid": true },
     { "file": "eval-report/valid-knowledge-run.json", "schema": "eval-report", "valid": true },
     {
