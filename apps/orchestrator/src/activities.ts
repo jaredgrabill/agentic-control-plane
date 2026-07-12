@@ -16,13 +16,17 @@ import {
 } from '@acp/service-kit';
 import { ApplicationFailure } from '@temporalio/common';
 import { loadResolvedPriceBook } from '@acp/cost-meter';
+import type { ResolvedPriceBook } from '@acp/cost-meter/pricing';
 import { RULE_PLANNER, buildPlanSteps } from './planner.js';
-import type { ControlActivities, PrincipalSnapshot } from './types.js';
+import { GateEvaluator, type GateReport } from './deployment-gates.js';
+import type { ControlActivities, DeploymentPreflight, PrincipalSnapshot } from './types.js';
 
 export interface ControlDeps {
   registryUrl: string;
   policyUrl: string;
   tokenUrl: string;
+  /** Audit query base URL (the Deployment Controller's gate evaluator pages it). */
+  auditUrl?: string;
   /** client_credentials for the orchestrator's own platform identity. */
   clientId: string;
   clientSecret: string;
@@ -322,6 +326,158 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
       // crypto. The shadow gate joins a candidate's output_digest to the
       // incumbent's for comparison.
       return Promise.resolve({ digest: sha256Digest(stableStringify(value)) });
+    },
+
+    now() {
+      return Promise.resolve({ iso: new Date().toISOString() });
+    },
+
+    async beginDeployment(input): Promise<DeploymentPreflight> {
+      const token = await serviceToken('acp:registry', 'registry:read');
+      const headers = { authorization: `Bearer ${token}` };
+      // The candidate must exist, be `registered`, and carry a matching baseline.
+      const candRes = await doFetch(
+        `${deps.registryUrl}/v1/agents/${encodeURIComponent(input.agentId)}` +
+          `/versions/${encodeURIComponent(input.candidateVersion)}`,
+        { headers },
+      );
+      if (candRes.status === 404) {
+        throw ApplicationFailure.nonRetryable(
+          `candidate ${input.agentId}@${input.candidateVersion} is not registered`,
+        );
+      }
+      if (!candRes.ok) throw new Error(`candidate lookup failed: ${candRes.status}`);
+      const candidate = (await candRes.json()) as AgentCard & {
+        eval_baseline?: { suite?: { digest?: string } };
+      };
+      if (candidate.lifecycle_state !== 'registered') {
+        throw ApplicationFailure.nonRetryable(
+          `candidate ${input.agentId}@${input.candidateVersion} is ${candidate.lifecycle_state}, ` +
+            'not registered — a deployment starts from a freshly registered version',
+        );
+      }
+      if (candidate.eval_baseline === undefined) {
+        throw ApplicationFailure.nonRetryable(
+          `candidate ${input.agentId}@${input.candidateVersion} has no eval_baseline — record one first`,
+        );
+      }
+      const capabilities = candidate.manifest.capabilities.map((c) => c.name);
+      const requiresApproval = candidate.manifest.capabilities.some(
+        (c) => c.risk === 'R2' || c.risk === 'R3',
+      );
+
+      // The incumbent is the current active version (may be absent on a
+      // first-ever deployment — the promote then simply activates the candidate).
+      const activeRes = await doFetch(
+        `${deps.registryUrl}/v1/agents?capability=${encodeURIComponent(capabilities[0] ?? '')}&state=active`,
+        { headers },
+      );
+      let incumbentVersion: string | undefined;
+      let baselineNote = 'no incumbent baseline to compare';
+      if (activeRes.ok) {
+        const { agents } = (await activeRes.json()) as {
+          agents: (AgentCard & { eval_baseline?: { suite?: { digest?: string } } })[];
+        };
+        const incumbent = agents.find((a) => a.manifest.id === input.agentId);
+        if (incumbent !== undefined) {
+          incumbentVersion = incumbent.version;
+          const incDigest = incumbent.eval_baseline?.suite?.digest;
+          const candDigest = candidate.eval_baseline?.suite?.digest;
+          baselineNote =
+            incDigest !== undefined && incDigest === candDigest
+              ? 'comparable_suite'
+              : 'incomparable_suite';
+        }
+      }
+      return {
+        ...(incumbentVersion === undefined ? {} : { incumbentVersion }),
+        capabilities,
+        requiresApproval,
+        baselineNote,
+      };
+    },
+
+    async deployTransition(input): Promise<void> {
+      const token = await serviceToken('acp:registry', 'registry:deploy');
+      const res = await doFetch(
+        `${deps.registryUrl}/v1/agents/${encodeURIComponent(input.agentId)}` +
+          `/versions/${encodeURIComponent(input.version)}/state`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+          body: JSON.stringify({
+            state: input.state,
+            ...(input.rampPercent === undefined ? {} : { ramp_percent: input.rampPercent }),
+            ...(input.reason === undefined ? {} : { reason: input.reason }),
+          }),
+        },
+      );
+      if (!res.ok) {
+        throw new Error(
+          `deploy transition ${input.agentId}@${input.version}→${input.state} failed: ` +
+            `${res.status} ${await res.text()}`,
+        );
+      }
+    },
+
+    async promoteVersion(input): Promise<void> {
+      const token = await serviceToken('acp:registry', 'registry:deploy');
+      const res = await doFetch(
+        `${deps.registryUrl}/v1/agents/${encodeURIComponent(input.agentId)}/promote`,
+        {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+          body: JSON.stringify({ version: input.version }),
+        },
+      );
+      if (!res.ok) {
+        throw new Error(`promote ${input.agentId}@${input.version} failed: ${res.status}`);
+      }
+    },
+
+    async evaluateGate(input): Promise<GateReport> {
+      const auditUrl = deps.auditUrl;
+      if (auditUrl === undefined) {
+        throw new Error('ACP_AUDIT_URL is not configured — the deployment gate cannot query audit');
+      }
+      const token = await serviceToken('acp:audit', 'audit:read');
+      // Page the audit window (limit=1000) from the soak start.
+      const events: AuditEvent[] = [];
+      let since = input.since;
+      for (let page = 0; page < 20; page += 1) {
+        const res = await doFetch(
+          `${auditUrl}/v1/events?tenant=${encodeURIComponent(input.tenant)}` +
+            `&since=${encodeURIComponent(since)}&limit=1000`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        if (!res.ok) {
+          // A gate that cannot measure must not pass — fail closed by throwing
+          // (Temporal retries; a persistent failure fails the deployment).
+          throw new Error(`gate audit query failed: ${res.status} ${await res.text()}`);
+        }
+        const { events: batch } = (await res.json()) as { events: AuditEvent[] };
+        events.push(...batch);
+        if (batch.length < 1000) break;
+        const last = batch[batch.length - 1];
+        if (last === undefined) break;
+        since = last.occurred_at;
+      }
+
+      let book: ResolvedPriceBook | undefined;
+      try {
+        book = loadResolvedPriceBook({ path: deps.priceBookPath });
+      } catch {
+        book = undefined;
+      }
+      const evaluator = new GateEvaluator();
+      return input.kind === 'shadow'
+        ? evaluator.evaluateShadow(events, { thresholds: input.thresholds, priceBook: book })
+        : evaluator.evaluateCanary(events, {
+            candidateVersion: input.candidateVersion,
+            incumbentVersion: input.incumbentVersion ?? '',
+            thresholds: input.thresholds,
+            priceBook: book,
+          });
     },
 
     getPriceBook() {

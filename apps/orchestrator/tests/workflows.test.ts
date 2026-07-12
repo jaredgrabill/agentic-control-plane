@@ -159,6 +159,11 @@ const control: ControlActivities = {
   }),
   digestValue: vi.fn(),
   getPriceBook: vi.fn(),
+  beginDeployment: vi.fn(),
+  deployTransition: vi.fn(),
+  promoteVersion: vi.fn(),
+  evaluateGate: vi.fn(),
+  now: vi.fn(),
 };
 
 // Resolved books (integer micro-USD/MTok), as the loader would produce.

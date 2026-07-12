@@ -1231,8 +1231,8 @@ export async function ApprovalWorkflow(input: ApprovalGateInput): Promise<Approv
     ...(subject.compensator === undefined ? {} : { compensator: subject.compensator }),
     ...(subject.irreversible === undefined ? {} : { irreversible: subject.irreversible }),
     input: subject.input,
-    plan: subject.plan,
-    plan_digest: subject.plan_digest,
+    ...(subject.plan === undefined ? {} : { plan: subject.plan }),
+    ...(subject.plan_digest === undefined ? {} : { plan_digest: subject.plan_digest }),
     escalate_after_s: input.escalate_after_s,
     deny_after_s: input.deny_after_s,
   });
@@ -1437,3 +1437,15 @@ function applicationFailureType(err: unknown): string | undefined {
   }
   return type;
 }
+
+// DeploymentWorkflow lives in its own module but is re-exported here so it lands
+// in the same workflow bundle (the worker's single workflowsPath entry). It
+// imports ApprovalWorkflow from this module (owner-approval reuse); the cycle is
+// safe — both are hoisted function declarations used only at call time.
+export {
+  DeploymentWorkflow,
+  abortDeploymentSignal,
+  deploymentStatusQuery,
+  type DeploymentStatus,
+  type DeploymentResult,
+} from './deployment.js';

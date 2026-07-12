@@ -8,6 +8,9 @@ import type {
   TaskRequest,
 } from '@acp/protocol';
 import type { ResolvedPriceBook } from '@acp/cost-meter/pricing';
+import type { GateReport, GateThresholds } from './deployment-gates.js';
+
+export type { GateReport, GateThresholds } from './deployment-gates.js';
 
 /**
  * Delegation depth cap (agent-patterns.md): 1 = delegated directly from the
@@ -162,8 +165,16 @@ export interface ApprovalSubject {
   compensator?: string;
   /** True when the write is flagged irreversible — raises the approval bar (visibility v1). */
   irreversible?: boolean;
-  plan: Plan;
-  plan_digest: string;
+  /**
+   * The full plan + its digest (blast radius). OPTIONAL as of item 4 (deliberate
+   * item-1 amendment): a deployment's owner-approval subject reuses this machine
+   * but has no task plan — its blast radius is the version promotion itself,
+   * carried in `input` ({from_version, to_version, gate_reports_digest}). Every
+   * task-step approval still sets both; the digest binding is unaffected because
+   * stableStringify drops undefined members.
+   */
+  plan?: Plan;
+  plan_digest?: string;
 }
 
 /** Input to the ApprovalWorkflow child. */
@@ -266,6 +277,55 @@ export interface ShadowStepInput {
   shadowCard: AgentCard;
   /** The incumbent version this shadow is compared against (for the gate join). */
   incumbentVersion: string;
+}
+
+/** Deployment tunables (D7); every field is overridable so E2E runs seconds-scale. */
+export interface DeploymentConfig {
+  shadow_soak_s: number;
+  min_shadow_samples: number;
+  ramp_steps: number[];
+  ramp_soak_s: number;
+  drain_s: number;
+  thresholds: GateThresholds;
+}
+
+/** The default deployment profile (production-scale soaks). */
+export const DEFAULT_DEPLOYMENT_CONFIG: DeploymentConfig = {
+  shadow_soak_s: 3600,
+  min_shadow_samples: 5,
+  ramp_steps: [5, 25, 50, 100],
+  ramp_soak_s: 1800,
+  drain_s: 3600,
+  thresholds: {
+    max_success_delta: 0.05,
+    max_p95_ratio: 1.5,
+    max_cost_ratio: 1.25,
+    min_shadow_completion: 0.9,
+    min_shadow_samples: 5,
+  },
+};
+
+/** Internal input to the DeploymentWorkflow. */
+export interface DeploymentRequest {
+  deployment_id: string;
+  agent_id: string;
+  candidate_version: string;
+  initiated_by: string;
+  /** The tenant whose shadow/canary traffic the gates evaluate (task tenant). */
+  tenant: string;
+  config: DeploymentConfig;
+}
+
+/** What beginDeployment resolves after validating the candidate against the incumbent. */
+export interface DeploymentPreflight {
+  /** The current active version being replaced; undefined on a first-ever deployment. */
+  incumbentVersion?: string;
+  /** The candidate's declared capabilities and their max risk (drives the R2 approval gate). */
+  capabilities: string[];
+  /** True when any candidate capability is R2/R3 — final promotion needs owner approval. */
+  requiresApproval: boolean;
+  /** Baseline comparison note recorded on deployment.started (e.g. 'incomparable_suite'). */
+  baselineNote: string;
 }
 
 /** Control-plane activities implemented by the orchestrator's own worker. */
@@ -371,6 +431,44 @@ export interface ControlActivities {
   emitAudit(event: Record<string, unknown>): Promise<void>;
   /** sha256 over the canonical form of a value (the shadow result's output digest). */
   digestValue(value: unknown): Promise<{ digest: string }>;
+
+  // --- Deployment Controller (item 4) ---
+  /**
+   * Validates a candidate before a deployment starts: it must be `registered`
+   * with a baseline whose id/version match; the current active version becomes
+   * the incumbent (a first-ever deployment has none — the workflow uses an admin
+   * bootstrap). Returns the candidate's capabilities/risk and a baseline-
+   * comparison note (same suite → candidate ≥ incumbent − tolerance; different
+   * suite → 'incomparable_suite', recorded and allowed).
+   */
+  beginDeployment(input: {
+    agentId: string;
+    candidateVersion: string;
+  }): Promise<DeploymentPreflight>;
+  /** Drives a registry versioned lifecycle transition with the controller's registry:deploy scope. */
+  deployTransition(input: {
+    agentId: string;
+    version: string;
+    state: string;
+    rampPercent?: number;
+    reason?: string;
+  }): Promise<void>;
+  /** Atomic promote (registry POST /promote): candidate canary→active, incumbent active→deprecated. */
+  promoteVersion(input: { agentId: string; version: string }): Promise<void>;
+  /**
+   * Fetches the audit window and runs the GateEvaluator. `kind` selects the
+   * shadow (join shadow_result to primary) or canary (split by version) math.
+   */
+  evaluateGate(input: {
+    kind: 'shadow' | 'canary';
+    tenant: string;
+    since: string;
+    candidateVersion: string;
+    incumbentVersion?: string;
+    thresholds: GateThresholds;
+  }): Promise<GateReport>;
+  /** Current ISO time (activity-side wall clock) for gate window boundaries. */
+  now(): Promise<{ iso: string }>;
   /**
    * Loads and resolves the current price book to integer micro-USD rates
    * (Cost Meter). Called once per task; the resolved book is pinned into
