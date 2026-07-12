@@ -1,0 +1,22 @@
+{
+  "manifest": {
+    "id": "knowledge-agent",
+    "name": "Knowledge & Policy Agent",
+    "owner": "team-platform",
+    "description": "Test card missing its signature — consumers must be able to verify provenance.",
+    "capabilities": [
+      {
+        "name": "knowledge.search",
+        "description": "Hybrid search over the governed corpus.",
+        "risk": "R0",
+        "input_schema": { "type": "object" },
+        "output_schema": { "type": "object" },
+        "examples": [{ "input": {} }, { "input": {} }, { "input": {} }]
+      }
+    ]
+  },
+  "version": "0.1.0",
+  "lifecycle_state": "registered",
+  "registered_at": "2026-07-10T08:00:00Z",
+  "updated_at": "2026-07-10T08:00:00Z"
+}

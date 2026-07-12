@@ -1,0 +1,48 @@
+[
+  {
+    "client_id": "cli-jane",
+    "client_secret": "jane-dev-secret",
+    "principal": "user:jane.doe",
+    "tenant": "acme",
+    "roles": ["tenant-user"],
+    "scopes": ["task:submit", "knowledge:search:read"]
+  },
+  {
+    "client_id": "svc-orchestrator",
+    "client_secret": "orchestrator-dev-secret",
+    "principal": "svc:orchestrator",
+    "tenant": "platform",
+    "roles": ["platform"],
+    "scopes": ["registry:read", "policy:decide"]
+  },
+  {
+    "client_id": "svc-knowledge",
+    "client_secret": "knowledge-dev-secret",
+    "principal": "svc:knowledge",
+    "tenant": "platform",
+    "roles": ["platform"],
+    "scopes": ["policy:decide"]
+  },
+  {
+    "client_id": "agent-knowledge-agent",
+    "client_secret": "agent-knowledge-dev-secret",
+    "principal": "agent:knowledge-agent@0.1.0",
+    "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
+    "client_id": "svc-ci",
+    "client_secret": "ci-dev-secret",
+    "principal": "svc:agent-ci",
+    "tenant": "platform",
+    "roles": ["platform"],
+    "scopes": [
+      "registry:write",
+      "registry:admin",
+      "registry:read",
+      "knowledge:ingest",
+      "audit:read"
+    ]
+  }
+]

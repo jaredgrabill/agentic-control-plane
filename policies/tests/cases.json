@@ -1,0 +1,114 @@
+{
+  "description": "Golden allow/deny suite for the active bundle. Every permit policy must determine at least one allow case; every case's verdict is asserted in CI — a policy change that flips untested territory fails the build.",
+  "cases": [
+    {
+      "name": "tenant user delegates an R0 capability to a same-tenant agent",
+      "expect": "allow",
+      "determined_by": "allow-r0-delegation",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "knowledge-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R0", "scopes": ["task:submit", "knowledge:search:read"] }
+      }
+    },
+    {
+      "name": "R1 delegation has no permit in v0",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R1", "scopes": ["task:submit"] }
+      }
+    },
+    {
+      "name": "cross-tenant delegation is denied",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:mallory", "attrs": { "tenant": "globex" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "knowledge-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R0", "scopes": ["task:submit"] }
+      }
+    },
+    {
+      "name": "delegation without task:submit scope is denied",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "knowledge-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R0", "scopes": ["knowledge:search:read"] }
+      }
+    },
+    {
+      "name": "agent with delegated knowledge scope searches its tenant corpus",
+      "expect": "allow",
+      "determined_by": "allow-knowledge-read",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:knowledge-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "knowledge.search",
+        "resource": { "type": "Corpus", "id": "acme", "attrs": { "tenant": "acme" } },
+        "context": { "scopes": ["knowledge:search:read"] }
+      }
+    },
+    {
+      "name": "answer_with_citations rides the same knowledge-read permit",
+      "expect": "allow",
+      "determined_by": "allow-knowledge-read",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:knowledge-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "knowledge.answer_with_citations",
+        "resource": { "type": "Corpus", "id": "acme", "attrs": { "tenant": "acme" } },
+        "context": { "scopes": ["knowledge:search:read"] }
+      }
+    },
+    {
+      "name": "agent without the knowledge scope is denied at the query path",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:rogue-agent@0.0.1",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "knowledge.search",
+        "resource": { "type": "Corpus", "id": "acme", "attrs": { "tenant": "acme" } },
+        "context": { "scopes": [] }
+      }
+    },
+    {
+      "name": "agent cannot search another tenant's corpus even with the scope",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:knowledge-agent@0.1.0",
+          "attrs": { "tenant": "globex" }
+        },
+        "action": "knowledge.search",
+        "resource": { "type": "Corpus", "id": "acme", "attrs": { "tenant": "acme" } },
+        "context": { "scopes": ["knowledge:search:read"] }
+      }
+    },
+    {
+      "name": "an unmodeled action falls to default deny",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "Service", "id": "svc:mystery", "attrs": { "tenant": "acme" } },
+        "action": "cloud.tag_apply",
+        "resource": { "type": "Agent", "id": "cloud-agent", "attrs": { "tenant": "acme" } },
+        "context": { "scopes": ["everything"] }
+      }
+    }
+  ]
+}

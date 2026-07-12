@@ -30,6 +30,11 @@
       "template": "acp.platform.registry.{agent_id}.{verb}",
       "verbs": ["registered", "updated"]
     },
+    "svc": {
+      "template": "acp.platform.svc.{service}.{method}",
+      "verbs": [],
+      "services": ["token", "registry", "policy", "knowledge", "audit"]
+    },
     "control": {
       "template": "acp.platform.control.{verb}",
       "verbs": ["killswitch", "flags"]

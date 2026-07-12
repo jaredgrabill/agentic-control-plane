@@ -1,0 +1,30 @@
+site_name: Agentic Control Plane
+site_description: Control plane for composable, governed AI agents
+repo_url: https://github.com/jaredgrabill/agentic-control-plane
+edit_uri: ''
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - tables
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+docs_dir: docs

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "node",
+  "separate-pull-requests": false,
+  "packages": {
+    "packages/protocol": {
+      "release-type": "node",
+      "component": "protocol"
+    },
+    "python/acp-protocol": {
+      "release-type": "python",
+      "component": "acp-protocol"
+    }
+  },
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "protocol",
+      "components": ["protocol", "acp-protocol"]
+    }
+  ]
+}

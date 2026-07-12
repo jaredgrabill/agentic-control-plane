@@ -73,3 +73,12 @@ def registry(agent_id: str, verb: str) -> str:
 
 def control(verb: str) -> str:
     return f"acp.platform.control.{_verb('control', verb)}"
+
+
+def svc(service: str, method: str) -> str:
+    services: list[str] = _data()["entities"]["svc"]["services"]
+    if service not in services:
+        raise ValueError(
+            f"unknown platform service {service!r}: closed vocabulary is [{', '.join(services)}]"
+        )
+    return f"acp.platform.svc.{service}.{_token('method', method)}"

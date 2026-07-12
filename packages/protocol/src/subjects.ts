@@ -32,6 +32,7 @@ export type TaskVerb = (typeof subjectsData.entities.task.verbs)[number];
 export type AgentVerb = (typeof subjectsData.entities.agent.verbs)[number];
 export type RegistryVerb = (typeof subjectsData.entities.registry.verbs)[number];
 export type ControlVerb = (typeof subjectsData.entities.control.verbs)[number];
+export type SvcName = (typeof subjectsData.entities.svc.services)[number];
 
 export const subjects = {
   task(tenant: string, taskId: string, verb: TaskVerb): string {
@@ -62,5 +63,14 @@ export const subjects = {
   },
   control(verb: ControlVerb): string {
     return `acp.platform.control.${checkVerb('control', verb)}`;
+  },
+  svc(service: SvcName, method: string): string {
+    const services: readonly string[] = subjectsData.entities.svc.services;
+    if (!services.includes(service)) {
+      throw new Error(
+        `unknown platform service ${JSON.stringify(service)}: closed vocabulary is [${services.join(', ')}]`,
+      );
+    }
+    return `acp.platform.svc.${service}.${checkToken('method', method)}`;
   },
 } as const;

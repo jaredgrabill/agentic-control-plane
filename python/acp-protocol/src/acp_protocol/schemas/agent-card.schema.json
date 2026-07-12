@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp.dev/schemas/v1/agent-card.schema.json",
+  "title": "AgentCard",
+  "description": "Registry record for one agent version: the team-authored manifest plus platform-managed fields added at registration. A superset of an A2A agent card; card_signature is a JWS over the identity content so consumers can verify provenance.",
+  "type": "object",
+  "required": [
+    "manifest",
+    "version",
+    "lifecycle_state",
+    "registered_at",
+    "updated_at",
+    "card_signature"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "manifest": { "$ref": "agent-manifest.schema.json" },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?$",
+      "description": "Semver of the capability contract, not the implementation."
+    },
+    "lifecycle_state": { "$ref": "#/$defs/lifecycle_state" },
+    "eval_baseline": {
+      "type": "object",
+      "description": "Scores the current active version achieves; gates are relative to this."
+    },
+    "registered_at": { "type": "string", "format": "date-time" },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "deployed_at": { "type": "string", "format": "date-time" },
+    "state_reason": {
+      "type": "string",
+      "description": "Why the record is in its current state (e.g. kill-switch reason)."
+    },
+    "card_signature": {
+      "type": "string",
+      "description": "Compact JWS over the canonical identity content: {manifest, version, registered_at}. Lifecycle changes do not re-sign."
+    }
+  },
+  "$defs": {
+    "lifecycle_state": {
+      "type": "string",
+      "description": "Full lifecycle vocabulary (agent-lifecycle.md). Registry v0 transitions only among registered/active/suspended; the rest arrive with the Deployment Controller.",
+      "enum": ["registered", "shadow", "canary", "active", "deprecated", "suspended", "retired"]
+    }
+  }
+}

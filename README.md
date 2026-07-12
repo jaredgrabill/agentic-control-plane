@@ -14,9 +14,27 @@ six tools and an afternoon:
 > agent) — with the full trail of every agent consulted, every tool called,
 > and every policy check applied.
 
-**Status: 🚧 design phase.** This repository currently contains the platform
-architecture, engineering standards, and roadmap — under review before
-implementation begins. Feedback via issues and discussions is very welcome.
+**Status: 🚧 walking skeleton (roadmap Phase 1).** The design docs below are
+implemented as a running system: token service, gateway, registry, Cedar
+policy engine, Temporal orchestrator, audit trail, knowledge service, the
+Python agent SDK, and the first agent — one R0 agent answering one question
+end-to-end with every governance boundary real. Feedback via issues and
+discussions is very welcome.
+
+## Quickstart (the Phase 1 exit scenario)
+
+```bash
+make dev        # substrate: NATS, Temporal, Postgres+pgvector, OTel, Jaeger
+pnpm install && pnpm build
+cd python && uv sync && cd ..
+make e2e        # register agent → ingest corpus → cited answer → audit → kill switch
+```
+
+Or run it interactively: `make platform`, then submit
+*"What does our policy say about change freezes?"* through the gateway with
+a real JWT (see `tests/e2e/src/exit-scenario.test.ts` for the exact calls)
+and watch the trace land in Jaeger (http://localhost:16686) and the
+delegation chain in the audit API.
 
 ## Why This Exists
 

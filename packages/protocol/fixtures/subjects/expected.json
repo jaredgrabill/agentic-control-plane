@@ -44,6 +44,11 @@
       "entity": "control",
       "args": { "verb": "killswitch" },
       "subject": "acp.platform.control.killswitch"
+    },
+    {
+      "entity": "svc",
+      "args": { "service": "knowledge", "method": "search" },
+      "subject": "acp.platform.svc.knowledge.search"
     }
   ],
   "rejects": [
@@ -74,6 +79,11 @@
       "entity": "audit",
       "args": { "tenant": "acme", "event_type": "singleword" },
       "why": "audit event types are dotted vocabulary entries"
+    },
+    {
+      "entity": "svc",
+      "args": { "service": "shadow-it", "method": "anything" },
+      "why": "service names are a closed vocabulary"
     }
   ]
 }
