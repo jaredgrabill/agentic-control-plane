@@ -57,7 +57,12 @@ describe('vector helpers', () => {
   });
 
   it('averages vectors into a centroid', () => {
-    expect(centroid([[0, 2], [2, 4]])).toEqual([1, 3]);
+    expect(
+      centroid([
+        [0, 2],
+        [2, 4],
+      ]),
+    ).toEqual([1, 3]);
     expect(centroid([])).toHaveLength(EMBEDDING_DIM);
   });
 });

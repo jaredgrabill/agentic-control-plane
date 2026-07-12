@@ -65,7 +65,9 @@ export function toVectorLiteral(vector: number[]): string {
  */
 export function cosineSimilarity(a: number[], b: number[]): number {
   if (a.length !== b.length) {
-    throw new Error(`cosine similarity needs equal-length vectors, got ${a.length} and ${b.length}`);
+    throw new Error(
+      `cosine similarity needs equal-length vectors, got ${a.length} and ${b.length}`,
+    );
   }
   let dot = 0;
   let na = 0;
