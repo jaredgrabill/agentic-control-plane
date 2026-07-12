@@ -30,9 +30,12 @@ export { createHttpServer, type HttpServerOptions } from './http.js';
 export {
   CONTROL_BUCKET,
   FLAGGABLE_RISK_CLASSES,
+  KILLSWITCH_TENANT_PREFIX,
   KillSwitchControl,
   KillSwitchWatcher,
   assertFlaggableRisk,
+  assertTenantId,
+  tenantOfKillSwitchKey,
   type KillSwitchState,
 } from './killswitch.js';
 export { sha256Digest, stableStringify } from './digest.js';

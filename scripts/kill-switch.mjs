@@ -18,6 +18,14 @@
  *
  * The denylist has no Registry endpoint, so this path talks to NATS directly
  * (a platform bypass user in dev) and emits its own killswitch audit event.
+ *
+ * Per-tenant halt (Phase 4 item 1) — a fleet halt scoped to ONE tenant: new
+ * intake and new bus sessions for that tenant are refused and its in-flight
+ * tasks are auto-cancelled; every other tenant is untouched. Platform-admin
+ * CLI only (no self-serve route), same direct-KV + audit path as the denylist:
+ *
+ *   node scripts/kill-switch.mjs tenant halt globex --reason "tenant incident"
+ *   node scripts/kill-switch.mjs tenant resume globex --reason "incident closed"
  */
 import console from 'node:console';
 import process from 'node:process';
@@ -44,12 +52,24 @@ const FLIP_ACTIONS = {
 };
 
 const flip = FLIP_ACTIONS[action ?? ''];
-const knownActions = [...REGISTRY_ACTIONS, ...DENYLIST_ACTIONS, ...Object.keys(FLIP_ACTIONS)];
+// `tenant halt|resume <tenant>`: target is the verb, rest[0] the tenant id.
+const TENANT_VERBS = ['halt', 'resume'];
+const tenantVerb = action === 'tenant' ? target : undefined;
+const tenantTarget = action === 'tenant' ? rest.find((a) => !a.startsWith('--')) : undefined;
+const knownActions = [
+  ...REGISTRY_ACTIONS,
+  ...DENYLIST_ACTIONS,
+  ...Object.keys(FLIP_ACTIONS),
+  'tenant',
+];
 
 // halt-fleet/resume-fleet take no <target>; every other action needs one. The
 // reason is always mandatory (it lands in the audit record + control state).
 const flipTarget = flip !== undefined && !flip.needsTarget ? undefined : target;
-const missingTarget = flip !== undefined && flip.needsTarget && target === undefined;
+const missingTarget =
+  (flip !== undefined && flip.needsTarget && target === undefined) ||
+  (action === 'tenant' &&
+    (tenantTarget === undefined || !TENANT_VERBS.includes(tenantVerb ?? '')));
 const missingReason = reason === undefined;
 
 if (!knownActions.includes(action ?? '') || missingReason || missingTarget) {
@@ -59,13 +79,16 @@ if (!knownActions.includes(action ?? '') || missingReason || missingTarget) {
       '  node scripts/kill-switch.mjs <suspend-capability|reinstate-capability> <capability> --reason "<why>"\n' +
       '  node scripts/kill-switch.mjs <suspend-risk|reinstate-risk> <R1|R2|R3> --reason "<why>"\n' +
       '  node scripts/kill-switch.mjs <halt-fleet|resume-fleet> --reason "<why>"\n' +
+      '  node scripts/kill-switch.mjs tenant <halt|resume> <tenant> --reason "<why>"\n' +
       '  node scripts/kill-switch.mjs <deny-principal|allow-principal> <principal> --reason "<why>" [--tenant <t>]\n' +
       'The reason is mandatory: it lands in the audit record and the control state.',
   );
   process.exit(2);
 }
 
-if (flip !== undefined) {
+if (action === 'tenant') {
+  await runTenant(tenantVerb, tenantTarget, reason);
+} else if (flip !== undefined) {
   await runFlip(flip, flipTarget, reason);
 } else if (DENYLIST_ACTIONS.includes(action)) {
   await runDenylist(action, target, reason, tenant);
@@ -192,6 +215,61 @@ async function runRegistry(action, agentId, reason) {
 /** The gateway base URL used in the post-suspend reminder. */
 function gatewayUrl() {
   return process.env.ACP_GATEWAY_URL ?? 'http://localhost:7100';
+}
+
+/**
+ * Per-tenant halt/resume (Phase 4 item 1). Same trust boundary as the
+ * denylist: the control KV bucket, written by an audited platform operator
+ * over a platform bypass NATS user — enforcement points match the key against
+ * VERIFIED tenants (claims/workflow ids), never a request parameter.
+ */
+async function runTenant(verb, tenantId, reason) {
+  const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
+  const { connectBus, KillSwitchControl, AuditPublisher, ensureAuditStream, createLogger } =
+    await import(
+      new URL(`file://${join(repoRoot, 'packages', 'service-kit', 'dist', 'index.js')}`).href
+    );
+
+  const logger = createLogger('kill-switch-cli');
+  const nc = await connectBus({
+    name: 'kill-switch-cli',
+    user: process.env.ACP_ADMIN_NATS_USER ?? 'token',
+    password: process.env.ACP_ADMIN_NATS_PASSWORD ?? 'token-dev-password',
+  });
+  try {
+    const control = await KillSwitchControl.open(nc);
+    const activatedBy = process.env.ACP_ADMIN_PRINCIPAL ?? 'svc:agent-ci';
+    const started = Date.now();
+    if (verb === 'halt') {
+      await control.haltTenant(tenantId, reason, activatedBy);
+    } else {
+      await control.resumeTenant(tenantId);
+    }
+
+    await ensureAuditStream(nc);
+    const audit = new AuditPublisher(nc, logger);
+    await audit.publish({
+      event_id: crypto.randomUUID(),
+      occurred_at: new Date().toISOString(),
+      tenant: tenantId,
+      event_type: verb === 'halt' ? 'killswitch.activated' : 'killswitch.cleared',
+      actor: { principal: activatedBy, delegation_chain: [{ sub: activatedBy }] },
+      action: { name: verb === 'halt' ? 'killswitch.activated' : 'killswitch.cleared' },
+      details: { tier: 'tenant', target: tenantId, reason },
+    });
+    console.log(
+      `tenant ${verb} ${tenantId} written to control KV in ${Date.now() - started}ms (SLO < 10s)`,
+    );
+    if (verb === 'halt') {
+      console.log(
+        `\nreminder: the gateway auto-canceller is now draining ${tenantId}'s in-flight TaskWorkflows.\n` +
+          `  - other tenants are untouched; DeploymentWorkflows are NOT cancelled.\n` +
+          `  - new ${tenantId} intake gets 503 and new ${tenantId} bus sessions are refused until resume.`,
+      );
+    }
+  } finally {
+    await nc.drain();
+  }
 }
 
 async function runDenylist(action, principal, reason, tenant) {
