@@ -116,7 +116,7 @@ jobs:
         working-directory: python
       # The gate CLI plus every TS roster agent's report emitter (the
       # knowledge agent's emitter rides the uv sync above).
-      - run: pnpm --filter @acp/evaluation... --filter @acp/cloud-agent... --filter @acp/code-agent... build
+      - run: pnpm --filter @acp/evaluation... --filter @acp/cloud-agent... --filter @acp/code-agent... --filter @acp/change-agent... build
       # Positive control: every roster agent's suite runs hermetically and
       # must land within tolerance of its committed baseline.
       - name: golden suites within tolerance of baselines
