@@ -1,0 +1,57 @@
+{
+  "document": {
+    "doc_id": "cloud/cost-report",
+    "version": "2026-07-08",
+    "effective_date": "2026-07-08",
+    "url": "https://cloud.acme.example/costs/2026-07-08",
+    "lineage_id": "01981c00-0000-7000-8000-0000000000a2"
+  },
+  "currency": "USD",
+  "complete_through": "2026-07-05",
+  "weeks": [
+    {
+      "week_start": "2026-06-08",
+      "by_service": {
+        "payments-api": 4150,
+        "checkout-web": 3180,
+        "ledger-db": 2890,
+        "data-lake": 1790,
+        "platform-observability": 1840
+      },
+      "total": 13850
+    },
+    {
+      "week_start": "2026-06-15",
+      "by_service": {
+        "payments-api": 4160,
+        "checkout-web": 3190,
+        "ledger-db": 2900,
+        "data-lake": 1800,
+        "platform-observability": 1850
+      },
+      "total": 13900
+    },
+    {
+      "week_start": "2026-06-22",
+      "by_service": {
+        "payments-api": 4180,
+        "checkout-web": 3200,
+        "ledger-db": 2900,
+        "data-lake": 1800,
+        "platform-observability": 1860
+      },
+      "total": 13940
+    },
+    {
+      "week_start": "2026-06-29",
+      "by_service": {
+        "payments-api": 8240,
+        "checkout-web": 3240,
+        "ledger-db": 2930,
+        "data-lake": 1820,
+        "platform-observability": 1890
+      },
+      "total": 18120
+    }
+  ]
+}

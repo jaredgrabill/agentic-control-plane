@@ -3,6 +3,7 @@ packages:
   - packages/*
   - agents/*
   - tests/*
+  - deploy/mocks
 allowBuilds:
   '@swc/core': true
   esbuild: true

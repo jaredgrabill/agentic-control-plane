@@ -57,6 +57,33 @@ const services = [
       ACP_NATS_AGENT_PASSWORD: 'agent-knowledge-dev-password',
     },
   ],
+  // Mock MCP tool servers (dev/CI stand-ins for enterprise systems) and the
+  // TS tool agents. The agents use noRetriever, so they need no NATS creds
+  // and no token-service client entries.
+  [
+    'cloud-mock',
+    'node',
+    ['deploy/mocks/dist/cloud/main.js'],
+    { ACP_MOCK_CLOUD_PORT: '7301', ACP_MOCK_FIXTURES: join(repoRoot, 'fixtures', 'acme-corp') },
+  ],
+  [
+    'forge-mock',
+    'node',
+    ['deploy/mocks/dist/forge/main.js'],
+    { ACP_MOCK_FORGE_PORT: '7302', ACP_MOCK_FIXTURES: join(repoRoot, 'fixtures', 'acme-corp') },
+  ],
+  [
+    'cloud-agent',
+    'node',
+    ['agents/cloud/dist/main.js'],
+    { ACP_TOOL_SERVER_CLOUD_ESTATE_URL: 'http://localhost:7301/mcp' },
+  ],
+  [
+    'code-agent',
+    'node',
+    ['agents/code/dist/main.js'],
+    { ACP_TOOL_SERVER_CODE_FORGE_URL: 'http://localhost:7302/mcp' },
+  ],
 ];
 
 // Pre-flight: a platform already running would produce EADDRINUSE chaos.
@@ -106,8 +133,9 @@ function shutdown(code) {
 process.on('SIGINT', () => shutdown(0));
 process.on('SIGTERM', () => shutdown(0));
 
-// Readiness gate: every HTTP door answers /healthz.
-const healthPorts = [7101, 7102, 7103, 7104, 7105, 7100];
+// Readiness gate: every HTTP door answers /healthz. The mocks (7301/7302)
+// have one; the agents are Temporal workers with no HTTP door.
+const healthPorts = [7101, 7102, 7103, 7104, 7105, 7100, 7301, 7302];
 const deadline = Date.now() + 120_000;
 for (const port of healthPorts) {
   for (;;) {

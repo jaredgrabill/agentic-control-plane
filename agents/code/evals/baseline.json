@@ -1,0 +1,16 @@
+{
+  "schema": "acp-eval-baseline/v1",
+  "agent_id": "code-agent",
+  "agent_version": "0.1.0",
+  "metrics": {
+    "pass_rate": 1,
+    "citation_precision": 1,
+    "abstention_accuracy": 1
+  },
+  "suite": {
+    "digest": "sha256:08527b2450a9a10a545abea1686c93ed5f5f2a91f607ba167fb14894a2aa230f",
+    "case_count": 8
+  },
+  "harness": "acp-agent-sdk-ts@0.1.0",
+  "recorded_at": "2026-07-11T18:09:03.264Z"
+}

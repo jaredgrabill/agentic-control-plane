@@ -1,0 +1,279 @@
+{
+  "document": {
+    "doc_id": "cloud/inventory-snapshot",
+    "version": "2026-07-08",
+    "effective_date": "2026-07-08",
+    "url": "https://cloud.acme.example/inventory/2026-07-08",
+    "lineage_id": "01981c00-0000-7000-8000-0000000000a1"
+  },
+  "as_of": "2026-07-08",
+  "tenant": "acme",
+  "resources": [
+    {
+      "resource_id": "i-0a1f001",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.large",
+      "monthly_cost_usd": 410,
+      "created_at": "2025-03-02",
+      "tags": { "team": "team-payments" }
+    },
+    {
+      "resource_id": "i-0a1f002",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.large",
+      "monthly_cost_usd": 410,
+      "created_at": "2025-03-02",
+      "tags": { "team": "team-payments" }
+    },
+    {
+      "resource_id": "i-0a1f003",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.large",
+      "monthly_cost_usd": 410,
+      "created_at": "2025-03-02",
+      "tags": { "team": "team-payments" }
+    },
+    {
+      "resource_id": "i-0a1f004",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.large",
+      "monthly_cost_usd": 410,
+      "created_at": "2025-03-02",
+      "tags": { "team": "team-payments" }
+    },
+    {
+      "resource_id": "i-0b7e101",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.4xlarge",
+      "monthly_cost_usd": 2925,
+      "created_at": "2026-07-01",
+      "tags": {
+        "team": "team-payments",
+        "deploy_id": "d-2026-07-01-042",
+        "purpose": "tls13-migration-loadtest"
+      }
+    },
+    {
+      "resource_id": "i-0b7e102",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.4xlarge",
+      "monthly_cost_usd": 2925,
+      "created_at": "2026-07-01",
+      "tags": {
+        "team": "team-payments",
+        "deploy_id": "d-2026-07-01-042",
+        "purpose": "tls13-migration-loadtest"
+      }
+    },
+    {
+      "resource_id": "i-0b7e103",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.4xlarge",
+      "monthly_cost_usd": 2925,
+      "created_at": "2026-07-01",
+      "tags": {
+        "team": "team-payments",
+        "deploy_id": "d-2026-07-01-042",
+        "purpose": "tls13-migration-loadtest"
+      }
+    },
+    {
+      "resource_id": "i-0b7e104",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.4xlarge",
+      "monthly_cost_usd": 2925,
+      "created_at": "2026-07-01",
+      "tags": {
+        "team": "team-payments",
+        "deploy_id": "d-2026-07-01-042",
+        "purpose": "tls13-migration-loadtest"
+      }
+    },
+    {
+      "resource_id": "i-0b7e105",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.4xlarge",
+      "monthly_cost_usd": 2925,
+      "created_at": "2026-07-01",
+      "tags": {
+        "team": "team-payments",
+        "deploy_id": "d-2026-07-01-042",
+        "purpose": "tls13-migration-loadtest"
+      }
+    },
+    {
+      "resource_id": "i-0b7e106",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.4xlarge",
+      "monthly_cost_usd": 2925,
+      "created_at": "2026-07-01",
+      "tags": {
+        "team": "team-payments",
+        "deploy_id": "d-2026-07-01-042",
+        "purpose": "tls13-migration-loadtest"
+      }
+    },
+    {
+      "resource_id": "i-0c2d201",
+      "type": "ec2",
+      "service": "checkout-web",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.large",
+      "monthly_cost_usd": 380,
+      "created_at": "2025-06-14",
+      "tags": { "team": "team-storefront" }
+    },
+    {
+      "resource_id": "i-0c2d202",
+      "type": "ec2",
+      "service": "checkout-web",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.large",
+      "monthly_cost_usd": 380,
+      "created_at": "2025-06-14",
+      "tags": { "team": "team-storefront" }
+    },
+    {
+      "resource_id": "i-0c2d203",
+      "type": "ec2",
+      "service": "checkout-web",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.large",
+      "monthly_cost_usd": 380,
+      "created_at": "2025-06-14",
+      "tags": { "team": "team-storefront" }
+    },
+    {
+      "resource_id": "db-4401",
+      "type": "rds.instance",
+      "service": "ledger-db",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "db.r6g.xlarge",
+      "monthly_cost_usd": 1450,
+      "created_at": "2024-11-20",
+      "tags": { "team": "team-ledger" }
+    },
+    {
+      "resource_id": "db-4402",
+      "type": "rds.instance",
+      "service": "ledger-db",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "db.r6g.xlarge",
+      "monthly_cost_usd": 1450,
+      "created_at": "2024-11-20",
+      "tags": { "team": "team-ledger" }
+    },
+    {
+      "resource_id": "s3-lake-raw",
+      "type": "s3.bucket",
+      "service": "data-lake",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "standard",
+      "monthly_cost_usd": 450,
+      "created_at": "2024-05-01",
+      "tags": { "team": "team-data" }
+    },
+    {
+      "resource_id": "s3-lake-curated",
+      "type": "s3.bucket",
+      "service": "data-lake",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "standard",
+      "monthly_cost_usd": 450,
+      "created_at": "2024-05-01",
+      "tags": { "team": "team-data" }
+    },
+    {
+      "resource_id": "i-0d9c301",
+      "type": "ec2",
+      "service": "platform-observability",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.xlarge",
+      "monthly_cost_usd": 465,
+      "created_at": "2025-01-09",
+      "tags": { "team": "team-sre" }
+    },
+    {
+      "resource_id": "i-0d9c302",
+      "type": "ec2",
+      "service": "platform-observability",
+      "env": "prod",
+      "region": "us-east-1",
+      "size": "m5.xlarge",
+      "monthly_cost_usd": 465,
+      "created_at": "2025-01-09",
+      "tags": { "team": "team-sre" }
+    },
+    {
+      "resource_id": "i-0e5b401",
+      "type": "ec2",
+      "service": "payments-api",
+      "env": "staging",
+      "region": "us-east-1",
+      "size": "m5.large",
+      "monthly_cost_usd": 410,
+      "created_at": "2025-03-02",
+      "tags": { "team": "team-payments" }
+    },
+    {
+      "resource_id": "i-0e5b402",
+      "type": "ec2",
+      "service": "checkout-web",
+      "env": "staging",
+      "region": "us-east-1",
+      "size": "m5.large",
+      "monthly_cost_usd": 380,
+      "created_at": "2025-06-14",
+      "tags": { "team": "team-storefront" }
+    },
+    {
+      "resource_id": "db-4451",
+      "type": "rds.instance",
+      "service": "ledger-db",
+      "env": "staging",
+      "region": "us-east-1",
+      "size": "db.r6g.large",
+      "monthly_cost_usd": 520,
+      "created_at": "2024-11-20",
+      "tags": { "team": "team-ledger" }
+    }
+  ]
+}

@@ -1,0 +1,74 @@
+id: code-agent
+name: Source Code Agent
+owner: team-platform
+description: >
+  Read-only visibility into the acme source forge: dependency graph queries
+  and CI health summaries grounded in governed snapshots, with citations
+  carrying document version and lineage. Answers are deterministic and
+  extractive in v0 — no model calls.
+capabilities:
+  - name: code.dependency_query
+    description: >
+      Direct, transitive, or reverse (dependents) dependency edges for a
+      repo from the forge dependency graph.
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [repo]
+      properties:
+        repo:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*$'
+        direction: { type: string, enum: [dependencies, dependents] }
+        transitive: { type: boolean }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: { repo: acme/payments-service }
+      - input: { repo: acme/payments-service, direction: dependents }
+      - input: { repo: acme/payments-service, transitive: true }
+  - name: code.ci_health
+    description: >
+      CI pass rate and deploy activity for a repo over a trailing window,
+      computed from the forge CI activity snapshot (window anchored on the
+      snapshot's as_of date, never the wall clock).
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [repo]
+      properties:
+        repo:
+          type: string
+          pattern: '^[a-z0-9][a-z0-9-]*/[a-z0-9][a-z0-9._-]*$'
+        window_days: { type: integer, minimum: 1, maximum: 90 }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: { repo: acme/payments-service }
+      - input: { repo: acme/openssl-shim }
+      - input: { repo: acme/checkout-web, window_days: 30 }
+tools:
+  - server: code-forge
+    scopes: [code:repo:read, code:ci:read]
+models:
+  allowed: [default-tier]
+data_classification: internal
+sla:
+  p95_latency_s: 30
+  quality_slo: 0.9

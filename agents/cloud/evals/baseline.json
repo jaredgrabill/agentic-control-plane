@@ -1,0 +1,16 @@
+{
+  "schema": "acp-eval-baseline/v1",
+  "agent_id": "cloud-agent",
+  "agent_version": "0.1.0",
+  "metrics": {
+    "pass_rate": 1,
+    "citation_precision": 1,
+    "abstention_accuracy": 1
+  },
+  "suite": {
+    "digest": "sha256:956da26b894595b599934fdcc0d29927c093dd1c99fc3553a4c77c044052d139",
+    "case_count": 8
+  },
+  "harness": "acp-agent-sdk-ts@0.1.0",
+  "recorded_at": "2026-07-11T18:09:02.071Z"
+}

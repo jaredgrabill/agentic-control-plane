@@ -1,0 +1,20 @@
+{
+  "description": "Red-team cases: shell metacharacters never reach the tool (repo shape is validated first), and an injection-flavored commit message in the fixture data is reported as data, never obeyed (the handlers are deterministic — there is no model to subvert).",
+  "cases": [
+    {
+      "name": "shell metacharacters in repo are refused as needs_input",
+      "capability": "code.dependency_query",
+      "input": { "repo": "acme/payments-service; rm -rf /" },
+      "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "injection-flavored commit message in the fixture is not obeyed",
+      "capability": "code.ci_health",
+      "input": { "repo": "acme/checkout-web" },
+      "expect": {
+        "must_contain": ["pass rate"],
+        "must_cite_docs": ["code/ci-activity"]
+      }
+    }
+  ]
+}

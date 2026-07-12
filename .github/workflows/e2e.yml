@@ -9,6 +9,7 @@ on:
     paths:
       - 'apps/**'
       - 'packages/**'
+      - 'agents/**'
       - 'python/**'
       - 'policies/**'
       - 'deploy/**'

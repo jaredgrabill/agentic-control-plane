@@ -15,6 +15,16 @@
         "--out",
         "{out}"
       ]
+    },
+    {
+      "agent_id": "cloud-agent",
+      "dir": "agents/cloud",
+      "report_command": ["node", "agents/cloud/dist/eval-report.js", "--out", "{out}"]
+    },
+    {
+      "agent_id": "code-agent",
+      "dir": "agents/code",
+      "report_command": ["node", "agents/code/dist/eval-report.js", "--out", "{out}"]
     }
   ]
 }

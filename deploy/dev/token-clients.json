@@ -5,7 +5,14 @@
     "principal": "user:jane.doe",
     "tenant": "acme",
     "roles": ["tenant-user"],
-    "scopes": ["task:submit", "knowledge:search:read"]
+    "scopes": [
+      "task:submit",
+      "knowledge:search:read",
+      "cloud:inventory:read",
+      "cloud:cost:read",
+      "code:repo:read",
+      "code:ci:read"
+    ]
   },
   {
     "client_id": "svc-orchestrator",

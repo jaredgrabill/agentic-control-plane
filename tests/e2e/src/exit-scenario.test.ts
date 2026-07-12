@@ -9,24 +9,25 @@
  * Prerequisites: `make dev` (substrate), `pnpm build`, `uv sync` (in
  * python/). The suite boots the platform itself via scripts/run-platform.mjs.
  */
-import { execFile, execFileSync, spawn, type ChildProcess } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
-import process from 'node:process';
 import { promisify } from 'node:util';
 import type { AgentCard, AuditEvent, TaskResult } from '@acp/protocol';
-import { parse as parseYaml } from 'yaml';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  AUDIT_URL,
+  GATEWAY_URL,
+  JAEGER_URL,
+  KNOWLEDGE_URL,
+  REGISTRY_URL,
+  TOKEN_URL,
+  registerAndActivate,
+  repoRoot,
+  startPlatform,
+  stopPlatform,
+} from './support/platform.js';
 
 const execFileAsync = promisify(execFile);
-const repoRoot = join(import.meta.dirname, '..', '..', '..');
-
-const TOKEN_URL = 'http://localhost:7101';
-const GATEWAY_URL = 'http://localhost:7100';
-const REGISTRY_URL = 'http://localhost:7102';
-const AUDIT_URL = 'http://localhost:7104';
-const KNOWLEDGE_URL = 'http://localhost:7105';
-const JAEGER_URL = 'http://localhost:16686';
 
 const QUESTION = 'What does our policy say about change freezes?';
 
@@ -89,66 +90,22 @@ async function auditEvents(taskId?: string, tenant = 'acme'): Promise<AuditEvent
 }
 
 beforeAll(async () => {
-  // Fail fast with an actionable message if the substrate isn't up.
-  try {
-    await fetch('http://localhost:8222/healthz');
-  } catch {
-    throw new Error('dev stack is not running — start it with `make dev` first');
-  }
-
-  platform = spawn('node', [join(repoRoot, 'scripts', 'run-platform.mjs')], {
-    cwd: repoRoot,
-    stdio: ['ignore', 'pipe', 'inherit'],
-  });
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error('platform never became ready'));
-    }, 180_000);
-    platform.stdout!.on('data', (d: Buffer) => {
-      process.stdout.write(d);
-      if (d.toString().includes('PLATFORM_READY')) {
-        clearTimeout(timer);
-        resolve();
-      }
-    });
-    platform.on('exit', (code) => {
-      reject(new Error(`platform exited early: ${code}`));
-    });
-  });
+  platform = await startPlatform();
 }, 300_000);
 
 afterAll(() => {
-  if (process.platform === 'win32' && platform.pid !== undefined) {
-    // TerminateProcess does not cascade; take down the whole service tree.
-    spawn('taskkill', ['/pid', String(platform.pid), '/T', '/F'], { stdio: 'ignore' });
-  } else {
-    platform.kill();
-  }
+  stopPlatform(platform);
 });
 
 describe('phase 1 exit scenario', () => {
   it('registers and activates the knowledge agent (signed card, lifecycle gates)', async () => {
-    const manifest = parseYaml(
-      readFileSync(join(repoRoot, 'python', 'agents', 'knowledge', 'manifest.yaml'), 'utf8'),
-    ) as Record<string, unknown>;
     const writeToken = await ciToken('acp:registry', 'registry:write registry:admin');
-
-    const register = await fetch(`${REGISTRY_URL}/v1/agents`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${writeToken}` },
-      body: JSON.stringify({ manifest, version: '0.1.0' }),
-    });
-    expect(register.status, await register.clone().text()).toBe(201);
-    const card = (await register.json()) as { lifecycle_state: string; card_signature: string };
-    expect(card.lifecycle_state).toBe('registered');
-    expect(card.card_signature).toBeTruthy();
-
-    const activate = await fetch(`${REGISTRY_URL}/v1/agents/knowledge-agent/state`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', authorization: `Bearer ${writeToken}` },
-      body: JSON.stringify({ state: 'active', reason: 'phase 1 walking skeleton promotion' }),
-    });
-    expect(activate.status, await activate.clone().text()).toBe(200);
+    await registerAndActivate(
+      join(repoRoot, 'python', 'agents', 'knowledge', 'manifest.yaml'),
+      'knowledge-agent',
+      writeToken,
+      'phase 1 walking skeleton promotion',
+    );
   });
 
   it('records the eval baseline on the agent card (Evaluation Service v0)', async () => {
