@@ -211,6 +211,20 @@ export interface CompensationTokenGrounds {
   approver?: string;
 }
 
+/**
+ * Signed capability grounds threaded into EVERY broker mint (mirrors the token
+ * service's CapabilityGrounds): the executing capability's name and its
+ * declared risk class. The tool gateway reads this (as context.capability) to
+ * enforce risk classes on every tool call — an R0/R1 step cannot call an R2
+ * tool. For a compensation dispatch the name/risk are the COMPENSATOR's own
+ * declared capability (dispatch-time discovery), so a compensator carries its
+ * true R2 risk and passes the gateway's structural check.
+ */
+export interface CapabilityTokenGrounds {
+  name: string;
+  risk: string;
+}
+
 /** Control-plane activities implemented by the orchestrator's own worker. */
 export interface ControlActivities {
   /**
@@ -284,6 +298,12 @@ export interface ControlActivities {
      * `approval` (the token service refuses both together).
      */
     compensation?: CompensationTokenGrounds;
+    /**
+     * Signed into the token's capability claim on EVERY mint — the executing
+     * capability name + declared risk the tool gateway enforces risk classes
+     * from. Independent of approval/compensation (a gated write carries both).
+     */
+    capability?: CapabilityTokenGrounds;
   }): Promise<{ token: string }>;
   /** Protocol-validated audit emission (JetStream-acked). */
   emitAudit(event: Record<string, unknown>): Promise<void>;

@@ -234,6 +234,10 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
           // dispatched during a saga unwind. The token service refuses an
           // approval+compensation contradiction before it signs.
           ...(input.compensation === undefined ? {} : { compensation: input.compensation }),
+          // Signed capability grounds — the executing capability + declared
+          // risk, on every mint. The tool gateway enforces risk classes from
+          // this claim; the token service shape-validates name + risk.
+          ...(input.capability === undefined ? {} : { capability: input.capability }),
         }),
       });
       if (!res.ok) {

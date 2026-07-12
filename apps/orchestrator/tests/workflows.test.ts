@@ -409,6 +409,10 @@ describe('TaskWorkflow v1', () => {
     for (const [input] of vi.mocked(control.brokerToken).mock.calls) {
       expect(input.snapshot).toEqual(snapshot);
       expect(JSON.stringify(input)).not.toContain('subject.jwt.value');
+      // Every mint carries capability grounds (the executing capability + its
+      // declared risk) so the tool gateway can enforce risk classes.
+      expect(input.capability?.risk).toBe('R0');
+      expect(input.capability?.name).toBeDefined();
     }
     for (const [input] of vi.mocked(control.authorizeDelegation).mock.calls) {
       expect(JSON.stringify(input)).not.toContain('subject.jwt.value');
@@ -1130,6 +1134,9 @@ describe('approval gate integration (AgentStepWorkflow)', () => {
       step_id: STEP_IDS[0],
       subject_digest: SUBJECT_DIGEST,
     });
+    // The gated R2 write carries BOTH approval and capability grounds; the
+    // capability claim declares R2 so the tool gateway's structural check passes.
+    expect(brokerArg.capability).toEqual({ name: 'gov.test_write', risk: 'R2' });
     const dispatched = audited.find((e) => e.event_type === 'step.dispatched')!;
     expect((dispatched.details as { approval_id: string }).approval_id).toBe(result.approvalId);
     // Audit order: requested precedes granted precedes dispatch.
@@ -1411,6 +1418,14 @@ describe('TaskWorkflow compensation (saga stack)', () => {
       'gov.undo_a',
     ]);
     expect(audited.some((e) => e.event_type === 'compensation.completed')).toBe(true);
+    // A compensator's mint carries capability grounds naming the COMPENSATOR
+    // capability and its own R2 risk (dispatch-time discovery), so the tool
+    // gateway's structural risk check passes for the unwind's R2 tool call.
+    const undoCall = vi
+      .mocked(control.brokerToken)
+      .mock.calls.find(([input]) => input.capability?.name === 'gov.undo_a');
+    expect(undoCall?.[0].capability).toEqual({ name: 'gov.undo_a', risk: 'R2' });
+    expect(undoCall?.[0].compensation).toBeDefined();
   });
 
   it('(2) no compensables: all completed → zero compensation events (fast path)', async () => {

@@ -889,6 +889,11 @@ async function runAgentStep(
     taskId: dispatch.taskId,
     ...(approvalGrounds === undefined ? {} : { approval: approvalGrounds }),
     ...(compensationGrounds === undefined ? {} : { compensation: compensationGrounds }),
+    // Capability grounds on EVERY mint: the executing capability and its
+    // declared risk class, read by the tool gateway to enforce risk classes.
+    // For a compensator dispatch `declared` is the compensator's own capability
+    // (dispatch-time discovery), so it carries the compensator's true risk.
+    capability: { name: planStep.capability, risk: declared.risk },
   });
 
   const request: StepRequest = {
