@@ -4,6 +4,8 @@ import type pg from 'pg';
 
 /** A persisted quality-state row: the last-recorded ladder level + counters. */
 export interface QualityState {
+  /** Phase 4 item 1: quality state is keyed (tenant, agent_id) — tenant A's degradation must never freeze agent X for tenant B. */
+  tenant: string;
   agent_id: string;
   level: LadderLevel;
   burn_ratio: number;
@@ -61,24 +63,50 @@ export class PgScoresStore {
         recorded_at    timestamptz NOT NULL DEFAULT now()
       )
     `);
+    // Phase 4 item 1: every read is tenant-filtered, so the indexes lead with
+    // tenant. The old agent-only indexes are dropped (idempotent) — they no
+    // longer match any query shape.
+    await this.pool.query('DROP INDEX IF EXISTS online_scores_agent_time');
+    await this.pool.query('DROP INDEX IF EXISTS online_scores_agent_cap_time');
     await this.pool.query(
-      `CREATE INDEX IF NOT EXISTS online_scores_agent_time
-         ON online_scores (agent_id, recorded_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS online_scores_tenant_agent_time
+         ON online_scores (tenant, agent_id, recorded_at DESC)`,
     );
     await this.pool.query(
-      `CREATE INDEX IF NOT EXISTS online_scores_agent_cap_time
-         ON online_scores (agent_id, capability, recorded_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS online_scores_tenant_agent_cap_time
+         ON online_scores (tenant, agent_id, capability, recorded_at DESC)`,
     );
     await this.pool.query(`
       CREATE TABLE IF NOT EXISTS quality_state (
-        agent_id       text PRIMARY KEY,
+        tenant         text NOT NULL DEFAULT 'acme',
+        agent_id       text NOT NULL,
         level          text NOT NULL DEFAULT 'ok',
         burn_ratio     real NOT NULL DEFAULT 0,
         consecutive_probe_failures int NOT NULL DEFAULT 0,
         consecutive_probe_cycles   int NOT NULL DEFAULT 0,
         last_drift_at  timestamptz,
-        updated_at     timestamptz NOT NULL DEFAULT now()
+        updated_at     timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (tenant, agent_id)
       )
+    `);
+    // Idempotent migration of a pre-item-1 table (PK was agent_id only, no
+    // tenant column): add the column with the historical default, then swap
+    // the PK to (tenant, agent_id) ONLY when the current PK is single-column —
+    // running migrate twice is a no-op. Closes a real isolation bug: a
+    // single-column PK let tenant A's degradation freeze agent X for tenant B.
+    await this.pool.query(
+      `ALTER TABLE quality_state ADD COLUMN IF NOT EXISTS tenant text NOT NULL DEFAULT 'acme'`,
+    );
+    await this.pool.query(`
+      DO $$
+      BEGIN
+        IF (SELECT count(*) FROM information_schema.key_column_usage
+             WHERE table_name = 'quality_state'
+               AND constraint_name = 'quality_state_pkey') = 1 THEN
+          ALTER TABLE quality_state DROP CONSTRAINT quality_state_pkey;
+          ALTER TABLE quality_state ADD PRIMARY KEY (tenant, agent_id);
+        END IF;
+      END $$;
     `);
   }
 
@@ -117,7 +145,11 @@ export class PgScoresStore {
   }
 
   /** All weighted observations in the window (shadow rows included; the budget excludes them). */
-  async budgetObservations(agentId: string, since: Date): Promise<BudgetObservation[]> {
+  async budgetObservations(
+    tenant: string,
+    agentId: string,
+    since: Date,
+  ): Promise<BudgetObservation[]> {
     const res = await this.pool.query<{
       source: BudgetObservation['source'];
       route: BudgetObservation['route'];
@@ -127,14 +159,14 @@ export class PgScoresStore {
     }>(
       `SELECT source, route, score, passed, weight
          FROM online_scores
-        WHERE agent_id = $1 AND recorded_at >= $2`,
-      [agentId, since.toISOString()],
+        WHERE tenant = $1 AND agent_id = $2 AND recorded_at >= $3`,
+      [tenant, agentId, since.toISOString()],
     );
     return res.rows;
   }
 
   /** SLI split by source over the window (judge routes active|canary only for judge_mean). */
-  async sli(agentId: string, since: Date): Promise<SourceSli> {
+  async sli(tenant: string, agentId: string, since: Date): Promise<SourceSli> {
     const res = await this.pool.query<{
       judge_mean: string | null;
       probe_rate: string | null;
@@ -151,8 +183,8 @@ export class PgScoresStore {
          count(*) FILTER (WHERE source='probe') AS probe_n,
          count(*) FILTER (WHERE source='human') AS human_n
        FROM online_scores
-      WHERE agent_id = $1 AND recorded_at >= $2`,
-      [agentId, since.toISOString()],
+      WHERE tenant = $1 AND agent_id = $2 AND recorded_at >= $3`,
+      [tenant, agentId, since.toISOString()],
     );
     const r = res.rows[0];
     const numOrNull = (v: string | null | undefined): number | null =>
@@ -170,11 +202,12 @@ export class PgScoresStore {
   }
 
   /** Mean judged score over active|canary routes in the window (ladder input; null if none). */
-  async windowJudgeMean(agentId: string, since: Date): Promise<number | null> {
+  async windowJudgeMean(tenant: string, agentId: string, since: Date): Promise<number | null> {
     const res = await this.pool.query<{ mean: string | null }>(
       `SELECT avg(score) AS mean FROM online_scores
-        WHERE agent_id=$1 AND source='judge' AND route IN ('active','canary') AND recorded_at >= $2`,
-      [agentId, since.toISOString()],
+        WHERE tenant=$1 AND agent_id=$2 AND source='judge' AND route IN ('active','canary')
+          AND recorded_at >= $3`,
+      [tenant, agentId, since.toISOString()],
     );
     const v = res.rows[0]?.mean;
     return v == null ? null : Number(v);
@@ -186,6 +219,7 @@ export class PgScoresStore {
    * routes with an embedding count. Vectors are folded app-side (cap 500 rows).
    */
   async driftWindows(
+    tenant: string,
     agentId: string,
     capability: string,
     since: Date,
@@ -198,13 +232,13 @@ export class PgScoresStore {
       const res = await this.pool.query<{ emb: string | null; score: number | null }>(
         `SELECT input_embedding::text AS emb, score
            FROM online_scores
-          WHERE agent_id=$1 AND capability=$2 AND source='judge'
+          WHERE tenant=$1 AND agent_id=$2 AND capability=$3 AND source='judge'
             AND route IN ('active','canary')
             AND input_embedding IS NOT NULL
-            AND recorded_at >= $3 AND recorded_at < $4
+            AND recorded_at >= $4 AND recorded_at < $5
           ORDER BY recorded_at DESC
           LIMIT ${CENTROID_ROW_CAP}`,
-        [agentId, capability, from.toISOString(), to.toISOString()],
+        [tenant, agentId, capability, from.toISOString(), to.toISOString()],
       );
       const vectors: number[][] = [];
       const scores: number[] = [];
@@ -222,6 +256,7 @@ export class PgScoresStore {
 
   /** Aggregate mean score by version + route + window (the deployment-gate quality fold). */
   async versionRouteQuality(
+    tenant: string,
     agentId: string,
     agentVersion: string,
     route: string,
@@ -230,16 +265,17 @@ export class PgScoresStore {
     const res = await this.pool.query<{ mean: string | null; n: string }>(
       `SELECT avg(score) AS mean, count(*) AS n
          FROM online_scores
-        WHERE agent_id=$1 AND agent_version=$2 AND route=$3
-          AND source='judge' AND score IS NOT NULL AND recorded_at >= $4`,
-      [agentId, agentVersion, route, since.toISOString()],
+        WHERE tenant=$1 AND agent_id=$2 AND agent_version=$3 AND route=$4
+          AND source='judge' AND score IS NOT NULL AND recorded_at >= $5`,
+      [tenant, agentId, agentVersion, route, since.toISOString()],
     );
     const r = res.rows[0];
     return { mean: r?.mean == null ? null : Number(r.mean), n: Number(r?.n ?? 0) };
   }
 
-  async getQualityState(agentId: string): Promise<QualityState | undefined> {
+  async getQualityState(tenant: string, agentId: string): Promise<QualityState | undefined> {
     const res = await this.pool.query<{
+      tenant: string;
       agent_id: string;
       level: LadderLevel;
       burn_ratio: number;
@@ -247,10 +283,10 @@ export class PgScoresStore {
       consecutive_probe_cycles: number;
       last_drift_at: Date | null;
     }>(
-      `SELECT agent_id, level, burn_ratio, consecutive_probe_failures,
+      `SELECT tenant, agent_id, level, burn_ratio, consecutive_probe_failures,
               consecutive_probe_cycles, last_drift_at
-         FROM quality_state WHERE agent_id=$1`,
-      [agentId],
+         FROM quality_state WHERE tenant=$1 AND agent_id=$2`,
+      [tenant, agentId],
     );
     return res.rows[0];
   }
@@ -258,13 +294,14 @@ export class PgScoresStore {
   async upsertQualityState(s: QualityState): Promise<void> {
     await this.pool.query(
       `INSERT INTO quality_state
-         (agent_id, level, burn_ratio, consecutive_probe_failures,
+         (tenant, agent_id, level, burn_ratio, consecutive_probe_failures,
           consecutive_probe_cycles, last_drift_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6, now())
-       ON CONFLICT (agent_id) DO UPDATE SET
-         level=$2, burn_ratio=$3, consecutive_probe_failures=$4,
-         consecutive_probe_cycles=$5, last_drift_at=$6, updated_at=now()`,
+       VALUES ($1,$2,$3,$4,$5,$6,$7, now())
+       ON CONFLICT (tenant, agent_id) DO UPDATE SET
+         level=$3, burn_ratio=$4, consecutive_probe_failures=$5,
+         consecutive_probe_cycles=$6, last_drift_at=$7, updated_at=now()`,
       [
+        s.tenant,
         s.agent_id,
         s.level,
         s.burn_ratio,

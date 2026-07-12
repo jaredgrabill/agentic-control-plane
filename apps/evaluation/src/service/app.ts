@@ -13,6 +13,7 @@ import {
   type ScoreIngest,
 } from '@acp/online-eval';
 import {
+  assertTenantAccess,
   AuthError,
   createHttpServer,
   scopesOf,
@@ -78,19 +79,24 @@ export function buildEvalService(deps: EvalServiceDeps): FastifyInstance {
     return reply.status(202).send({ accepted: true, deduplicated: !inserted });
   });
 
-  // GET /v1/agents/:id/quality — the SLI + budget + drift view. checkQualityFreeze
+  // GET /v1/agents/:id/quality — the SLI + budget + drift view, PER TENANT
+  // (Phase 4 item 1: quality is keyed (tenant, agent_id) so one tenant's
+  // degradation never freezes the agent for another). checkQualityFreeze
   // (deployment) and operators read this. The budget is recomputed here, never
-  // stored, so it reflects the current window.
+  // stored, so it reflects the current window. The tenant query param is
+  // REQUIRED and bound to the verified claims: a non-platform caller may only
+  // name its own tenant (item-0 binding pattern, no new debt).
   app.get('/v1/agents/:agent_id/quality', async (request, reply) => {
     const claims = await authenticate(deps, request);
     requireScope(claims, 'eval:read');
     const { agent_id } = request.params as { agent_id: string };
+    const tenant = requiredTenantParam(claims, request);
     const since = windowStart();
     const [sli, observations, meta, state] = await Promise.all([
-      deps.store.sli(agent_id, since),
-      deps.store.budgetObservations(agent_id, since),
+      deps.store.sli(tenant, agent_id, since),
+      deps.store.budgetObservations(tenant, agent_id, since),
       deps.agentMeta(agent_id),
-      deps.store.getQualityState(agent_id),
+      deps.store.getQualityState(tenant, agent_id),
     ]);
     const budget = computeBudget(observations, {
       slo: meta.slo,
@@ -98,6 +104,7 @@ export function buildEvalService(deps: EvalServiceDeps): FastifyInstance {
     });
     return reply.send({
       agent_id,
+      tenant,
       window_h: deps.config.budget.window_h,
       sli,
       budget: {
@@ -118,6 +125,7 @@ export function buildEvalService(deps: EvalServiceDeps): FastifyInstance {
   app.get('/v1/scores/aggregate', async (request, reply) => {
     const claims = await authenticate(deps, request);
     requireScope(claims, 'eval:read');
+    const tenant = requiredTenantParam(claims, request);
     const q = request.query as {
       agent_id?: string;
       agent_version?: string;
@@ -128,7 +136,13 @@ export function buildEvalService(deps: EvalServiceDeps): FastifyInstance {
       throw new AuthError('agent_id, agent_version and route query params are required', 400);
     }
     const since = q.since !== undefined ? new Date(q.since) : windowStart();
-    const agg = await deps.store.versionRouteQuality(q.agent_id, q.agent_version, q.route, since);
+    const agg = await deps.store.versionRouteQuality(
+      tenant,
+      q.agent_id,
+      q.agent_version,
+      q.route,
+      since,
+    );
     return reply.send(agg);
   });
 
@@ -147,7 +161,14 @@ const isBelow = (level: LadderLevel, than: LadderLevel): boolean => ORDER[level]
 async function runLadder(deps: EvalServiceDeps, ingest: ScoreIngest): Promise<void> {
   const nowDate = deps.now?.() ?? new Date();
   const since = new Date(nowDate.getTime() - deps.config.budget.window_h * 3600_000);
-  const prior: QualityState = (await deps.store.getQualityState(ingest.agent_id)) ?? {
+  // The whole enforcement pass is keyed by the INGEST's tenant (validated
+  // ScoreIngest field): counters, budget, ladder, and the persisted state all
+  // stay inside one tenant's lane.
+  const prior: QualityState = (await deps.store.getQualityState(
+    ingest.tenant,
+    ingest.agent_id,
+  )) ?? {
+    tenant: ingest.tenant,
     agent_id: ingest.agent_id,
     level: 'ok',
     burn_ratio: 0,
@@ -165,8 +186,8 @@ async function runLadder(deps: EvalServiceDeps, ingest: ScoreIngest): Promise<vo
 
   const meta = await deps.agentMeta(ingest.agent_id);
   const [observations, windowJudgeMean] = await Promise.all([
-    deps.store.budgetObservations(ingest.agent_id, since),
-    deps.store.windowJudgeMean(ingest.agent_id, since),
+    deps.store.budgetObservations(ingest.tenant, ingest.agent_id, since),
+    deps.store.windowJudgeMean(ingest.tenant, ingest.agent_id, since),
   ]);
   const budget = computeBudget(observations, {
     slo: meta.slo,
@@ -227,6 +248,7 @@ async function runLadder(deps: EvalServiceDeps, ingest: ScoreIngest): Promise<vo
   }
 
   await deps.store.upsertQualityState({
+    tenant: ingest.tenant,
     agent_id: ingest.agent_id,
     level: verdict.level,
     burn_ratio: budget.burn_ratio,
@@ -245,6 +267,7 @@ async function maybeAlertDrift(
 ): Promise<Date | null> {
   const refStart = new Date(since.getTime() - deps.config.drift.reference_days * 24 * 3600_000);
   const windows = await deps.store.driftWindows(
+    ingest.tenant,
     ingest.agent_id,
     ingest.capability,
     since,
@@ -305,6 +328,21 @@ async function emitBudgetStateChanged(
       reasons,
     },
   });
+}
+
+/**
+ * The REQUIRED tenant query parameter, bound to the verified claims (Phase 4
+ * item 1, item-0 binding pattern): a platform-family caller (orchestrator
+ * gate evaluator, operators) may name any tenant; every other caller may only
+ * name its own token tenant — a foreign tenant is a 403, never data.
+ */
+function requiredTenantParam(claims: PlatformClaims, request: FastifyRequest): string {
+  const { tenant } = request.query as { tenant?: string };
+  if (typeof tenant !== 'string' || tenant === '') {
+    throw new AuthError('the tenant query param is required', 400);
+  }
+  assertTenantAccess(claims, tenant);
+  return tenant;
 }
 
 async function authenticate(

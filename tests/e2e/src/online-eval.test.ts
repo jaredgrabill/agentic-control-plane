@@ -175,7 +175,8 @@ async function quality(agentId: string): Promise<{
   sli: { n_by_source: { probe: number; judge: number } };
 }> {
   const token = await ci('acp:eval', 'eval:read');
-  const res = await fetch(`${EVALUATION_URL}/v1/agents/${agentId}/quality`, {
+  // Phase 4 item 1: quality is per-tenant (REQUIRED param); the probes run as acme.
+  const res = await fetch(`${EVALUATION_URL}/v1/agents/${agentId}/quality?tenant=acme`, {
     headers: { authorization: `Bearer ${token}` },
   });
   expect(res.status, await res.clone().text()).toBe(200);

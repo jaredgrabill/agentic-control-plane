@@ -506,9 +506,14 @@ export interface ControlActivities {
    * frozen:true (reason freeze_check_unavailable) — a deployment must not
    * proceed when the safety signal is unavailable (matches the item-4 gate
    * posture). DeploymentWorkflow calls it before candidate validation and again
-   * before promotion.
+   * before promotion. Phase 4 item 1: quality is keyed (tenant, agent_id), so
+   * the freeze is read for the DEPLOYMENT's tenant — one tenant's degradation
+   * never freezes the agent for another.
    */
-  checkQualityFreeze(agentId: string): Promise<{
+  checkQualityFreeze(
+    tenant: string,
+    agentId: string,
+  ): Promise<{
     frozen: boolean;
     reason?: string;
     burn_ratio?: number;
