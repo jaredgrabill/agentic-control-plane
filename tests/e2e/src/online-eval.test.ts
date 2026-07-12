@@ -93,12 +93,21 @@ const ci = (audience: string, scope: string) =>
   getToken('svc-ci', 'ci-dev-secret', audience, scope);
 const jane = () => getToken('cli-jane', 'jane-dev-secret', 'acp:gateway');
 
-async function auditEvents(opts: { tenant?: string; taskId?: string } = {}): Promise<AuditEvent[]> {
+async function auditEvents(
+  opts: { tenant?: string; taskId?: string; eventType?: string } = {},
+): Promise<AuditEvent[]> {
   const tenant = opts.tenant ?? 'acme';
   const token = await ci('acp:audit', 'audit:read');
+  // Filter by event_type server-side (the store applies it in SQL before the
+  // limit). The full CI suite shares one audit stream and the store returns the
+  // OLDEST `limit` events (ASC); once earlier files (e.g. the deployment suite)
+  // push >1000 events onto a tenant stream, a stream-wide query would no longer
+  // include this file's own events. An event_type filter keeps each query bounded
+  // to its own class regardless of total volume.
   const url =
     `${AUDIT_URL}/v1/events?tenant=${tenant}&limit=1000` +
-    (opts.taskId === undefined ? '' : `&task_id=${opts.taskId}`);
+    (opts.taskId === undefined ? '' : `&task_id=${opts.taskId}`) +
+    (opts.eventType === undefined ? '' : `&event_type=${opts.eventType}`);
   const res = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
   expect(res.status).toBe(200);
   return ((await res.json()) as { events: AuditEvent[] }).events;
@@ -107,7 +116,13 @@ async function auditEvents(opts: { tenant?: string; taskId?: string } = {}): Pro
 /** Polls until predicate finds a matching event, or throws. */
 async function waitForAudit(
   predicate: (e: AuditEvent) => boolean,
-  opts: { tenant?: string; taskId?: string; timeoutMs?: number; what?: string } = {},
+  opts: {
+    tenant?: string;
+    taskId?: string;
+    eventType?: string;
+    timeoutMs?: number;
+    what?: string;
+  } = {},
 ): Promise<AuditEvent> {
   const deadline = Date.now() + (opts.timeoutMs ?? 60_000);
   for (;;) {
@@ -243,7 +258,12 @@ describe('online evaluation v0', () => {
         e.event_type === 'eval.probe_result' &&
         e.artifacts?.agent_id === 'knowledge-agent' &&
         (e.details as { passed?: boolean }).passed === true,
-      { tenant: 'acme', what: 'a passing knowledge probe', timeoutMs: 90_000 },
+      {
+        tenant: 'acme',
+        eventType: 'eval.probe_result',
+        what: 'a passing knowledge probe',
+        timeoutMs: 90_000,
+      },
     );
     expect((probe.details as { case?: string }).case).toBe('change-freeze-policy');
 
@@ -263,7 +283,13 @@ describe('online evaluation v0', () => {
     // audit with its recorded outcome + model_class is the fallback assertion.
     const score = await waitForAudit(
       (e) => e.event_type === 'eval.score' && e.reason?.task_id === taskId,
-      { tenant: 'acme', taskId, what: 'an eval.score for the judged step', timeoutMs: 90_000 },
+      {
+        tenant: 'acme',
+        taskId,
+        eventType: 'eval.score',
+        what: 'an eval.score for the judged step',
+        timeoutMs: 90_000,
+      },
     );
     expect(score.action.name).toBe('judge:answer-quality@1');
     const details = score.details as { outcome?: string; model_class?: string; route?: string };
@@ -274,7 +300,9 @@ describe('online evaluation v0', () => {
     // The judge's own LLM usage is a model.invoked with purpose 'judge', stamped
     // with the CALLER's tenant (svc:orchestrator → platform), not the task
     // tenant — judge cost is a platform cost center, not the tenant's.
-    const judgeInvoked = (await auditEvents({ tenant: 'platform' })).some(
+    const judgeInvoked = (
+      await auditEvents({ tenant: 'platform', eventType: 'model.invoked' })
+    ).some(
       (e) =>
         e.event_type === 'model.invoked' && (e.details as { purpose?: string }).purpose === 'judge',
     );
@@ -343,7 +371,12 @@ describe('online evaluation v0', () => {
         e.event_type === 'eval.budget_state_changed' &&
         e.artifacts?.agent_id === 'poison-agent' &&
         (e.details as { to?: string }).to === 'floor',
-      { tenant: 'platform', what: 'the SLO-floor transition', timeoutMs: 30_000 },
+      {
+        tenant: 'platform',
+        eventType: 'eval.budget_state_changed',
+        what: 'the SLO-floor transition',
+        timeoutMs: 30_000,
+      },
     );
     expect((floor.details as { page?: boolean }).page).toBe(true);
 
@@ -366,7 +399,12 @@ describe('online evaluation v0', () => {
         e.event_type === 'deployment.failed' &&
         e.artifacts?.agent_id === 'poison-agent' &&
         (e.details as { reason?: string }).reason === 'change_freeze',
-      { tenant: 'platform', what: 'the change-freeze deployment refusal', timeoutMs: 60_000 },
+      {
+        tenant: 'platform',
+        eventType: 'deployment.failed',
+        what: 'the change-freeze deployment refusal',
+        timeoutMs: 60_000,
+      },
     );
 
     // The floor auto-suspended the agent = kill switch tier 1.
@@ -374,7 +412,12 @@ describe('online evaluation v0', () => {
       (e) =>
         e.event_type === 'killswitch.activated' &&
         (e.details as { agent_id?: string; tier?: string }).agent_id === 'poison-agent',
-      { tenant: 'platform', what: 'the auto-suspend kill switch', timeoutMs: 30_000 },
+      {
+        tenant: 'platform',
+        eventType: 'killswitch.activated',
+        what: 'the auto-suspend kill switch',
+        timeoutMs: 30_000,
+      },
     );
     const readToken = await ci('acp:registry', 'registry:read');
     const card = await fetch(`${REGISTRY_URL}/v1/agents/poison-agent`, {
