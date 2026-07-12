@@ -320,4 +320,30 @@ describe('provenance API', () => {
     expect((await verify('tenant=acme', 'task:submit')).statusCode).toBe(403);
     expect((await app.inject({ url: '/v1/verify?tenant=acme' })).statusCode).toBe(401);
   });
+
+  const RECON_TASK = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40';
+  async function reconstruct(taskId: string, query: string, scope = 'audit:read') {
+    return app.inject({
+      url: `/v1/tasks/${taskId}/reconstruction?${query}`,
+      headers: { authorization: `Bearer ${await makeToken(scope)}` },
+    });
+  }
+
+  it('reconstructs a task from its records (the two seeded events share a task_id)', async () => {
+    const res = await reconstruct(RECON_TASK, 'tenant=acme');
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{ task_id: string; integrity: { records: number }; timeline: unknown[] }>();
+    expect(body.task_id).toBe(RECON_TASK);
+    expect(body.integrity.records).toBe(2);
+    expect(body.timeline).toHaveLength(2);
+  });
+
+  it('404s an unknown task and a cross-tenant task, and 400s a non-uuid / missing tenant', async () => {
+    expect((await reconstruct(RECON_TASK, 'tenant=other-tenant')).statusCode).toBe(404);
+    const unknown = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3fff';
+    expect((await reconstruct(unknown, 'tenant=acme')).statusCode).toBe(404);
+    expect((await reconstruct('not-a-uuid', 'tenant=acme')).statusCode).toBe(400);
+    expect((await reconstruct(RECON_TASK, '')).statusCode).toBe(400);
+    expect((await reconstruct(RECON_TASK, 'tenant=acme', 'task:submit')).statusCode).toBe(403);
+  });
 });

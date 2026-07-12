@@ -14,10 +14,14 @@ import {
   type ChainAnchor,
   type ChainFailure,
 } from './chain.js';
+import { reconstructTask } from './reconstruct.js';
 import type { AuditStore } from './store.js';
 
 export const AUDIT_AUDIENCE = 'acp:audit';
 const VERIFY_PAGE = 1000;
+/** Reconstruction caps the records it assembles; more than this sets `truncated`. */
+const RECONSTRUCT_CAP = 1000;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export interface AuditDeps {
   verifier: JwtVerifier;
@@ -121,6 +125,35 @@ export function buildAuditApp(deps: AuditDeps): FastifyInstance {
       head: head === undefined ? null : { chain_seq: head.chain_seq, record_hash: head.record_hash },
       ...(failure === undefined ? {} : { failure }),
     };
+  });
+
+  /**
+   * Task reconstruction (D10): a forensic ASSEMBLY of one task from its audit
+   * records in chain_seq order (the total order the chain bought) — submission,
+   * plan, per-step dispatch/policy/approval/tokens/tool-calls/outcome, the
+   * compensation unwind, and the terminal result. 404 when the task has no
+   * records in the tenant; `truncated` at the record cap. Not re-execution.
+   */
+  app.get('/v1/tasks/:task_id/reconstruction', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'audit:read');
+    const { task_id } = request.params as { task_id: string };
+    if (!UUID_RE.test(task_id)) {
+      throw new AuthError('task_id must be a uuid', 400);
+    }
+    const q = request.query as { tenant?: string };
+    if (q.tenant === undefined || q.tenant === '') {
+      throw new AuthError('tenant query parameter is required', 400);
+    }
+    // Fetch one past the cap to detect truncation.
+    const rows = await deps.store.chainByTask(q.tenant, task_id, RECONSTRUCT_CAP + 1);
+    if (rows.length === 0) {
+      return reply.status(404).send({
+        error: { message: `no task ${task_id} in tenant ${q.tenant}`, status: 404 },
+      });
+    }
+    const truncated = rows.length > RECONSTRUCT_CAP;
+    return reply.send(reconstructTask(task_id, q.tenant, rows.slice(0, RECONSTRUCT_CAP), truncated));
   });
 
   return app;
