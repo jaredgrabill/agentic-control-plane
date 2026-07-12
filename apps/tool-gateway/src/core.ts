@@ -38,6 +38,8 @@ import { ToolInputValidators } from './validate.js';
 export interface KillSwitch {
   fleetHalt(): { active: boolean; reason?: string } | undefined;
   agentSuspension(agentId: string): { active: boolean; reason?: string } | undefined;
+  /** Broker-time denylist backstop: revokes a specific user/service/agent principal. */
+  principalDenied(sub: string): { active: boolean; reason?: string } | undefined;
 }
 
 export interface AuditSink {
@@ -143,6 +145,24 @@ export class ToolGatewayCore {
       if (suspension !== undefined) {
         return refuse(
           fail('upstream_auth', `agent ${caller.agentId} is suspended (kill switch)`),
+          'error:upstream_auth',
+        );
+      }
+    }
+    // Principal-denylist backstop (0c QA MEDIUM). 0c revoked denylisted
+    // principals only at broker time, so an outstanding ≤15min acp:tools token
+    // for a denylisted principal kept opening tools until it expired — and a
+    // denylisted user/service was never revoked at the gateway at all. Check
+    // BOTH the acting principal (act.sub — the agent) and the original subject
+    // (sub — the user/service the chain started from) against the raw-string
+    // denylist; the watcher applies the KV key encoding symmetrically. Like
+    // the sibling kill-switch refusals, this precedes the Cedar decision and
+    // carries no policy reference; auditing all kill-switch refusals uniformly
+    // is item 5's retrofit (SPRINT routed-to-item-5, from 0a QA #1).
+    for (const sub of new Set([caller.principal, caller.sub])) {
+      if (this.deps.killSwitch?.principalDenied(sub) !== undefined) {
+        return refuse(
+          fail('upstream_auth', `principal ${sub} is denylisted (kill switch)`),
           'error:upstream_auth',
         );
       }

@@ -226,20 +226,21 @@ export class TokenIssuer {
 
   /** client_credentials issuance: the token speaks for the client's registered principal. */
   async issue(request: IssueRequest): Promise<IssuedToken> {
-    // Broker-time denylist: a suspended/denylisted/halted agent gets no
-    // fresh token at all — this blocks the acp:bus mint the NATS callout
-    // would otherwise honor. Non-agent clients (platform infra) are not
-    // gated here: fleet halt must not stop the control plane issuing its own
-    // service tokens.
-    if (request.client.principal.startsWith('agent:')) {
-      this.assertNotDenied('issue', {
-        tenant: request.client.tenant,
-        primaryPrincipal: request.client.principal,
-        checkFleet: true,
-        agentPrincipals: [request.client.principal],
-        denylistPrincipals: [request.client.principal],
-      });
-    }
+    // Broker-time denylist. The principal denylist applies to EVERY
+    // principal — a denylisted user or service must not client_credentials-mint
+    // a fresh token any more than a denylisted agent may (0c QA MEDIUM:
+    // previously the whole check was gated on `startsWith('agent:')`, so a
+    // denylisted user/service kept minting). Fleet halt and agent suspension
+    // stay agent-only: halting the fleet must not stop the control plane
+    // issuing its own service tokens.
+    const isAgent = request.client.principal.startsWith('agent:');
+    this.assertNotDenied('issue', {
+      tenant: request.client.tenant,
+      primaryPrincipal: request.client.principal,
+      checkFleet: isAgent,
+      agentPrincipals: isAgent ? [request.client.principal] : [],
+      denylistPrincipals: [request.client.principal],
+    });
     const requested = request.scopes ?? request.client.scopes;
     const outside = requested.filter((s) => !request.client.scopes.includes(s));
     if (outside.length > 0) {

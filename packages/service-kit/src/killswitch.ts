@@ -77,8 +77,12 @@ export class KillSwitchWatcher {
    * Whether a principal is on the broker-time denylist (ADR-0007). Distinct
    * from agent suspension (keyed by bare agent id): the denylist keys the
    * full principal string, so it revokes a specific agent version, a user,
-   * or a service — the token service refuses to delegate/exchange/issue for
-   * it, and the NATS auth callout refuses its bus sessions.
+   * or a service. Enforced at every checkpoint: the token service refuses to
+   * delegate/exchange for it and refuses ANY principal's client_credentials
+   * issuance (0c QA MEDIUM — no longer agent-only), the NATS auth callout
+   * refuses its bus sessions, and the tool gateway refuses its in-flight
+   * calls (backstop, so an outstanding ≤15min token cannot outlive the
+   * denylisting).
    */
   principalDenied(sub: string): KillSwitchState | undefined {
     const s = this.state.get(principalKey(sub));

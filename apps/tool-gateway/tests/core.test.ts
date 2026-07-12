@@ -151,7 +151,7 @@ interface Harness {
   limiter: FakeLimiter;
   audit: AuditEvent[];
   scriptedCalls: { calls: number };
-  killSwitch: { fleet: boolean; suspended: Set<string> };
+  killSwitch: { fleet: boolean; suspended: Set<string>; denied: Set<string> };
   config: ToolServerConfig;
 }
 
@@ -201,11 +201,12 @@ function makeHarness(options: { scriptedTimeoutMs?: number; auditFails?: boolean
   const broker = new FakeBroker();
   const limiter = new FakeLimiter();
   const audit: AuditEvent[] = [];
-  const killSwitch = { fleet: false, suspended: new Set<string>() };
+  const killSwitch = { fleet: false, suspended: new Set<string>(), denied: new Set<string>() };
   const killSwitchView: KillSwitch = {
     fleetHalt: () => (killSwitch.fleet ? { active: true, reason: 'drill' } : undefined),
     agentSuspension: (agentId) =>
       killSwitch.suspended.has(agentId) ? { active: true } : undefined,
+    principalDenied: (sub) => (killSwitch.denied.has(sub) ? { active: true } : undefined),
   };
 
   const core = new ToolGatewayCore({
@@ -416,6 +417,47 @@ describe('kill switch (before everything, no audit — no decision to record)', 
     // A user is not the suspended agent — the call proceeds.
     const fine = await h.core.callTool(userCaller(), 'scripted', 'probe', {}, {});
     expect(envelopeOf(fine)).toMatchObject({ ok: true });
+  });
+
+  // 0c QA MEDIUM backstop: a denylisted principal's outstanding ≤15min
+  // acp:tools token must open nothing, and a denylisted user/service must be
+  // refused at the gateway too — not only at broker time.
+  it('refuses a call whose acting agent principal is denylisted', async () => {
+    h.killSwitch.denied.add('agent:cloud-agent@0.1.0');
+    const result = await h.core.callTool(agentCaller(), 'cloud-estate', 'inventory_search', {}, {});
+    expect(errorOf(result)).toMatchObject({
+      code: 'upstream_auth',
+      message: 'principal agent:cloud-agent@0.1.0 is denylisted (kill switch)',
+    });
+    expect(h.policy.requests).toHaveLength(0);
+    expect(h.audit).toHaveLength(0);
+  });
+
+  it('refuses when the ORIGINAL subject is denylisted, even acting as an agent', async () => {
+    // The chain started from user:jane.doe; denylisting the user must revoke
+    // the agent token minted on their behalf (backstop checks caller.sub too).
+    h.killSwitch.denied.add('user:jane.doe');
+    const result = await h.core.callTool(agentCaller(), 'cloud-estate', 'inventory_search', {}, {});
+    expect(errorOf(result)).toMatchObject({
+      code: 'upstream_auth',
+      message: 'principal user:jane.doe is denylisted (kill switch)',
+    });
+    expect(h.policy.requests).toHaveLength(0);
+  });
+
+  it('refuses a denylisted user principal directly', async () => {
+    h.killSwitch.denied.add('user:jane.doe');
+    const result = await h.core.callTool(userCaller(), 'scripted', 'probe', {}, {});
+    expect(errorOf(result)).toMatchObject({
+      code: 'upstream_auth',
+      message: 'principal user:jane.doe is denylisted (kill switch)',
+    });
+  });
+
+  it('a non-denylisted principal proceeds normally (no false positive)', async () => {
+    h.killSwitch.denied.add('user:someone-else');
+    const result = await h.core.callTool(userCaller(), 'scripted', 'probe', {}, {});
+    expect(envelopeOf(result)).toMatchObject({ ok: true });
   });
 });
 

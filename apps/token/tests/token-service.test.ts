@@ -1022,6 +1022,36 @@ describe('ADR-0007 broker-time denylist', () => {
     });
   });
 
+  it('issue(): the denylist revokes a USER principal, not just agents (0c QA MEDIUM)', async () => {
+    reset();
+    state.principals.add('user:jane.doe');
+    const res = await issue('cli-jane', 'jane-secret', 'acp:gateway');
+    expect(res.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({
+      reason: 'principal_denylist',
+      key: 'killswitch.principal.user:jane.doe',
+      principal: 'user:jane.doe',
+    });
+  });
+
+  it('issue(): the denylist revokes a SERVICE principal (0c QA MEDIUM)', async () => {
+    reset();
+    state.principals.add('svc:lowly');
+    const res = await issue('svc-lowly', 'lowly-secret', 'acp:registry');
+    expect(res.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({
+      reason: 'principal_denylist',
+      principal: 'svc:lowly',
+    });
+  });
+
+  it('issue(): a non-denylisted user still mints normally (no false positive)', async () => {
+    reset();
+    const res = await issue('cli-jane', 'jane-secret', 'acp:gateway');
+    expect(res.statusCode).toBe(200);
+    expect(deniedEvent()).toBeUndefined();
+  });
+
   it('delegate(): refuses a suspended target agent and a denylisted subject', async () => {
     reset();
     state.agents.add('cloud-agent');
