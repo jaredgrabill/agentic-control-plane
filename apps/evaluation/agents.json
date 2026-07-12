@@ -25,6 +25,11 @@
       "agent_id": "code-agent",
       "dir": "agents/code",
       "report_command": ["node", "agents/code/dist/eval-report.js", "--out", "{out}"]
+    },
+    {
+      "agent_id": "change-agent",
+      "dir": "agents/change",
+      "report_command": ["node", "agents/change/dist/eval-report.js", "--out", "{out}"]
     }
   ]
 }

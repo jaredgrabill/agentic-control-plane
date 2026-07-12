@@ -10,8 +10,14 @@
       "knowledge:search:read",
       "cloud:inventory:read",
       "cloud:cost:read",
+      "cloud:tag:write",
       "code:repo:read",
-      "code:ci:read"
+      "code:ci:read",
+      "itsm:change:read",
+      "itsm:calendar:read",
+      "itsm:change:draft",
+      "itsm:change:submit",
+      "itsm:change:withdraw"
     ]
   },
   {
@@ -74,6 +80,14 @@
     "client_id": "agent-code-agent",
     "client_secret": "agent-code-dev-secret",
     "principal": "agent:code-agent@0.1.0",
+    "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
+    "client_id": "agent-change-agent",
+    "client_secret": "agent-change-dev-secret",
+    "principal": "agent:change-agent@0.1.0",
     "tenant": "acme",
     "roles": ["agent"],
     "scopes": []

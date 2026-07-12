@@ -142,6 +142,17 @@ const services = [
       ACP_AGENT_CLIENT_SECRET: 'agent-code-dev-secret',
     },
   ],
+  [
+    'change-agent',
+    'node',
+    ['agents/change/dist/main.js'],
+    {
+      ACP_TOOL_SERVER_ITSM_URL: 'http://localhost:7106/mcp/itsm',
+      ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+      ACP_AGENT_CLIENT_ID: 'agent-change-agent',
+      ACP_AGENT_CLIENT_SECRET: 'agent-change-dev-secret',
+    },
+  ],
 ];
 
 // Pre-flight: a platform already running would produce EADDRINUSE chaos.
