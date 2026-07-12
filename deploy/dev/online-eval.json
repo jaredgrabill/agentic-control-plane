@@ -1,0 +1,50 @@
+{
+  "schema": "acp-online-eval/v1",
+  "sample": {
+    "default_percent": 0,
+    "per_agent": {
+      "knowledge-agent": 100
+    }
+  },
+  "judge": {
+    "rubric": "answer-quality@1",
+    "model_class": "default-tier",
+    "min_agreement": 0.85
+  },
+  "probes": {
+    "interval_s": 3600,
+    "probe_failure_weight": 5,
+    "targets": [
+      {
+        "agent_id": "knowledge-agent",
+        "tenant": "acme",
+        "capability": "knowledge.answer_with_citations",
+        "cases": [
+          {
+            "name": "change-freeze-policy",
+            "input": "What does our policy say about change freezes?",
+            "expect": {
+              "must_contain": ["fiscal quarter"],
+              "must_cite_docs": ["policy/change-management"]
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "budget": {
+    "window_h": 24,
+    "min_samples": 10,
+    "slo_default": 0.9
+  },
+  "drift": {
+    "input_threshold": 0.5,
+    "score_drop_threshold": 0.1,
+    "min_current": 5,
+    "reference_days": 7,
+    "cooldown_h": 6,
+    "severe_probe_failures": 2,
+    "floor_probe_cycles": 4,
+    "floor_burn_ratio": 2.0
+  }
+}

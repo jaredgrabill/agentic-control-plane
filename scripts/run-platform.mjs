@@ -26,6 +26,11 @@ const base = {
   ACP_REGISTRY_URL: 'http://localhost:7102',
   ACP_POLICY_URL: 'http://localhost:7103',
   ACP_DATABASE_URL: 'postgres://acp:acp-dev-password@localhost:5432/acp',
+  ACP_GATEWAY_URL: 'http://localhost:7100',
+  ACP_EVALUATION_URL: 'http://localhost:7108',
+  ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+  // Item 6: the online-eval config drives judge sampling, probes, budgets, drift.
+  ACP_ONLINE_EVAL: join(repoRoot, 'deploy', 'dev', 'online-eval.json'),
   // Flush spans quickly so traces are queryable moments after a task runs.
   OTEL_BSP_SCHEDULE_DELAY: '500',
 };
@@ -73,6 +78,19 @@ const services = [
     },
   ],
   ['gateway', 'node', ['apps/gateway/dist/main.js'], {}],
+  // Item 6: the online-eval scores service (port 7108) — scores store +
+  // enforcement brain (budget/drift/ladder). Boots after the stack is up.
+  [
+    'evaluation',
+    'node',
+    ['apps/evaluation/dist/main.js', 'serve'],
+    {
+      ACP_EVALUATION_CLIENT_ID: 'svc-evaluation',
+      ACP_EVALUATION_CLIENT_SECRET: 'evaluation-dev-secret',
+      ACP_NATS_SERVICE_USER: 'evaluation',
+      ACP_NATS_SERVICE_PASSWORD: 'evaluation-dev-password',
+    },
+  ],
   [
     'orchestrator',
     'node',
@@ -80,6 +98,9 @@ const services = [
     {
       ACP_ORCHESTRATOR_CLIENT_ID: 'svc-orchestrator',
       ACP_ORCHESTRATOR_CLIENT_SECRET: 'orchestrator-dev-secret',
+      // Item 6: the judge scores online; the prober mints its own subject token.
+      ACP_PROBER_CLIENT_ID: 'svc-prober',
+      ACP_PROBER_CLIENT_SECRET: 'prober-dev-secret',
     },
   ],
   [
@@ -212,7 +233,7 @@ process.on('SIGTERM', () => shutdown(0));
 
 // Readiness gate: every HTTP door answers /healthz. The mocks (7301/7302)
 // have one; the agents are Temporal workers with no HTTP door.
-const healthPorts = [7101, 7102, 7103, 7104, 7105, 7106, 7107, 7100, 7301, 7302, 7303];
+const healthPorts = [7101, 7102, 7103, 7104, 7105, 7106, 7107, 7100, 7108, 7301, 7302, 7303];
 const deadline = Date.now() + 120_000;
 for (const port of healthPorts) {
   for (;;) {
@@ -230,4 +251,28 @@ for (const port of healthPorts) {
     await new Promise((r) => setTimeout(r, 500));
   }
 }
+// Item 6: auto-start the singleton synthetic prober once the orchestrator
+// worker can serve its workflows. Best-effort — a prober hiccup must not fail
+// the platform (the workers may still be polling; a retry loop absorbs that).
+async function startProber() {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const child = spawn('node', ['scripts/probes.mjs', 'start'], {
+      cwd: repoRoot,
+      env: base,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let out = '';
+    child.stdout.on('data', (d) => (out += d));
+    child.stderr.on('data', (d) => process.stderr.write(`[prober-start] ${d}`));
+    const code = await new Promise((resolve) => child.on('exit', resolve));
+    if (code === 0) {
+      process.stdout.write(`[prober-start] ${out}`);
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  console.error('[prober-start] could not start the synthetic prober after retries (non-fatal)');
+}
+await startProber();
+
 console.log('PLATFORM_READY (temporal workers may take a few more seconds to poll)');

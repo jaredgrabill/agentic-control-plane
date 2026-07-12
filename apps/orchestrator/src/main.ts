@@ -62,6 +62,10 @@ const activities = createControlActivities({
     : { onlineEval: loadOnlineEvalConfig(readFileSync(onlineEvalPath, 'utf8')) }),
   llmGatewayUrl: env('ACP_LLM_GATEWAY_URL', 'http://localhost:7107'),
   evaluationUrl: env('ACP_EVALUATION_URL', 'http://localhost:7108'),
+  // Item 6: the synthetic prober's own client_creds identity (svc-prober).
+  proberClientId: env('ACP_PROBER_CLIENT_ID', 'svc-prober'),
+  proberClientSecret: env('ACP_PROBER_CLIENT_SECRET', 'prober-dev-secret'),
+  proberScope: env('ACP_PROBER_SCOPE', 'task:submit knowledge:search:read'),
   // Item 5: the pre-dispatch kill-switch checkpoint answers from this in-memory
   // watcher (fast path — routers react within the <10s SLO without polling).
   killSwitch: await KillSwitchWatcher.start(nc, logger),
