@@ -27,3 +27,20 @@ export { createCloudServer } from './cloud/server.js';
 export { loadForgeFixtures, type CiRun, type ForgeFixtures } from './forge/fixtures.js';
 export { ciRuns, repoDependencies } from './forge/queries.js';
 export { createForgeServer } from './forge/server.js';
+export {
+  loadItsmFixtures,
+  type CalendarFixture,
+  type ChangeRecord,
+  type ChangeStatus,
+  type ChangeWindow,
+  type ChangesFixture,
+  type ItsmFixtures,
+} from './itsm/fixtures.js';
+export { ItsmStore, type ItsmOutcome } from './itsm/store.js';
+export { createItsmServer } from './itsm/server.js';
+export {
+  argsDigest,
+  DEFAULT_LEDGER_CAP,
+  IdempotencyLedger,
+  type LedgerLookup,
+} from './shared/idempotency.js';

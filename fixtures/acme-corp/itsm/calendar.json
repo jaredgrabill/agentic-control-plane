@@ -1,0 +1,34 @@
+{
+  "document": {
+    "doc_id": "itsm/change-calendar",
+    "version": "2026-07-11",
+    "effective_date": "2026-07-11",
+    "url": "https://itsm.acme.example/calendar/2026-07-11",
+    "lineage_id": "01981c00-0000-7000-8000-0000000000c2"
+  },
+  "as_of": "2026-07-11",
+  "tenant": "acme",
+  "coverage_through": "2026-08-31T23:59:59Z",
+  "freezes": [
+    {
+      "name": "quarterly close",
+      "reason": "Finance quarterly close — no production changes.",
+      "start": "2026-07-17T00:00:00Z",
+      "end": "2026-07-19T23:59:59Z"
+    }
+  ],
+  "scheduled": [
+    {
+      "change_id": "CHG-1002",
+      "title": "Enable connection pooling on ledger-db",
+      "service": "ledger-core",
+      "window": { "start": "2026-07-15T04:00:00Z", "end": "2026-07-15T05:30:00Z" }
+    },
+    {
+      "change_id": "CHG-0990",
+      "title": "Payments gateway node drain",
+      "service": "payments-api",
+      "window": { "start": "2026-07-14T02:30:00Z", "end": "2026-07-14T03:30:00Z" }
+    }
+  ]
+}
