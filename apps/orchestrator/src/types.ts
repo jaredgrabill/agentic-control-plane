@@ -327,4 +327,12 @@ export interface AgentActivities {
 }
 
 export const CONTROL_TASK_QUEUE = 'acp-tasks';
-export const agentTaskQueue = (agentId: string): string => `agent-${agentId}`;
+/**
+ * Version-qualified agent task queue (item 4): `agent-{id}@{version}`. Two
+ * versions of one agent serve DISTINCT queues, so the orchestrator dispatches a
+ * canary/shadow step to the exact version's worker — the dispatch contract with
+ * both SDKs (packages/agent-sdk agentTaskQueue / python agent_task_queue must
+ * produce this byte-for-byte).
+ */
+export const agentTaskQueue = (agentId: string, version: string): string =>
+  `agent-${agentId}@${version}`;

@@ -4,7 +4,7 @@
  * access, telemetry, and the golden-set eval harness.
  */
 
-export { Agent, type AgentOptions, type Handler } from './agent.js';
+export { Agent, agentTaskQueue, type AgentOptions, type Handler } from './agent.js';
 export { AnswerBuilder, DEFAULT_CONFIDENCE_FLOOR } from './answer.js';
 export { BUS_AUDIENCE, BusTokenSource, type BusTokenOptions } from './bus-token.js';
 export { CapabilityContext } from './context.js';

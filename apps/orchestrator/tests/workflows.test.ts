@@ -250,7 +250,9 @@ async function withWorkers<T>(agentIds: string[], run: () => Promise<T>): Promis
       Worker.create({
         connection: env.nativeConnection,
         namespace,
-        taskQueue: agentTaskQueue(id),
+        // All mock cards register at 0.1.0 (makeCard), so the version-qualified
+        // dispatch queue is agent-{id}@0.1.0.
+        taskQueue: agentTaskQueue(id, '0.1.0'),
         activities: { execute_capability: HANDLERS[id]! },
       }),
     ),

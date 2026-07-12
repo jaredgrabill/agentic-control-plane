@@ -930,7 +930,7 @@ async function runAgentStep(
   );
 
   const agent = proxyActivities<AgentActivities>({
-    taskQueue: agentTaskQueue(card.manifest.id),
+    taskQueue: agentTaskQueue(card.manifest.id, card.version),
     startToCloseTimeout: `${(declared.sla?.p95_latency_s ?? card.manifest.sla?.p95_latency_s ?? 30) * 2} seconds`,
     retry: {
       maximumAttempts: 3,

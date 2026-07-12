@@ -5,7 +5,7 @@ import { ApplicationFailure } from '@temporalio/common';
 import YAML from 'yaml';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { ProtocolValidationError, type StepResult } from '@acp/protocol';
-import { Agent, CapabilityError, ErrorClass, FakeModel } from '../src/index.js';
+import { Agent, CapabilityError, ErrorClass, FakeModel, agentTaskQueue } from '../src/index.js';
 import { MANIFEST, goodOutput, stepRequest } from './fixtures.js';
 
 let agent: Agent;
@@ -262,8 +262,23 @@ describe('execute', () => {
     ]);
   });
 
-  it('taskQueue follows the orchestrator dispatch convention', () => {
+  it('taskQueue is version-qualified from ACP_AGENT_VERSION; unset is fatal', () => {
     expect(agent.agentId).toBe('test-agent');
-    expect(agent.taskQueue).toBe('agent-test-agent');
+    const prev = process.env.ACP_AGENT_VERSION;
+    try {
+      process.env.ACP_AGENT_VERSION = '0.4.0';
+      expect(agent.taskQueue).toBe('agent-test-agent@0.4.0');
+      delete process.env.ACP_AGENT_VERSION;
+      expect(() => agent.taskQueue).toThrow('ACP_AGENT_VERSION is required');
+    } finally {
+      if (prev === undefined) delete process.env.ACP_AGENT_VERSION;
+      else process.env.ACP_AGENT_VERSION = prev;
+    }
+  });
+
+  it('agentTaskQueue pins the cross-language dispatch string byte-for-byte', () => {
+    // MUST match the Python SDK's agent_task_queue and the orchestrator's
+    // agentTaskQueue for the same (id, version).
+    expect(agentTaskQueue('knowledge-agent', '0.2.0')).toBe('agent-knowledge-agent@0.2.0');
   });
 });
