@@ -101,13 +101,14 @@ class GatewayModel:
         usage = body["usage"]
         return ModelResponse(
             text=body["text"],
-            # Cache reads/writes are real processed input — the budget counts them.
-            input_tokens=(
-                usage["input_tokens"]
-                + usage["cache_read_input_tokens"]
-                + usage["cache_creation_input_tokens"]
-            ),
+            # input_tokens is non-cached input only; cache reads/writes are
+            # reported separately and priced at their own rates. They do NOT
+            # count toward max_tokens (Cost Meter convention, coordinated with
+            # the gateway wire shape).
+            input_tokens=usage["input_tokens"],
             output_tokens=usage["output_tokens"],
+            cache_read_tokens=usage["cache_read_input_tokens"],
+            cache_write_tokens=usage["cache_creation_input_tokens"],
             model=body["model"],
         )
 

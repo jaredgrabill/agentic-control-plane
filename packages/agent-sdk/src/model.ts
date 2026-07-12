@@ -10,8 +10,13 @@ import { CapabilityError, ErrorClass } from './errors.js';
 /** One model completion; token counts feed the StepResult usage block. */
 export interface ModelResponse {
   text: string;
+  /** Non-cached input tokens only; cache reads/writes are reported separately. */
   inputTokens?: number;
   outputTokens?: number;
+  /** Input tokens served from the provider's prompt cache (priced at the cache-read rate). */
+  cacheReadTokens?: number;
+  /** Input tokens written to the provider's prompt cache (priced at the cache-write rate). */
+  cacheWriteTokens?: number;
   model?: string;
 }
 

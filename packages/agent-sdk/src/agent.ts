@@ -42,6 +42,10 @@ class CountingModel implements ModelClient {
   llmCalls = 0;
   inputTokens = 0;
   outputTokens = 0;
+  cacheReadTokens = 0;
+  cacheWriteTokens = 0;
+  /** Last non-undefined resolved model id seen across completions (v0 last-write-wins). */
+  model: string | undefined;
 
   constructor(private readonly inner: ModelClient) {}
 
@@ -50,6 +54,9 @@ class CountingModel implements ModelClient {
     const response = await this.inner.complete(prompt, options);
     this.inputTokens += response.inputTokens ?? 0;
     this.outputTokens += response.outputTokens ?? 0;
+    this.cacheReadTokens += response.cacheReadTokens ?? 0;
+    this.cacheWriteTokens += response.cacheWriteTokens ?? 0;
+    if (response.model !== undefined) this.model = response.model;
     return response;
   }
 }
@@ -292,10 +299,17 @@ export class Agent {
 }
 
 function usageOf(counting: CountingModel): Usage {
+  // Cache tokens and model id are emitted only when present: exactOptional
+  // PropertyTypes + the protocol's additionalProperties:false mean an absent
+  // field must be omitted, not sent as undefined/zero. This keeps zero-LLM
+  // usage byte-identical to before the cache fields existed.
   return {
     llm_calls: counting.llmCalls,
     input_tokens: counting.inputTokens,
     output_tokens: counting.outputTokens,
+    ...(counting.cacheReadTokens > 0 ? { cache_read_tokens: counting.cacheReadTokens } : {}),
+    ...(counting.cacheWriteTokens > 0 ? { cache_write_tokens: counting.cacheWriteTokens } : {}),
+    ...(counting.model !== undefined ? { model: counting.model } : {}),
   };
 }
 

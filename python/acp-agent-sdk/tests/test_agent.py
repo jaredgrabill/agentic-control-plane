@@ -1,7 +1,14 @@
 from typing import Any
 
 import pytest
-from acp_agent_sdk import Agent, CapabilityContext, CapabilityError, ErrorClass, FakeModel
+from acp_agent_sdk import (
+    Agent,
+    CapabilityContext,
+    CapabilityError,
+    ErrorClass,
+    FakeModel,
+    ModelResponse,
+)
 from temporalio.exceptions import ApplicationError
 
 from .conftest import MANIFEST, step_request
@@ -131,6 +138,52 @@ class TestExecute:
         result = await agent.execute(step_request())
         assert result["usage"]["llm_calls"] == 2
         assert result["usage"]["output_tokens"] > 0
+        # FakeModel reports no concrete model and no cache tokens: usage omits
+        # model/cache_* entirely, so the step is fallback-priced and zero-LLM
+        # usage stays byte-identical to before the cache fields existed.
+        assert "model" not in result["usage"]
+        assert "cache_read_tokens" not in result["usage"]
+        assert "cache_write_tokens" not in result["usage"]
+
+    async def test_usage_carries_model_and_cache_tokens_when_reported(self) -> None:
+        agent = Agent(
+            manifest=MANIFEST,
+            model=FakeModel(
+                script=[
+                    ModelResponse(
+                        text="first",
+                        input_tokens=100,
+                        output_tokens=40,
+                        cache_read_tokens=200,
+                        model="x@1",
+                    ),
+                    ModelResponse(
+                        text="second",
+                        input_tokens=10,
+                        output_tokens=5,
+                        cache_write_tokens=512,
+                        model="y@2",
+                    ),
+                ]
+            ),
+        )
+
+        @agent.capability("test.echo")
+        async def handler(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+            await ctx.model.complete("first")
+            await ctx.model.complete("second")
+            return good_output()
+
+        result = await agent.execute(step_request())
+        assert result["usage"] == {
+            "llm_calls": 2,
+            "input_tokens": 110,
+            "output_tokens": 45,
+            "cache_read_tokens": 200,
+            "cache_write_tokens": 512,
+            # Last non-None model wins (v0 last-write-wins approximation).
+            "model": "y@2",
+        }
 
     async def test_retrieval_requires_configuration_and_token(self, agent: Agent) -> None:
         captured: dict[str, Any] = {}

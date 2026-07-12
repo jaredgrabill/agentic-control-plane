@@ -101,9 +101,12 @@ class TestComplete:
         }
 
         assert response.text == "gateway says hi"
-        # Cache reads/writes are real processed input — the budget counts them.
-        assert response.input_tokens == 45
+        # input_tokens is non-cached input only; cache reads/writes are reported
+        # separately (priced at their own rates; excluded from max_tokens).
+        assert response.input_tokens == 10
         assert response.output_tokens == 4
+        assert response.cache_read_tokens == 30
+        assert response.cache_write_tokens == 5
         assert response.model == "dev-echo@1"
 
     async def test_defaults_max_tokens_and_empty_prefix(self) -> None:
@@ -239,8 +242,17 @@ class TestAgentBinding:
         assert result["status"] == "completed"
         assert recorded[0].headers["authorization"] == "Bearer step-jwt"
         assert json.loads(recorded[0].content)["metadata"]["capability"] == "test.echo"
-        # Usage flowed through _CountingModel from the gateway's counters.
-        assert result["usage"] == {"llm_calls": 1, "input_tokens": 45, "output_tokens": 4}
+        # Usage flowed through _CountingModel from the gateway's counters:
+        # input is non-cached only; cache reads/writes and the resolved model
+        # land in their own fields for the Cost Meter to price.
+        assert result["usage"] == {
+            "llm_calls": 1,
+            "input_tokens": 10,
+            "output_tokens": 4,
+            "cache_read_tokens": 30,
+            "cache_write_tokens": 5,
+            "model": "dev-echo@1",
+        }
 
     def test_is_contextual_gateway_yes_fake_no(self) -> None:
         assert isinstance(
