@@ -152,6 +152,21 @@
       "schema": "audit-event",
       "valid": true
     },
+    {
+      "file": "audit-event/valid-deployment-started.json",
+      "schema": "audit-event",
+      "valid": true
+    },
+    {
+      "file": "audit-event/valid-deployment-promoted.json",
+      "schema": "audit-event",
+      "valid": true
+    },
+    {
+      "file": "audit-event/valid-deployment-shadow-result.json",
+      "schema": "audit-event",
+      "valid": true
+    },
     { "file": "eval-report/valid-knowledge-run.json", "schema": "eval-report", "valid": true },
     {
       "file": "eval-report/invalid-metric-out-of-range.json",

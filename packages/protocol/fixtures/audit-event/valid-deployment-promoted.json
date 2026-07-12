@@ -1,0 +1,28 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e4002",
+  "occurred_at": "2026-07-11T10:30:00Z",
+  "tenant": "platform",
+  "event_type": "deployment.promoted",
+  "actor": {
+    "principal": "svc:orchestrator",
+    "delegation_chain": [{ "sub": "svc:ci" }, { "sub": "svc:orchestrator" }]
+  },
+  "action": { "name": "deployment.promoted" },
+  "artifacts": { "agent_id": "knowledge-agent", "agent_version": "0.2.0" },
+  "details": {
+    "deployment_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e4000",
+    "from_version": "0.1.0",
+    "to_version": "0.2.0",
+    "approval_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e4090",
+    "gate_reports": [
+      {
+        "phase": "canary",
+        "ramp_percent": 100,
+        "verdict": "pass",
+        "samples": { "candidate": 12, "incumbent": 40 },
+        "metrics": { "success_ratio": 1.0, "p95_latency_ms": 220, "cost_per_step_usd": 0.0 },
+        "reasons": []
+      }
+    ]
+  }
+}
