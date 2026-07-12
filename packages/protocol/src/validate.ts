@@ -8,11 +8,13 @@ import {
   agentCardSchema,
   agentManifestSchema,
   auditEventSchema,
+  evalReportSchema,
   taskContractSchema,
 } from './generated/schemas.js';
-import type { AgentCard } from './generated/agent-card.js';
+import type { AgentCard, EvalBaseline } from './generated/agent-card.js';
 import type { AgentManifest } from './generated/agent-manifest.js';
 import type { AuditEvent } from './generated/audit-event.js';
+import type { EvalReport } from './generated/eval-report.js';
 import type {
   StepRequest,
   StepResult,
@@ -27,6 +29,7 @@ ajv.addSchema(agentManifestSchema);
 ajv.addSchema(agentCardSchema);
 ajv.addSchema(taskContractSchema);
 ajv.addSchema(auditEventSchema);
+ajv.addSchema(evalReportSchema);
 
 export class ProtocolValidationError extends Error {
   constructor(
@@ -84,4 +87,8 @@ export const stepRequest = makeParser<StepRequest>(
 );
 export const stepResult = makeParser<StepResult>(
   `${BASE}/task-contract.schema.json#/$defs/step_result`,
+);
+export const evalReport = makeParser<EvalReport>(`${BASE}/eval-report.schema.json`);
+export const evalBaseline = makeParser<EvalBaseline>(
+  `${BASE}/eval-report.schema.json#/$defs/eval_baseline`,
 );

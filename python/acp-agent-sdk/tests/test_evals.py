@@ -11,7 +11,10 @@ from acp_agent_sdk import (
     EvalHarness,
     GoldenCase,
     load_golden,
+    report_payload,
+    suite_digest,
 )
+from acp_protocol import validate
 
 from .conftest import MANIFEST
 
@@ -141,3 +144,80 @@ class TestEvalHarness:
         assert cases[0].name == "n"
         with pytest.raises(ValueError, match="no golden cases"):
             load_golden(tmp_path / "empty")
+
+
+class TestSuiteDigest:
+    PARITY_GOLDEN = Path(__file__).resolve().parents[3] / "fixtures" / "parity" / "golden"
+    # The same literal is pinned in the TypeScript SDK's evals.test.ts — the
+    # digest is a cross-language contract, not an implementation detail.
+    PARITY_GOLDEN_DIGEST = "sha256:4c9ffc28c5b4e231bffc3d796c46fac1d9e75149b7c69c2e504801a2a07241fb"
+
+    def test_matches_the_pinned_cross_language_digest(self) -> None:
+        assert suite_digest(self.PARITY_GOLDEN) == self.PARITY_GOLDEN_DIGEST
+
+    def test_crlf_and_lf_checkouts_hash_identically(self, tmp_path: Path) -> None:
+        lf_dir = tmp_path / "lf"
+        crlf_dir = tmp_path / "crlf"
+        lf_dir.mkdir()
+        crlf_dir.mkdir()
+        body = '{\n  "cases": []\n}\n'
+        (lf_dir / "cases.json").write_bytes(body.encode("utf-8"))
+        (crlf_dir / "cases.json").write_bytes(body.replace("\n", "\r\n").encode("utf-8"))
+        assert suite_digest(crlf_dir) == suite_digest(lf_dir)
+        assert suite_digest(lf_dir).startswith("sha256:")
+
+    def test_hashes_files_sorted_by_basename_with_separation(self, tmp_path: Path) -> None:
+        (tmp_path / "b.json").write_text("B", encoding="utf-8")
+        (tmp_path / "a.json").write_text("A", encoding="utf-8")
+        (tmp_path / "ignored.txt").write_text("nope", encoding="utf-8")
+        digest = suite_digest(tmp_path)
+        # Moving content between files must change the digest even though
+        # the concatenated bytes stay the same.
+        (tmp_path / "b.json").write_text("A", encoding="utf-8")
+        (tmp_path / "a.json").write_text("B", encoding="utf-8")
+        assert suite_digest(tmp_path) != digest
+
+    def test_raises_on_a_nonexistent_directory(self, tmp_path: Path) -> None:
+        # A mistyped suite_dir must fail loudly (as the TypeScript twin does),
+        # never hash to the plausible-looking empty-input digest.
+        with pytest.raises(FileNotFoundError, match="no-such-suite"):
+            suite_digest(tmp_path / "no-such-suite")
+
+
+class TestReportPayload:
+    PARITY_GOLDEN = Path(__file__).resolve().parents[3] / "fixtures" / "parity" / "golden"
+
+    async def test_emits_a_valid_report_with_cases_in_run_order(self) -> None:
+        report = await EvalHarness(make_agent()).run(
+            [
+                case(name="first", expect={"must_contain": ["change freeze"]}),
+                case(name="second", expect={"must_contain": ["unicorns"]}),
+            ]
+        )
+        payload = report_payload(
+            report,
+            agent_id="knowledge-agent",
+            agent_version="0.1.0",
+            suite_dir=self.PARITY_GOLDEN,
+        )
+        validate("eval-report", payload)
+        assert payload["sdk"] == "acp-agent-sdk-py@0.1.0"
+        assert payload["agent_id"] == "knowledge-agent"
+        assert payload["suite"]["digest"] == suite_digest(self.PARITY_GOLDEN)
+        assert payload["suite"]["case_count"] == 2
+        assert [c["name"] for c in payload["cases"]] == ["first", "second"]
+        assert payload["cases"][1]["passed"] is False
+        assert payload["cases"][1]["failures"] == ["answer does not mention 'unicorns'"]
+        assert payload["metrics"]["pass_rate"] == 0.5
+
+    async def test_honors_an_explicit_sdk_string(self) -> None:
+        report = await EvalHarness(make_agent()).run([case()])
+        payload = report_payload(
+            report,
+            agent_id="knowledge-agent",
+            agent_version="0.1.0",
+            suite_dir=self.PARITY_GOLDEN,
+            sdk="custom-harness@9.9.9",
+        )
+        assert payload["sdk"] == "custom-harness@9.9.9"
+        validate("eval-report", payload)

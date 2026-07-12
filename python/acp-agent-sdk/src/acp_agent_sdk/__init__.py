@@ -10,6 +10,8 @@ from acp_agent_sdk.errors import ErrorClass as ErrorClass
 from acp_agent_sdk.evals import EvalHarness as EvalHarness
 from acp_agent_sdk.evals import GoldenCase as GoldenCase
 from acp_agent_sdk.evals import load_golden as load_golden
+from acp_agent_sdk.evals import report_payload as report_payload
+from acp_agent_sdk.evals import suite_digest as suite_digest
 from acp_agent_sdk.model import FakeModel as FakeModel
 from acp_agent_sdk.model import ModelClient as ModelClient
 from acp_agent_sdk.model import ModelResponse as ModelResponse

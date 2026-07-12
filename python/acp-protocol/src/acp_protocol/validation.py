@@ -13,7 +13,7 @@ from typing import Any
 from jsonschema import Draft202012Validator, FormatChecker
 from referencing import Registry, Resource
 
-SCHEMA_NAMES = ("agent-manifest", "agent-card", "task-contract", "audit-event")
+SCHEMA_NAMES = ("agent-manifest", "agent-card", "task-contract", "audit-event", "eval-report")
 _BASE = "https://acp.dev/schemas/v1"
 
 

@@ -13,6 +13,8 @@ export {
   EvalReport,
   goldenCaseFromDict,
   loadGolden,
+  reportPayload,
+  suiteDigest,
   type CaseResult,
   type GoldenCase,
 } from './evals.js';

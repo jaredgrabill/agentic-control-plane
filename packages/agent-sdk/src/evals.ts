@@ -8,10 +8,10 @@
  * parity gate (tests/parity) compares them verbatim.
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { StepRequest } from '@acp/protocol';
+import type { EvalReport as ProtocolEvalReport, StepRequest } from '@acp/protocol';
 import type { Agent } from './agent.js';
 import type { ErrorClass } from './errors.js';
 
@@ -43,6 +43,32 @@ export function goldenCaseFromDict(raw: Record<string, unknown>): GoldenCase {
     minConfidence: expect.min_confidence as number | undefined,
     expectErrorClass: expect.error_class as ErrorClass | undefined,
   };
+}
+
+/**
+ * Content digest identifying a golden suite (acp-eval-report/v1 suite.digest).
+ *
+ * Normative algorithm, byte-identical across the TypeScript and Python
+ * SDKs: take the basenames of the `*.json` files directly under
+ * `directory`, sorted ascending by code point; for each file feed sha256
+ * with utf8(basename), 0x00, utf8(text with CRLF normalized to LF), 0x00;
+ * return `"sha256:" + hex`. CRLF normalization keeps the digest stable
+ * across checkout line-ending policies (Windows).
+ */
+export function suiteDigest(directory: string): string {
+  const files = readdirSync(directory)
+    .filter((name) => name.endsWith('.json'))
+    .sort();
+  const hash = createHash('sha256');
+  for (const name of files) {
+    hash.update(Buffer.from(name, 'utf-8'));
+    hash.update(Buffer.of(0));
+    hash.update(
+      Buffer.from(readFileSync(join(directory, name), 'utf-8').replaceAll('\r\n', '\n'), 'utf-8'),
+    );
+    hash.update(Buffer.of(0));
+  }
+  return `sha256:${hash.digest('hex')}`;
 }
 
 /** Reads every *.json under `directory` (sorted); an empty suite is a loud failure. */
@@ -225,4 +251,40 @@ export class EvalHarness {
       abstained,
     };
   }
+}
+
+/**
+ * Renders a harness run as an acp-eval-report/v1 wire document
+ * (snake_case keys from the generated protocol types).
+ *
+ * Cases stay in run order; `suite.digest` is {@link suiteDigest} over
+ * `options.suiteDir`, so gates can refuse comparison when the suite changed.
+ */
+export function reportPayload(
+  report: EvalReport,
+  options: { agentId: string; agentVersion: string; suiteDir: string; sdk?: string },
+): ProtocolEvalReport {
+  return {
+    schema: 'acp-eval-report/v1',
+    sdk: options.sdk ?? 'acp-agent-sdk-ts@0.1.0',
+    agent_id: options.agentId,
+    agent_version: options.agentVersion,
+    suite: {
+      digest: suiteDigest(options.suiteDir),
+      case_count: report.results.length,
+    },
+    metrics: {
+      pass_rate: report.passRate,
+      citation_precision: report.citationPrecision,
+      abstention_accuracy: report.abstentionAccuracy,
+    },
+    cases: report.results.map((result) => ({
+      name: result.name,
+      passed: result.passed,
+      abstained: result.abstained,
+      cited_docs: result.citedDocs,
+      failures: result.failures,
+    })),
+    generated_at: new Date().toISOString(),
+  };
 }

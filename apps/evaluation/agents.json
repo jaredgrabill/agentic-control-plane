@@ -1,0 +1,20 @@
+{
+  "schema": "acp-eval-agents/v1",
+  "agents": [
+    {
+      "agent_id": "knowledge-agent",
+      "dir": "python/agents/knowledge",
+      "report_command": [
+        "uv",
+        "run",
+        "--directory",
+        "python",
+        "python",
+        "-m",
+        "knowledge_agent.eval_report",
+        "--out",
+        "{out}"
+      ]
+    }
+  ]
+}

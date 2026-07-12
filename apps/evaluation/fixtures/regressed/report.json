@@ -1,0 +1,55 @@
+{
+  "schema": "acp-eval-report/v1",
+  "sdk": "acp-agent-sdk-py@0.1.0",
+  "agent_id": "regressed-fixture-agent",
+  "agent_version": "0.1.0",
+  "suite": {
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "case_count": 7
+  },
+  "metrics": {
+    "pass_rate": 0.7143,
+    "citation_precision": 0.5,
+    "abstention_accuracy": 1.0
+  },
+  "cases": [
+    {
+      "name": "case-1",
+      "passed": true,
+      "abstained": false,
+      "cited_docs": ["doc/a"],
+      "failures": []
+    },
+    {
+      "name": "case-2",
+      "passed": true,
+      "abstained": false,
+      "cited_docs": ["doc/a"],
+      "failures": []
+    },
+    {
+      "name": "case-3",
+      "passed": true,
+      "abstained": false,
+      "cited_docs": ["doc/b"],
+      "failures": []
+    },
+    { "name": "case-4", "passed": true, "abstained": false, "cited_docs": [], "failures": [] },
+    { "name": "case-5", "passed": true, "abstained": true, "cited_docs": [], "failures": [] },
+    {
+      "name": "case-6",
+      "passed": false,
+      "abstained": false,
+      "cited_docs": ["doc/unrelated"],
+      "failures": ["answer does not cite doc/a"]
+    },
+    {
+      "name": "case-7",
+      "passed": false,
+      "abstained": false,
+      "cited_docs": [],
+      "failures": ["answer does not mention 'freeze'"]
+    }
+  ],
+  "generated_at": "2026-07-11T00:00:00Z"
+}

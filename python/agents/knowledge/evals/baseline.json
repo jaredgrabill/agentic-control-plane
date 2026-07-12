@@ -1,0 +1,16 @@
+{
+  "schema": "acp-eval-baseline/v1",
+  "agent_id": "knowledge-agent",
+  "agent_version": "0.1.0",
+  "metrics": {
+    "pass_rate": 1,
+    "citation_precision": 1,
+    "abstention_accuracy": 1
+  },
+  "suite": {
+    "digest": "sha256:477947f2f7bc55cca80f0c0b986a877cffbe87dbbc1743867d288c3bd026bd32",
+    "case_count": 7
+  },
+  "harness": "acp-agent-sdk-py@0.1.0",
+  "recorded_at": "2026-07-11T16:48:20.271786+00:00"
+}

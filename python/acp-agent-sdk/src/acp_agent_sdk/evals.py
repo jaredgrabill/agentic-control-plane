@@ -3,9 +3,11 @@ semantics (paved-road.md). Deterministic checks first (testing.md):
 citation precision, abstention correctness, content assertions — judge
 rubrics arrive with the Evaluation Service in Phase 2."""
 
+import hashlib
 import json
 import uuid
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +38,34 @@ class GoldenCase:
             min_confidence=expect.get("min_confidence"),
             expect_error_class=expect.get("error_class"),
         )
+
+
+def suite_digest(directory: str | Path) -> str:
+    """Content digest identifying a golden suite (acp-eval-report/v1 suite.digest).
+
+    Normative algorithm, byte-identical across the TypeScript and Python
+    SDKs: take the basenames of the ``*.json`` files directly under
+    ``directory``, sorted ascending by code point; for each file feed
+    sha256 with utf8(basename), 0x00, utf8(text with CRLF normalized to
+    LF), 0x00; return ``"sha256:" + hexdigest``. CRLF normalization keeps
+    the digest stable across checkout line-ending policies (Windows).
+    """
+    suite_dir = Path(directory)
+    if not suite_dir.is_dir():
+        # Path.glob on a nonexistent directory yields nothing, which would
+        # produce the (plausible-looking) empty-input digest for a mistyped
+        # suite_dir. The TypeScript twin throws ENOENT here; match it.
+        raise FileNotFoundError(f"golden suite directory not found: {suite_dir}")
+    h = hashlib.sha256()
+    for path in sorted(suite_dir.glob("*.json"), key=lambda p: p.name):
+        # Bytes, not text mode: universal newlines would also fold lone \r,
+        # which the TypeScript twin does not do.
+        text = path.read_bytes().decode("utf-8").replace("\r\n", "\n")
+        h.update(path.name.encode("utf-8"))
+        h.update(b"\x00")
+        h.update(text.encode("utf-8"))
+        h.update(b"\x00")
+    return "sha256:" + h.hexdigest()
 
 
 def load_golden(directory: str | Path) -> list[GoldenCase]:
@@ -160,3 +190,44 @@ class EvalHarness:
             cited_docs=cited_docs,
             abstained=abstained,
         )
+
+
+def report_payload(
+    report: EvalReport,
+    *,
+    agent_id: str,
+    agent_version: str,
+    suite_dir: str | Path,
+    sdk: str = "acp-agent-sdk-py@0.1.0",
+) -> dict[str, Any]:
+    """Renders a harness run as an acp-eval-report/v1 wire document.
+
+    Cases stay in run order; ``suite.digest`` is :func:`suite_digest` over
+    ``suite_dir``, so gates can refuse comparison when the suite changed.
+    """
+    return {
+        "schema": "acp-eval-report/v1",
+        "sdk": sdk,
+        "agent_id": agent_id,
+        "agent_version": agent_version,
+        "suite": {
+            "digest": suite_digest(suite_dir),
+            "case_count": len(report.results),
+        },
+        "metrics": {
+            "pass_rate": report.pass_rate,
+            "citation_precision": report.citation_precision,
+            "abstention_accuracy": report.abstention_accuracy,
+        },
+        "cases": [
+            {
+                "name": result.name,
+                "passed": result.passed,
+                "abstained": result.abstained,
+                "cited_docs": result.cited_docs,
+                "failures": result.failures,
+            }
+            for result in report.results
+        ],
+        "generated_at": datetime.now(UTC).isoformat(),
+    }

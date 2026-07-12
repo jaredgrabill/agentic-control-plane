@@ -1,6 +1,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { evalReport } from '@acp/protocol';
 import { describe, expect, it } from 'vitest';
 import {
   Agent,
@@ -9,6 +10,8 @@ import {
   EvalHarness,
   goldenCaseFromDict,
   loadGolden,
+  reportPayload,
+  suiteDigest,
   type GoldenCase,
 } from '../src/index.js';
 import { MANIFEST } from './fixtures.js';
@@ -188,5 +191,86 @@ describe('loadGolden', () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe('suiteDigest', () => {
+  const PARITY_GOLDEN = join(import.meta.dirname, '..', '..', '..', 'fixtures', 'parity', 'golden');
+  // The same literal is pinned in the Python SDK's test_evals.py — the
+  // digest is a cross-language contract, not an implementation detail.
+  const PARITY_GOLDEN_DIGEST =
+    'sha256:4c9ffc28c5b4e231bffc3d796c46fac1d9e75149b7c69c2e504801a2a07241fb';
+
+  it('matches the pinned cross-language digest of the parity golden suite', () => {
+    expect(suiteDigest(PARITY_GOLDEN)).toBe(PARITY_GOLDEN_DIGEST);
+  });
+
+  it('is line-ending independent: CRLF and LF checkouts hash identically', () => {
+    const lfDir = mkdtempSync(join(tmpdir(), 'acp-digest-lf-'));
+    const crlfDir = mkdtempSync(join(tmpdir(), 'acp-digest-crlf-'));
+    try {
+      const body = '{\n  "cases": []\n}\n';
+      writeFileSync(join(lfDir, 'cases.json'), body, 'utf-8');
+      writeFileSync(join(crlfDir, 'cases.json'), body.replaceAll('\n', '\r\n'), 'utf-8');
+      expect(suiteDigest(crlfDir)).toBe(suiteDigest(lfDir));
+      expect(suiteDigest(lfDir)).toMatch(/^sha256:[0-9a-f]{64}$/);
+    } finally {
+      rmSync(lfDir, { recursive: true, force: true });
+      rmSync(crlfDir, { recursive: true, force: true });
+    }
+  });
+
+  it('hashes files sorted by basename with name/content separation', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'acp-digest-'));
+    try {
+      writeFileSync(join(dir, 'b.json'), 'B', 'utf-8');
+      writeFileSync(join(dir, 'a.json'), 'A', 'utf-8');
+      writeFileSync(join(dir, 'ignored.txt'), 'nope', 'utf-8');
+      const digest = suiteDigest(dir);
+      // Moving content between files must change the digest even though the
+      // concatenated bytes stay the same.
+      writeFileSync(join(dir, 'b.json'), 'A', 'utf-8');
+      writeFileSync(join(dir, 'a.json'), 'B', 'utf-8');
+      expect(suiteDigest(dir)).not.toBe(digest);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('reportPayload', () => {
+  const PARITY_GOLDEN = join(import.meta.dirname, '..', '..', '..', 'fixtures', 'parity', 'golden');
+
+  it('emits a valid acp-eval-report/v1 document with cases in run order', async () => {
+    const report = await new EvalHarness(makeAgent()).run([
+      goldenCase({ name: 'first', expect: { must_contain: ['change freeze'] } }),
+      goldenCase({ name: 'second', expect: { must_contain: ['unicorns'] } }),
+    ]);
+    const payload = reportPayload(report, {
+      agentId: 'knowledge-agent',
+      agentVersion: '0.1.0',
+      suiteDir: PARITY_GOLDEN,
+    });
+    expect(() => evalReport.parse(payload)).not.toThrow();
+    expect(payload.sdk).toBe('acp-agent-sdk-ts@0.1.0');
+    expect(payload.agent_id).toBe('knowledge-agent');
+    expect(payload.suite.digest).toBe(suiteDigest(PARITY_GOLDEN));
+    expect(payload.suite.case_count).toBe(2);
+    expect(payload.cases.map((c) => c.name)).toEqual(['first', 'second']);
+    expect(payload.cases[1]?.passed).toBe(false);
+    expect(payload.cases[1]?.failures).toEqual(["answer does not mention 'unicorns'"]);
+    expect(payload.metrics.pass_rate).toBe(0.5);
+  });
+
+  it('honors an explicit sdk string', async () => {
+    const report = await new EvalHarness(makeAgent()).run([goldenCase()]);
+    const payload = reportPayload(report, {
+      agentId: 'knowledge-agent',
+      agentVersion: '0.1.0',
+      suiteDir: PARITY_GOLDEN,
+      sdk: 'custom-harness@9.9.9',
+    });
+    expect(payload.sdk).toBe('custom-harness@9.9.9');
+    expect(() => evalReport.parse(payload)).not.toThrow();
   });
 });

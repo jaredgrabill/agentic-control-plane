@@ -11,4 +11,6 @@ export {
   taskResult,
   stepRequest,
   stepResult,
+  evalReport,
+  evalBaseline,
 } from './validate.js';

@@ -11,6 +11,7 @@ from acp_protocol import ProtocolValidationError, validate, validation_errors
 from acp_protocol.generated.agent_card import AgentCard
 from acp_protocol.generated.agent_manifest import AgentManifest
 from acp_protocol.generated.audit_event import AuditEvent
+from acp_protocol.generated.eval_report import EvalReport
 from acp_protocol.generated.task_contract import TaskMessage
 from pydantic import BaseModel, RootModel, ValidationError
 
@@ -21,6 +22,7 @@ MODELS: dict[str, type[BaseModel]] = {
     "agent-card": AgentCard,
     "task-contract": TaskMessage,
     "audit-event": AuditEvent,
+    "eval-report": EvalReport,
 }
 
 

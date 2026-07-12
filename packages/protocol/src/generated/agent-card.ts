@@ -18,10 +18,7 @@ export interface AgentCard {
    */
   version: string;
   lifecycle_state: LifecycleState;
-  /**
-   * Scores the current active version achieves; gates are relative to this.
-   */
-  eval_baseline?: {};
+  eval_baseline?: EvalBaseline;
   registered_at: string;
   updated_at: string;
   deployed_at?: string;
@@ -137,4 +134,42 @@ export interface ToolBinding {
    * @minItems 1
    */
   scopes: [string, ...string[]];
+}
+/**
+ * Scores the current active version achieves; gates are relative to this.
+ */
+export interface EvalBaseline {
+  schema: 'acp-eval-baseline/v1';
+  agent_id: string;
+  agent_version: string;
+  metrics: EvalMetrics;
+  suite: EvalSuite;
+  /**
+   * The sdk string of the report the baseline was distilled from.
+   */
+  harness: string;
+  recorded_at: string;
+}
+/**
+ * Gated metrics, all higher-is-better on [0, 1]. Extra domain-specific metrics are allowed and gate like the core three.
+ */
+export interface EvalMetrics {
+  pass_rate: number;
+  citation_precision: number;
+  abstention_accuracy: number;
+  [k: string]: number;
+}
+/**
+ * Identity of the golden suite the run scored: a content digest over the case files, so a baseline can refuse comparison when the suite itself changed.
+ */
+export interface EvalSuite {
+  /**
+   * sha256 over the sorted *.json case files (basename NUL content NUL per file, CRLF normalized to LF).
+   */
+  digest: string;
+  case_count: number;
+  /**
+   * Repo-relative suite directory, informational.
+   */
+  path?: string;
 }

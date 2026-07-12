@@ -1,0 +1,16 @@
+{
+  "schema": "acp-eval-baseline/v1",
+  "agent_id": "regressed-fixture-agent",
+  "agent_version": "0.1.0",
+  "metrics": {
+    "pass_rate": 1.0,
+    "citation_precision": 1.0,
+    "abstention_accuracy": 1.0
+  },
+  "suite": {
+    "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "case_count": 7
+  },
+  "harness": "acp-agent-sdk-py@0.1.0",
+  "recorded_at": "2026-07-10T00:00:00Z"
+}
