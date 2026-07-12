@@ -1,0 +1,14 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3fa3",
+  "occurred_at": "2026-07-11T09:04:55Z",
+  "tenant": "acme",
+  "event_type": "task.cancel_requested",
+  "actor": {
+    "principal": "user:jane.doe",
+    "delegation_chain": [{ "sub": "user:jane.doe" }]
+  },
+  "action": { "name": "task.cancel_requested" },
+  "reason": { "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40" },
+  "artifacts": { "workflow_run_id": "task-0197a3b0-run-1" },
+  "details": { "reason": "kill switch drill — draining in-flight writes" }
+}

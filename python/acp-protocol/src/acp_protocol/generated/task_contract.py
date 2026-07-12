@@ -18,6 +18,25 @@ class Status(StrEnum):
 
 
 class Status1(StrEnum):
+    """
+    complete = every pushed compensator succeeded; incomplete = at least one compensator failed or could not be dispatched (a write remains in effect).
+    """
+
+    complete = "complete"
+    incomplete = "incomplete"
+
+
+class Trigger(StrEnum):
+    """
+    Why the unwind ran: a failed/skipped step, budget exhaustion, or task cancellation (incl. kill-switch-driven discovery failure).
+    """
+
+    step_failure = "step_failure"
+    budget_exhausted = "budget_exhausted"
+    cancellation = "cancellation"
+
+
+class Status2(StrEnum):
     completed = "completed"
     failed = "failed"
 
@@ -145,6 +164,27 @@ class TaskRequest(BaseModel):
     submitted_at: Timestamp | None = None
 
 
+class IrreversibleItem(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    step_id: Uuid
+    capability: CapabilityName
+
+
+class CompensationEntry(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    original_step_id: Uuid
+    original_capability: CapabilityName
+    compensator: CapabilityName
+    error: str | None = Field(
+        None,
+        description="For a failed entry: why the compensator did not run to completion.",
+    )
+
+
 class StepRequest(BaseModel):
     """
     One delegated step from the Orchestrator to one agent capability, dispatched as a Temporal activity. All state the handler needs is here — handlers are stateless.
@@ -186,7 +226,7 @@ class StepResult(BaseModel):
     step_id: Uuid
     task_id: Uuid
     tenant: TenantId
-    status: Status1
+    status: Status2
     output: dict[str, Any] | None = Field(
         None, description="Conforms to the capability's declared output_schema."
     )
@@ -225,6 +265,36 @@ class PlanStep(BaseModel):
         description="step_ids that must complete successfully first. A failed dependency skips this step (recorded as a gap), never retries the plan.",
     )
     rationale: str | None = None
+
+
+class CompensationReport(BaseModel):
+    """
+    Saga unwind summary, present iff a compensation trigger fired on a task that had completed R2+ writes with declared compensators. Compensators run in reverse (LIFO) of the order the writes completed; each entry names the original write and its compensating dispatch. Human-readable lines are additionally carried in `gaps`.
+    """
+
+    model_config = ConfigDict(
+        extra="forbid",
+    )
+    status: Status1 = Field(
+        ...,
+        description="complete = every pushed compensator succeeded; incomplete = at least one compensator failed or could not be dispatched (a write remains in effect).",
+    )
+    trigger: Trigger = Field(
+        ...,
+        description="Why the unwind ran: a failed/skipped step, budget exhaustion, or task cancellation (incl. kill-switch-driven discovery failure).",
+    )
+    compensated: list[CompensationEntry] = Field(
+        ...,
+        description="Writes successfully reversed, in the order the compensators ran (reverse of completion).",
+    )
+    failed: list[CompensationEntry] = Field(
+        ...,
+        description="Writes whose compensator failed or could not be dispatched — each remains in effect.",
+    )
+    irreversible: list[IrreversibleItem] = Field(
+        ...,
+        description="Completed R2+ writes flagged irreversible: not compensable, listed for honest reporting.",
+    )
 
 
 class Answer(BaseModel):
@@ -283,6 +353,7 @@ class TaskResult(BaseModel):
     )
     error: CapabilityError | None = None
     plan: Plan | None = None
+    compensation: CompensationReport | None = None
     workflow_run_id: str | None = None
     completed_at: Timestamp | None = None
 

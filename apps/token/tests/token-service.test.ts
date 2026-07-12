@@ -578,6 +578,184 @@ describe('approval binding (item 1)', () => {
   });
 });
 
+describe('compensation binding (item 2)', () => {
+  const COMPENSATION = {
+    original_step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+    original_capability: 'gov.test_write',
+    approval_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90',
+    approver: 'user:approver.ops',
+  };
+  const SNAPSHOT = {
+    sub: 'user:jane.doe',
+    tenant: 'acme',
+    roles: ['tenant-user'],
+    scopes: ['task:submit', 'gov:test:write'],
+  };
+  const APPROVAL = {
+    approval_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90',
+    decision_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f91',
+    approver: 'user:approver.ops',
+    step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+    capability: 'gov.test_write',
+    subject_digest: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+  };
+  const NO_COMP = Symbol('none');
+  const base = (compensation: unknown = COMPENSATION) => ({
+    grant_type: BROKER_DELEGATION_GRANT,
+    subject: SNAPSHOT,
+    audience: 'acp:agent:approval-test-agent',
+    scope: 'gov:test:write',
+    actor: 'agent:approval-test-agent@0.1.0',
+    grounds: {
+      task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      verified_at: new Date().toISOString(),
+    },
+    ...(compensation === NO_COMP ? {} : { compensation }),
+  });
+
+  async function delegate(payload: unknown, auth = basic('svc-orchestrator', 'orch-secret')) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/delegate',
+      headers: { authorization: auth },
+      payload: payload as Record<string, unknown>,
+    });
+    return { statusCode: res.statusCode, body: res.json<{ access_token?: string }>() };
+  }
+
+  it('signs a well-formed compensation claim into the brokered token', async () => {
+    const res = await delegate(base());
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token!) as unknown as PlatformClaims;
+    expect(claims.compensation).toEqual({
+      original_step_id: COMPENSATION.original_step_id,
+      original_capability: 'gov.test_write',
+      approval_id: COMPENSATION.approval_id,
+      approver: 'user:approver.ops',
+    });
+  });
+
+  it('a delegation without compensation grounds carries no compensation claim', async () => {
+    const res = await delegate(base(NO_COMP));
+    expect(res.statusCode).toBe(200);
+    expect(decodeJwt(res.body.access_token!).compensation).toBeUndefined();
+  });
+
+  it('signs compensation without the optional approval fields (ungated original write)', async () => {
+    const res = await delegate(
+      base({
+        original_step_id: COMPENSATION.original_step_id,
+        original_capability: 'gov.test_write',
+      }),
+    );
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token!) as unknown as PlatformClaims;
+    expect(claims.compensation).toEqual({
+      original_step_id: COMPENSATION.original_step_id,
+      original_capability: 'gov.test_write',
+    });
+  });
+
+  it('rejects malformed compensation grounds → 400', async () => {
+    for (const bad of [
+      { ...COMPENSATION, original_step_id: 'not-a-uuid' },
+      { ...COMPENSATION, original_capability: 'NotACapability' },
+      { ...COMPENSATION, original_capability: '' },
+      { ...COMPENSATION, approval_id: 'nope' },
+      { ...COMPENSATION, approver: '' },
+    ]) {
+      const res = await delegate(base(bad));
+      expect(res.statusCode, JSON.stringify(bad)).toBe(400);
+    }
+  });
+
+  it('refuses approval AND compensation grounds together → 400', async () => {
+    const res = await delegate({ ...base(), approval: APPROVAL });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.body)).toContain('not both');
+  });
+
+  it('the issue route refuses a body-supplied compensation field', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: {
+        grant_type: 'client_credentials',
+        audience: 'acp:gateway',
+        compensation: COMPENSATION,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain('compensation');
+  });
+
+  it('the exchange route refuses a body-supplied compensation field', async () => {
+    const userToken = await issueUserToken('knowledge:search:read');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: userToken,
+        audience: 'acp:tools',
+        compensation: COMPENSATION,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('propagates compensation verbatim across the agent same-actor acp:tools exchange', async () => {
+    const delegated = (await delegate(base())).body.access_token!;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('agent-approval', 'agent-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: delegated,
+        audience: 'acp:tools',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.json<{ access_token: string }>().access_token);
+    expect((claims as unknown as PlatformClaims).compensation?.original_step_id).toBe(
+      COMPENSATION.original_step_id,
+    );
+  });
+
+  it('DROPS compensation when a platform client appends a NEW actor', async () => {
+    const delegated = (await delegate(base())).body.access_token!;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('svc-orchestrator', 'orch-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: delegated,
+        audience: 'acp:tools',
+        actor: 'agent:someone-else@0.1.0',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(
+      decodeJwt(res.json<{ access_token: string }>().access_token).compensation,
+    ).toBeUndefined();
+  });
+
+  it('emits token.brokered audit carrying the compensation grounds and original step_id', async () => {
+    auditEvents.length = 0;
+    await delegate(base());
+    const event = auditEvents.find((e) => e.event_type === 'token.brokered');
+    expect(event?.reason?.step_id).toBe(COMPENSATION.original_step_id);
+    expect(
+      (event?.details as { compensation?: { original_capability: string } }).compensation
+        ?.original_capability,
+    ).toBe('gov.test_write');
+  });
+});
+
 describe('ADR-0007 broker delegation', () => {
   const SNAPSHOT = {
     sub: 'user:jane.doe',

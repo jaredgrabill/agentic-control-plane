@@ -50,6 +50,77 @@ export interface StepDispatch {
   /** The full plan and its digest — carried so the approval subject can show an approver the whole plan (blast radius). */
   plan: Plan;
   planDigest: string;
+  /**
+   * Set ONLY by the TaskWorkflow unwind loop when this dispatch is a
+   * compensator for an already-completed write. Agents never construct a
+   * StepDispatch, so this flag can only originate inside the orchestrator —
+   * it is what routes the delegation through permit-compensation (no re-gate),
+   * signs the token's compensation claim, and tags the step audits. A
+   * require-approval verdict here is a policy bug that fails closed (a
+   * compensator is pre-authorized by the original write's approval).
+   */
+  compensation?: CompensationDispatch;
+}
+
+/** Compensation provenance carried on a compensator's StepDispatch. */
+export interface CompensationDispatch {
+  /** step_id of the original write being reversed. */
+  originalStepId: string;
+  /** capability of the original write (e.g. change.submit). */
+  originalCapability: string;
+  /** The approval that authorized the original write, if it was gated. */
+  approval?: ExecutedApproval;
+}
+
+/** The approval grounds recorded when a gated write executed (subset carried for compensation). */
+export interface ExecutedApproval {
+  approval_id: string;
+  decision_id?: string;
+  approver?: string;
+  subject_digest?: string;
+}
+
+/**
+ * What one AgentStepWorkflow actually executed — only the child knows the
+ * discovered capability's risk and reversibility (dispatch-time discovery).
+ * Present whenever the step reached the agent (regardless of outcome); the
+ * TaskWorkflow reads it to decide whether to push a compensation-stack entry
+ * (completed R2/R3 with a compensator) or record an irreversible write.
+ */
+export interface ExecutedWrite {
+  agentId: string;
+  agentVersion: string;
+  risk: string;
+  compensator?: string;
+  irreversible?: boolean;
+  approval?: ExecutedApproval;
+}
+
+/** AgentStepWorkflow's return: the step result plus what (if anything) executed. */
+export interface StepExecution {
+  result: StepResult;
+  executed?: ExecutedWrite;
+}
+
+/**
+ * One entry on the TaskWorkflow compensation stack: a completed R2/R3 write
+ * with a declared compensator. Pushed in wave order (deterministic under
+ * replay); the stack is unwound LIFO. The compensator's input is derived
+ * mechanically from the recorded write (never attacker-supplied):
+ * `{original: {step_id, capability, input, output}}`.
+ */
+export interface CompensationEntry {
+  originalStepId: string;
+  originalCapability: string;
+  compensator: string;
+  agentId: string;
+  agentVersion: string;
+  /** The original write's step input. */
+  input: Record<string, unknown>;
+  /** The original write's output — compensators often need the handles it returned. */
+  output?: Record<string, unknown>;
+  /** The approval that authorized the original write, if it was gated. */
+  approval?: ExecutedApproval;
 }
 
 /** Timeouts governing an approval gate. No per-task override in v1. */
@@ -132,6 +203,14 @@ export interface ApprovalTokenGrounds {
   subject_digest: string;
 }
 
+/** Signed compensation grounds threaded into a compensator's broker mint (mirrors the token service's CompensationGrounds). */
+export interface CompensationTokenGrounds {
+  original_step_id: string;
+  original_capability: string;
+  approval_id?: string;
+  approver?: string;
+}
+
 /** Control-plane activities implemented by the orchestrator's own worker. */
 export interface ControlActivities {
   /**
@@ -167,6 +246,15 @@ export interface ControlActivities {
     requestedScopes: string[];
     taskId: string;
     stepId: string;
+    /**
+     * Present only for a compensator dispatch — added to Cedar
+     * `context.compensation` so permit-compensation (not the R2 gate) decides,
+     * and the unwind is never lifted to require-approval.
+     */
+    compensation?: {
+      originalStepId: string;
+      originalCapability: string;
+    };
   }): Promise<{
     decision: 'allow' | 'deny' | 'require-approval';
     bundle_version: string;
@@ -190,6 +278,12 @@ export interface ControlActivities {
     taskId: string;
     /** Signed into the token's approval claim when the step passed an approval gate. */
     approval?: ApprovalTokenGrounds;
+    /**
+     * Signed into the token's compensation claim when the step is a
+     * compensator dispatched during a saga unwind. Mutually exclusive with
+     * `approval` (the token service refuses both together).
+     */
+    compensation?: CompensationTokenGrounds;
   }): Promise<{ token: string }>;
   /** Protocol-validated audit emission (JetStream-acked). */
   emitAudit(event: Record<string, unknown>): Promise<void>;

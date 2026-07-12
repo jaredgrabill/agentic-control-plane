@@ -27,6 +27,10 @@ export interface TaskStarter {
     tenant: string,
     taskId: string,
   ): Promise<{ status: 'running' | 'completed' | 'failed' | 'not_found'; result?: TaskResult }>;
+  cancel(
+    tenant: string,
+    taskId: string,
+  ): Promise<{ outcome: 'cancelling' | 'not_found' | 'already_terminal' }>;
 }
 
 /** The approver-facing view of a running (or just-closed) ApprovalWorkflow. */
@@ -188,6 +192,53 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
         .send({ error: { message: `no task ${task_id} in tenant ${claims.tenant}`, status: 404 } });
     }
     return reply.send({ task_id, status: status.status, result: status.result ?? null });
+  });
+
+  // Cancel a running task (kill-switch drain, or an operator aborting a task).
+  // Tenant-scoped by construction: a foreign task id reads as absent (404). A
+  // terminal task is a 409. On success the task is NOT torn down — it drains
+  // the in-flight wave, unwinds its compensation stack, and returns an honest
+  // `cancelled` result the caller can still retrieve at GET /v1/tasks/:id.
+  app.post('/v1/tasks/:task_id/cancel', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, TASK_SUBMIT_SCOPE);
+    const { task_id } = request.params as { task_id: string };
+    if (typeof task_id !== 'string' || !UUID_RE.test(task_id)) {
+      throw new AuthError('task_id must be a uuid', 400);
+    }
+    const body = (request.body ?? {}) as { reason?: string };
+
+    const result = await deps.starter.cancel(claims.tenant, task_id);
+    if (result.outcome === 'not_found') {
+      return reply
+        .status(404)
+        .send({ error: { message: `no task ${task_id} in tenant ${claims.tenant}`, status: 404 } });
+    }
+    if (result.outcome === 'already_terminal') {
+      return reply.status(409).send({
+        error: { message: `task ${task_id} is already terminal — nothing to cancel`, status: 409 },
+      });
+    }
+
+    const span = trace.getActiveSpan();
+    span?.setAttributes({ 'acp.tenant': claims.tenant, 'acp.task_id': task_id });
+
+    // Audit the request from the VERIFIED caller (actor = claims.sub) — the
+    // cancellation itself is attested even though the drain/unwind is the
+    // workflow's own compensation.* records.
+    await deps.audit.publish({
+      event_id: randomUUID(),
+      occurred_at: (deps.now?.() ?? new Date()).toISOString(),
+      tenant: claims.tenant,
+      event_type: 'task.cancel_requested',
+      actor: { principal: claims.sub, delegation_chain: delegationChain(claims) },
+      action: { name: 'task.cancel_requested' },
+      reason: { task_id },
+      artifacts: span !== undefined ? { trace_id: span.spanContext().traceId } : {},
+      ...(body.reason === undefined ? {} : { details: { reason: body.reason } }),
+    });
+
+    return reply.status(202).send({ task_id, status: 'cancelling' });
   });
 
   // Full approval context for an approver to decide on: capability + risk,

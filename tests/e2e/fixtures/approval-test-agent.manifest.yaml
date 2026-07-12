@@ -39,15 +39,18 @@ capabilities:
         description: apply a governed write to record-3
   - name: gov.test_undo
     description: >
-      Compensator for gov.test_write — reverses the governed write. Declared
-      for registration completeness; invoked by the compensation machinery
-      (item 2), never by this slice.
-    risk: R1
+      Compensator for gov.test_write — reverses the governed write. Its own
+      compensator is gov.test_write (a mutual pair), which exercises the item-2
+      registration rules (dangling/self/contradiction/risk all pass). Invoked
+      by the compensation machinery during a saga unwind.
+    risk: R2
+    compensator: gov.test_write
     input_schema:
       type: object
       additionalProperties: true
       properties:
         target: { type: string }
+        original: { type: object }
     output_schema:
       type: object
       required: [text, citations, confidence]
@@ -64,3 +67,27 @@ capabilities:
         description: undo the governed write to record-2
       - input: { target: record-3 }
         description: undo the governed write to record-3
+  - name: gov.test_fail
+    description: >
+      An R0 capability that always fails permanently — used by the compensation
+      E2E slice to trigger an unwind of the preceding gov.test_write.
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: true
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: {}
+        description: always fails
+      - input: { note: a }
+        description: always fails
+      - input: { note: b }
+        description: always fails

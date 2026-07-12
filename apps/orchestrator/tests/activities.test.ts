@@ -462,6 +462,64 @@ describe('brokerToken', () => {
     });
     expect(Object.hasOwn(body!, 'approval')).toBe(false);
   });
+
+  it('forwards compensation grounds into the broker request during an unwind', async () => {
+    let body: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn((_u: string | URL, init?: RequestInit) => {
+      body = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return jsonResponse({ access_token: 'brokered.jwt' });
+    }) as unknown as typeof fetch;
+    const compensation = {
+      original_step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+      original_capability: 'gov.test_write',
+      approval_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90',
+      approver: 'user:approver.ops',
+    };
+    await makeActivities(fetchImpl).brokerToken({
+      snapshot,
+      agent: card,
+      scopes: ['gov:test:write'],
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      compensation,
+    });
+    expect(body!.compensation).toEqual(compensation);
+    expect(Object.hasOwn(body!, 'approval')).toBe(false);
+  });
+});
+
+describe('authorizeDelegation compensation context', () => {
+  it('adds context.compensation when the dispatch is a compensator', async () => {
+    let authorizeBody: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn((url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      authorizeBody = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return jsonResponse({
+        decision: 'allow',
+        bundle_version: 'v',
+        determining_policies: ['permit-compensation'],
+      });
+    }) as unknown as typeof fetch;
+
+    await makeActivities(fetchImpl).authorizeDelegation({
+      principal: 'user:jane.doe',
+      tenant: 'acme',
+      agent: card,
+      capability: 'knowledge.answer_with_citations',
+      snapshot,
+      requestedScopes: [],
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      stepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44',
+      compensation: {
+        originalStepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+        originalCapability: 'gov.test_write',
+      },
+    });
+    expect((authorizeBody!.context as Record<string, unknown>).compensation).toEqual({
+      active: true,
+      original_step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+      original_capability: 'gov.test_write',
+    });
+  });
 });
 
 describe('digestApprovalSubject', () => {

@@ -9,10 +9,12 @@
  */
 import {
   ApplicationFailure,
+  CancellationScope,
   condition,
   defineQuery,
   defineSignal,
   executeChild,
+  isCancellation,
   proxyActivities,
   setHandler,
   uuid4,
@@ -44,10 +46,17 @@ import {
   type ApprovalOutcome,
   type ApprovalSubject,
   type ApprovalTokenGrounds,
+  type CompensationEntry,
+  type CompensationTokenGrounds,
   type ControlActivities,
+  type ExecutedWrite,
   type PrincipalSnapshot,
   type StepDispatch,
+  type StepExecution,
 } from './types.js';
+
+/** Risk classes whose completed writes are candidates for the compensation stack. */
+const WRITE_RISKS = new Set(['R2', 'R3']);
 
 const control = proxyActivities<ControlActivities>({
   startToCloseTimeout: '10 seconds',
@@ -55,6 +64,37 @@ const control = proxyActivities<ControlActivities>({
 });
 
 export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
+  // Cancellation: the task body runs NON-cancellable so a cancel (or a
+  // kill-switch-driven cancel) never tears the workflow down mid-write.
+  // Instead the root scope's cancelRequested sets a flag and cancels ONLY the
+  // current wave's explicit (cancellable) scope, so pre-dispatch phases
+  // (discovery, policy, approval wait, broker) abort promptly while a shielded
+  // execute_capability finishes. The body then drains the wave, unwinds any
+  // completed writes, and returns an honest `cancelled` report via
+  // handle.result() (NOT CancelledFailure — an auditor must retrieve it).
+  let cancellationRequested = false;
+  let waveScope: CancellationScope | undefined;
+  CancellationScope.current().cancelRequested.catch(() => {
+    cancellationRequested = true;
+    waveScope?.cancel();
+  });
+
+  return CancellationScope.nonCancellable((): Promise<TaskResult> =>
+    runTaskBody(
+      task,
+      () => cancellationRequested,
+      (scope) => {
+        waveScope = scope;
+      },
+    ),
+  );
+}
+
+async function runTaskBody(
+  task: TaskRequest,
+  isCancelled: () => boolean,
+  setWaveScope: (scope: CancellationScope | undefined) => void,
+): Promise<TaskResult> {
   if (task.subject_token === undefined) {
     return fail(task, {
       class: 'permanent',
@@ -145,6 +185,14 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
   const skipped = new Map<string, string>();
   let budgetStop: string | undefined;
 
+  // Saga compensation stack: completed R2/R3 writes with a declared
+  // compensator, pushed in wave order (deterministic under replay) and unwound
+  // LIFO on failure/cancellation. Irreversible completed writes are recorded
+  // separately for honest reporting — they are never dispatched.
+  const compensationStack: CompensationEntry[] = [];
+  const irreversibleWrites: { step_id: string; capability: string }[] = [];
+  const stepNumberOf = (stepId: string): number => steps.findIndex((s) => s.step_id === stepId) + 1;
+
   const emitSkipped = async (step: PlanStep, gap: string): Promise<void> => {
     skipped.set(step.step_id, gap);
     await control.emitAudit({
@@ -168,6 +216,11 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
   };
 
   for (;;) {
+    // A cancellation between waves stops dispatch immediately: no new wave
+    // starts, the remaining steps are marked cancelled below, and the unwind
+    // runs.
+    if (isCancelled()) break;
+
     // 1) Dependency skips, to fixpoint: a failed or skipped dependency
     // skips the dependents — recorded as gaps, never a plan retry.
     let changed = true;
@@ -235,27 +288,45 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
         ledger.maxCostMicros,
       );
       ledger.stepsDispatched += wave.length;
-      const waveResults = await Promise.all(
-        wave.map((step) =>
-          runStep({
-            taskId: task.task_id,
-            tenant: task.tenant,
-            principal: task.principal,
-            snapshot,
-            planStep: step,
-            planRef: {
-              planId: plan.plan_id,
-              index: steps.findIndex((s) => s.step_id === step.step_id),
-              total,
-            },
-            depth: 1,
-            plan,
-            planDigest,
-            ...(remaining === undefined ? {} : { budget: remaining }),
-          }),
-        ),
+      // The wave runs in an explicit CANCELLABLE scope so a task cancel aborts
+      // its in-flight pre-dispatch phases (the shielded execute_capability
+      // still finishes). The scope reference is handed to the root
+      // cancelRequested handler; the surrounding body stays non-cancellable.
+      const waveResults = await CancellationScope.cancellable(
+        async (): Promise<StepExecution[]> => {
+          setWaveScope(CancellationScope.current());
+          try {
+            return await Promise.all(
+              wave.map((step) =>
+                runStep({
+                  taskId: task.task_id,
+                  tenant: task.tenant,
+                  principal: task.principal,
+                  snapshot,
+                  planStep: step,
+                  planRef: {
+                    planId: plan.plan_id,
+                    index: steps.findIndex((s) => s.step_id === step.step_id),
+                    total,
+                  },
+                  depth: 1,
+                  plan,
+                  planDigest,
+                  ...(remaining === undefined ? {} : { budget: remaining }),
+                }),
+              ),
+            );
+          } finally {
+            setWaveScope(undefined);
+          }
+        },
       );
-      for (const result of waveResults) {
+      // Tally + push in WAVE order (deterministic under replay).
+      for (let i = 0; i < wave.length; i += 1) {
+        const step = wave[i];
+        const execution = waveResults[i];
+        if (step === undefined || execution === undefined) continue;
+        const { result, executed } = execution;
         results.set(result.step_id, result);
         ledger.inputTokens += result.usage?.input_tokens ?? 0;
         ledger.outputTokens += result.usage?.output_tokens ?? 0;
@@ -267,9 +338,187 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
           stepCosts.set(result.step_id, micros);
           if (fallbackUsed) anyFallbackPriced = true;
         }
+        // Compensation stack: only a COMPLETED R2/R3 write with a declared
+        // compensator is pushed (a failed write's side-effect state is unknown
+        // — not compensated v1). An irreversible completed write is recorded
+        // separately for honest reporting; it is never dispatched.
+        if (
+          result.status === 'completed' &&
+          executed !== undefined &&
+          WRITE_RISKS.has(executed.risk)
+        ) {
+          if (executed.compensator !== undefined) {
+            compensationStack.push({
+              originalStepId: step.step_id,
+              originalCapability: step.capability,
+              compensator: executed.compensator,
+              agentId: executed.agentId,
+              agentVersion: executed.agentVersion,
+              input: step.input,
+              ...(result.output === undefined ? {} : { output: result.output }),
+              ...(executed.approval === undefined ? {} : { approval: executed.approval }),
+            });
+          } else if (executed.irreversible === true) {
+            irreversibleWrites.push({ step_id: step.step_id, capability: step.capability });
+          }
+        }
       }
     }
     if (budgetStop !== undefined) break;
+    if (isCancelled()) break;
+  }
+
+  // On cancellation, every step that never started (or is still unresolved) is
+  // an honest gap before we unwind what DID complete.
+  if (isCancelled()) {
+    for (const s of steps) {
+      if (results.has(s.step_id) || skipped.has(s.step_id)) continue;
+      await emitSkipped(s, `task cancelled — ${s.capability} not executed`);
+    }
+  }
+
+  // --- Saga unwind ------------------------------------------------------
+  // All-or-nothing for change plans: unwind iff a trigger fired AND there are
+  // completed writes to compensate. A plan whose every step completed and was
+  // not cancelled keeps its writes (the fast path — zero compensation events).
+  const allCompleted = steps.every((s) => results.get(s.step_id)?.status === 'completed');
+  const trigger: 'cancellation' | 'budget_exhausted' | 'step_failure' | undefined = isCancelled()
+    ? 'cancellation'
+    : budgetStop !== undefined
+      ? 'budget_exhausted'
+      : !allCompleted
+        ? 'step_failure'
+        : undefined;
+
+  const extraGaps: string[] = [];
+  let compensationReport: NonNullable<TaskResult['compensation']> | undefined;
+
+  if (trigger !== undefined && (compensationStack.length > 0 || irreversibleWrites.length > 0)) {
+    const compensated: {
+      original_step_id: string;
+      original_capability: string;
+      compensator: string;
+    }[] = [];
+    const failedComps: {
+      original_step_id: string;
+      original_capability: string;
+      compensator: string;
+      error: string;
+    }[] = [];
+
+    if (compensationStack.length > 0) {
+      // Unwind order is the reverse of the push order (LIFO): the last write
+      // is compensated first. Deterministic under replay.
+      const unwindOrder = [...compensationStack].reverse();
+      await control.emitAudit(
+        compensationAudit(task, 'compensation.started', {
+          trigger,
+          stack_depth: unwindOrder.length,
+          entries: unwindOrder.map((e) => ({
+            original_step_id: e.originalStepId,
+            original_capability: e.originalCapability,
+            compensator: e.compensator,
+          })),
+        }),
+      );
+
+      for (const entry of unwindOrder) {
+        const n = stepNumberOf(entry.originalStepId);
+        // Synthetic compensator step. Input is derived MECHANICALLY from the
+        // recorded write (never attacker-supplied): {original: {…}}. New uuid
+        // step_id, depth 1, NO budget (cleanup is a safety obligation; budget
+        // exhaustion may be the very trigger; usage is still tallied).
+        const compStep: PlanStep = {
+          step_id: uuid4(),
+          capability: entry.compensator,
+          input: {
+            original: {
+              step_id: entry.originalStepId,
+              capability: entry.originalCapability,
+              input: entry.input,
+              ...(entry.output === undefined ? {} : { output: entry.output }),
+            },
+          },
+          rationale: `compensation for ${entry.originalCapability} (step ${n})`,
+        };
+        const { result } = await runStep({
+          taskId: task.task_id,
+          tenant: task.tenant,
+          principal: task.principal,
+          snapshot,
+          planStep: compStep,
+          planRef: { planId: plan.plan_id, index: n - 1, total },
+          depth: 1,
+          plan,
+          planDigest,
+          compensation: {
+            originalStepId: entry.originalStepId,
+            originalCapability: entry.originalCapability,
+            ...(entry.approval === undefined ? {} : { approval: entry.approval }),
+          },
+        });
+        // Tally compensation usage into the totals (no budget gate, but the
+        // spend is real and must be reported).
+        ledger.inputTokens += result.usage?.input_tokens ?? 0;
+        ledger.outputTokens += result.usage?.output_tokens ?? 0;
+        if (book !== undefined) {
+          ledger.costMicros += priceUsageMicros(result.usage, book).micros;
+        }
+        const record = {
+          original_step_id: entry.originalStepId,
+          original_capability: entry.originalCapability,
+          compensator: entry.compensator,
+        };
+        if (result.status === 'completed') {
+          compensated.push(record);
+        } else {
+          // Compensator failure is first-class and loudly audited; keep
+          // unwinding the rest (entries are independent — aborting strands them).
+          const errMsg = result.error?.message ?? 'compensator failed';
+          const effect =
+            `compensation incomplete: ${entry.originalCapability} (step ${n}) remains in effect — ` +
+            `${entry.compensator} failed: ${errMsg}`;
+          failedComps.push({ ...record, error: errMsg });
+          extraGaps.push(effect);
+          await control.emitAudit(
+            compensationAudit(
+              task,
+              'compensation.step_failed',
+              { ...record, effect, error: errMsg },
+              entry.originalStepId,
+            ),
+          );
+        }
+      }
+    }
+
+    // Irreversible completed writes are never dispatched — reported honestly.
+    for (const irr of irreversibleWrites) {
+      extraGaps.push(
+        `compensation: ${irr.capability} (step ${stepNumberOf(irr.step_id)}) is irreversible — ` +
+          `the write was not undone`,
+      );
+    }
+
+    compensationReport = {
+      status: failedComps.length > 0 ? 'incomplete' : 'complete',
+      trigger,
+      compensated,
+      failed: failedComps,
+      irreversible: irreversibleWrites,
+    };
+
+    if (compensationStack.length > 0) {
+      await control.emitAudit(
+        compensationAudit(task, 'compensation.completed', {
+          status: compensationReport.status,
+          trigger,
+          compensated,
+          failed: failedComps,
+          irreversible: irreversibleWrites,
+        }),
+      );
+    }
   }
 
   const outcomes: StepOutcome[] = steps.map((step) => {
@@ -282,20 +531,28 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
     };
   });
   const synthesized = synthesizeAnswer(outcomes);
-  const error: CapabilityError | undefined =
-    budgetStop !== undefined
+  // A cancelled task reports status `cancelled` and carries no top-level error
+  // (the gaps and compensation block explain what happened). Otherwise the
+  // budget-exhausted / synthesized error stands.
+  const cancelled = isCancelled();
+  const status: TaskResult['status'] = cancelled ? 'cancelled' : synthesized.status;
+  const error: CapabilityError | undefined = cancelled
+    ? undefined
+    : budgetStop !== undefined
       ? { class: 'budget_exhausted', message: budgetStop }
       : synthesized.error;
+  const gaps = [...synthesized.gaps, ...extraGaps];
 
   const result: TaskResult = {
     kind: 'task_result',
     task_id: task.task_id,
     tenant: task.tenant,
-    status: synthesized.status,
+    status,
     ...(synthesized.answer !== undefined ? { answer: synthesized.answer } : {}),
-    ...(synthesized.gaps.length > 0 ? { gaps: synthesized.gaps } : {}),
+    ...(gaps.length > 0 ? { gaps } : {}),
     ...(error !== undefined ? { error } : {}),
     plan,
+    ...(compensationReport !== undefined ? { compensation: compensationReport } : {}),
     workflow_run_id: workflowInfo().runId,
     completed_at: new Date().toISOString(),
   };
@@ -314,7 +571,7 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
     artifacts: { workflow_run_id: workflowInfo().runId },
     details: {
       status: result.status,
-      gaps: synthesized.gaps,
+      gaps,
       steps: steps.map((s) => ({
         step_id: s.step_id,
         capability: s.capability,
@@ -334,44 +591,102 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
       price_book_version: book?.version ?? null,
       ...(anyFallbackPriced ? { cost_fallback_priced: true } : {}),
       budget: task.budget ?? null,
+      ...(cancelled ? { cancelled: true } : {}),
+      ...(compensationReport !== undefined ? { compensation: compensationReport } : {}),
     },
   });
 
   return result;
 }
 
+/** Builds a compensation-lifecycle audit event (actor = orchestrator). */
+function compensationAudit(
+  task: TaskRequest,
+  eventType: 'compensation.started' | 'compensation.step_failed' | 'compensation.completed',
+  details: Record<string, unknown>,
+  stepId?: string,
+): Record<string, unknown> {
+  return {
+    event_id: uuid4(),
+    occurred_at: new Date().toISOString(),
+    tenant: task.tenant,
+    event_type: eventType,
+    actor: {
+      principal: 'svc:orchestrator',
+      delegation_chain: [{ sub: task.principal }, { sub: 'svc:orchestrator' }],
+    },
+    action: { name: eventType },
+    reason: { task_id: task.task_id, ...(stepId === undefined ? {} : { step_id: stepId }) },
+    artifacts: { workflow_run_id: workflowInfo().runId },
+    details,
+  };
+}
+
 /** Joins a child step; NEVER throws — a failed branch is a gap, not a dead task. */
-async function runStep(dispatch: StepDispatch): Promise<StepResult> {
+async function runStep(dispatch: StepDispatch): Promise<StepExecution> {
+  // A compensator's child gets a distinct, deterministic id keyed on the
+  // ORIGINAL step it reverses; a normal step keys on its own step_id.
+  const workflowId =
+    dispatch.compensation === undefined
+      ? `${workflowInfo().workflowId}-step-${dispatch.planStep.step_id}`
+      : `${workflowInfo().workflowId}-comp-${dispatch.compensation.originalStepId}`;
   try {
-    return await executeChild(AgentStepWorkflow, {
-      args: [dispatch],
-      workflowId: `${workflowInfo().workflowId}-step-${dispatch.planStep.step_id}`,
-    });
+    return await executeChild(AgentStepWorkflow, { args: [dispatch], workflowId });
   } catch (err) {
+    // Even a child that fails with CancelledFailure (or any envelope) becomes a
+    // typed failed result here — a failed branch is a gap, not a dead task.
+    const message = isCancellation(err) ? 'task cancelled — step not executed' : rootMessage(err);
     return {
-      kind: 'step_result',
-      step_id: dispatch.planStep.step_id,
-      task_id: dispatch.taskId,
-      tenant: dispatch.tenant,
-      status: 'failed',
-      error: {
-        class: applicationFailureType(err) === 'Retryable' ? 'retryable' : 'permanent',
-        message: rootMessage(err),
+      result: {
+        kind: 'step_result',
+        step_id: dispatch.planStep.step_id,
+        task_id: dispatch.taskId,
+        tenant: dispatch.tenant,
+        status: 'failed',
+        error: {
+          class: applicationFailureType(err) === 'Retryable' ? 'retryable' : 'permanent',
+          message,
+        },
       },
     };
   }
 }
 
-export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepResult> {
-  const { planStep, snapshot } = dispatch;
-  const failed = (error: NonNullable<StepResult['error']>): StepResult => ({
-    kind: 'step_result',
-    step_id: planStep.step_id,
-    task_id: dispatch.taskId,
-    tenant: dispatch.tenant,
-    status: 'failed',
-    error,
+export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepExecution> {
+  const { planStep } = dispatch;
+  const failed = (error: NonNullable<StepResult['error']>): StepExecution => ({
+    result: {
+      kind: 'step_result',
+      step_id: planStep.step_id,
+      task_id: dispatch.taskId,
+      tenant: dispatch.tenant,
+      status: 'failed',
+      error,
+    },
   });
+  const isCompensation = dispatch.compensation !== undefined;
+
+  try {
+    return await runAgentStep(dispatch, failed, isCompensation);
+  } catch (err) {
+    // Pre-dispatch phases (discovery, policy, approval wait, broker) are
+    // freely cancellable: a task cancel here means nothing executed, so the
+    // step is an honest not-executed failure and there is nothing to
+    // compensate. The dangerous execute_capability phase is shielded below and
+    // never reaches this catch by cancellation.
+    if (isCancellation(err)) {
+      return failed({ class: 'permanent', message: 'task cancelled — step not executed' });
+    }
+    throw err;
+  }
+}
+
+async function runAgentStep(
+  dispatch: StepDispatch,
+  failed: (error: NonNullable<StepResult['error']>) => StepExecution,
+  isCompensation: boolean,
+): Promise<StepExecution> {
+  const { planStep, snapshot } = dispatch;
 
   // Depth guard FIRST: enforcement precedes discovery and minting.
   if (dispatch.depth > MAX_DELEGATION_DEPTH) {
@@ -425,6 +740,16 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
     requestedScopes,
     taskId: dispatch.taskId,
     stepId: planStep.step_id,
+    // A compensator dispatch tags Cedar context so permit-compensation (not
+    // the R2 gate) decides — the unwind is never re-suspended on approval.
+    ...(dispatch.compensation === undefined
+      ? {}
+      : {
+          compensation: {
+            originalStepId: dispatch.compensation.originalStepId,
+            originalCapability: dispatch.compensation.originalCapability,
+          },
+        }),
   });
   if (decision.decision === 'deny') {
     return failed({
@@ -433,6 +758,23 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
         `policy denied delegation of ${planStep.capability} to ${card.manifest.id} ` +
         `(bundle ${decision.bundle_version}) — the principal's scopes or the capability's ` +
         'risk class do not satisfy any permit',
+    });
+  }
+
+  // A require-approval verdict on a COMPENSATION dispatch is a policy bug:
+  // compensators are pre-authorized by the write's original approval and must
+  // never re-gate (a human gate on an unwind would strand a live write and
+  // could deadlock an unattended failure). Fail closed as compensation-
+  // incomplete — NEVER spawn an ApprovalWorkflow on this branch. This is the
+  // structural guarantee that the compensation path has no executeChild(
+  // ApprovalWorkflow).
+  if (isCompensation && decision.decision === 'require-approval') {
+    return failed({
+      class: 'policy_denied',
+      message:
+        `compensation delegation of ${planStep.capability} to ${card.manifest.id} returned ` +
+        'require-approval — compensators are pre-authorized by the original write’s approval ' +
+        'and must not re-gate (policy misconfiguration); the write remains in effect',
     });
   }
 
@@ -520,16 +862,33 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
     };
   }
 
+  // Compensation grounds for a compensator's mint (mutually exclusive with
+  // approval — the token service refuses both). Carries the original write's
+  // approval id/approver when it was gated, joining the unwind to the decision.
+  const compensationGrounds: CompensationTokenGrounds | undefined = dispatch.compensation
+    ? {
+        original_step_id: dispatch.compensation.originalStepId,
+        original_capability: dispatch.compensation.originalCapability,
+        ...(dispatch.compensation.approval?.approval_id === undefined
+          ? {}
+          : { approval_id: dispatch.compensation.approval.approval_id }),
+        ...(dispatch.compensation.approval?.approver === undefined
+          ? {}
+          : { approver: dispatch.compensation.approval.approver }),
+      }
+    : undefined;
+
   // Minted per step at dispatch — the ADR-0007 payoff: a step running at
   // t+3h carries a token as fresh as one minted at t+3s. When the step passed
-  // an approval gate, the mint carries the signed approval grounds; the token
-  // service refuses self-approval before it signs the claim.
+  // an approval gate, the mint carries the signed approval grounds; a
+  // compensator's mint carries the signed compensation grounds instead.
   const { token } = await control.brokerToken({
     snapshot,
     agent: card,
     scopes: requestedScopes,
     taskId: dispatch.taskId,
     ...(approvalGrounds === undefined ? {} : { approval: approvalGrounds }),
+    ...(compensationGrounds === undefined ? {} : { compensation: compensationGrounds }),
   });
 
   const request: StepRequest = {
@@ -546,11 +905,22 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
     ...(dispatch.budget !== undefined ? { budget: dispatch.budget } : {}),
   };
 
+  const compensationDetails =
+    dispatch.compensation === undefined
+      ? {}
+      : {
+          compensation: {
+            original_step_id: dispatch.compensation.originalStepId,
+            original_capability: dispatch.compensation.originalCapability,
+          },
+        };
+
   await control.emitAudit(
     stepAudit(dispatch, 'step.dispatched', card, {
       capability: planStep.capability,
       policy: decision,
       ...(approvalGrounds === undefined ? {} : { approval_id: approvalGrounds.approval_id }),
+      ...compensationDetails,
     }),
   );
 
@@ -563,16 +933,44 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
     },
   });
 
-  const result = await agent.execute_capability(request);
+  // SHIELD: execute_capability and its step.completed audit run inside a
+  // non-cancellable scope. A task cancel that arrives mid-write lets the write
+  // finish and be recorded — so the parent KNOWS the write happened and can
+  // unwind it ("we did X and undid it") rather than leaving unknown state.
+  const result = await CancellationScope.nonCancellable(async (): Promise<StepResult> => {
+    const stepResult = await agent.execute_capability(request);
+    await control.emitAudit(
+      stepAudit(dispatch, 'step.completed', card, {
+        capability: planStep.capability,
+        status: stepResult.status,
+        usage: stepResult.usage ?? null,
+        ...compensationDetails,
+      }),
+    );
+    return stepResult;
+  });
 
-  await control.emitAudit(
-    stepAudit(dispatch, 'step.completed', card, {
-      capability: planStep.capability,
-      status: result.status,
-      usage: result.usage ?? null,
-    }),
-  );
-  return result;
+  // Executed metadata — only the child knows the discovered capability's risk
+  // and reversibility. The TaskWorkflow reads it to build the compensation
+  // stack (completed R2/R3 with a compensator) or record an irreversible write.
+  const executed: ExecutedWrite = {
+    agentId: card.manifest.id,
+    agentVersion: card.version,
+    risk: declared.risk,
+    ...(declared.compensator === undefined ? {} : { compensator: declared.compensator }),
+    ...(declared.irreversible === undefined ? {} : { irreversible: declared.irreversible }),
+    ...(approvalGrounds === undefined
+      ? {}
+      : {
+          approval: {
+            approval_id: approvalGrounds.approval_id,
+            decision_id: approvalGrounds.decision_id,
+            approver: approvalGrounds.approver,
+            subject_digest: approvalGrounds.subject_digest,
+          },
+        }),
+  };
+  return { result, executed };
 }
 
 /** Signal the gateway sends a verified human decision on. */

@@ -31,6 +31,24 @@ context.approval.capability == "<capability>"`) plus an annotated
 the lift is restrictive, a sloppy gate can only over-gate (block), never
 silently bypass — the fail-safe direction.
 
+### Compensation carve-out (item 2)
+
+When a task fails, is cancelled, or is caught by a kill switch, the
+orchestrator unwinds its saga: it re-dispatches each completed R2+ write's
+declared compensator through the SAME delegation PEP, tagged with a
+`compensation` context flag (`context.compensation.active == true`).
+`permit-compensation.cedar` is a **plain** permit (no `@decision`) that allows
+these delegations outright for R1/R2 in the same tenant — a compensator is
+**pre-authorized by the write's original approval** and must never re-suspend
+on a human gate (re-gating would strand a live write whenever a task failed
+unattended). Correspondingly, `gate-r2-delegation.cedar` carries
+`!(context has compensation)` so the restrictive lift never fires on an
+unwind. Item 3's R2 tool policies MUST honor `context.compensation` the same
+way (a compensator's tool call is not itself re-gated). The `compensation`
+flag can only originate in the TaskWorkflow unwind loop — agents never
+construct a `StepDispatch` — and is carried defense-in-depth by a signed
+`compensation` token claim (broker-minted only).
+
 ## Authorization model (v0)
 
 | Element | Types | Notes |

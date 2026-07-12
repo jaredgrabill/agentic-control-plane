@@ -5,6 +5,6 @@ export type { LifecycleState, AgentCard, AgentManifest, Capability, ToolBinding,
 export type { RiskClass, Classification } from './agent-manifest.js';
 export type { Uuid, EventType, Digest, AuditEvent, DelegationLink, PolicyDecisionRef } from './audit-event.js';
 export type { UnitInterval, EvalReport, EvalCaseResult } from './eval-report.js';
-export type { TaskMessage, TenantId, Timestamp, CapabilityName, TaskRequest, Budget, TaskResult, Answer, Citation, CapabilityError, Plan, PlanStep, StepRequest, TraceContext, StepResult, Usage } from './task-contract.js';
+export type { TaskMessage, TenantId, Timestamp, CapabilityName, TaskRequest, Budget, TaskResult, Answer, Citation, CapabilityError, Plan, PlanStep, CompensationReport, CompensationEntry, StepRequest, TraceContext, StepResult, Usage } from './task-contract.js';
 export * from './schemas.js';
 export * from './subjects-data.js';

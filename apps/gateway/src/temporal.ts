@@ -85,6 +85,35 @@ export class TemporalTaskStarter implements TaskStarter {
       throw err;
     }
   }
+
+  /**
+   * Requests cooperative cancellation of a running task. The workflow id is
+   * tenant-scoped, so a cross-tenant cancel is structurally a not_found — a
+   * foreign task id can never be probed. A terminal workflow returns
+   * `already_terminal` (409, not an error): the drain-then-unwind already ran
+   * or the task finished. The TaskWorkflow catches the cancel, drains the
+   * in-flight wave, unwinds the compensation stack, and returns an honest
+   * `cancelled` result — it does NOT fault.
+   */
+  async cancel(
+    tenant: string,
+    taskId: string,
+  ): Promise<{ outcome: 'cancelling' | 'not_found' | 'already_terminal' }> {
+    const handle = this.client.workflow.getHandle(taskWorkflowId(tenant, taskId));
+    try {
+      const description = await handle.describe();
+      if (description.status.name !== 'RUNNING' && description.status.name !== 'CONTINUED_AS_NEW') {
+        return { outcome: 'already_terminal' };
+      }
+      await handle.cancel();
+      return { outcome: 'cancelling' };
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) {
+        return { outcome: 'not_found' };
+      }
+      throw err;
+    }
+  }
 }
 
 /** The shape the ApprovalWorkflow's approvalStatus query returns. */

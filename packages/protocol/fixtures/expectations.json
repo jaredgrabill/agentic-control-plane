@@ -93,6 +93,21 @@
       "schema": "task-contract",
       "valid": false
     },
+    {
+      "file": "task-contract/valid-task-result-compensated.json",
+      "schema": "task-contract",
+      "valid": true
+    },
+    {
+      "file": "task-contract/valid-task-result-compensation-incomplete.json",
+      "schema": "task-contract",
+      "valid": true
+    },
+    {
+      "file": "task-contract/invalid-compensation-bad-trigger.json",
+      "schema": "task-contract",
+      "valid": false
+    },
     { "file": "audit-event/valid-policy-decision.json", "schema": "audit-event", "valid": true },
     { "file": "audit-event/valid-corpus-mutation.json", "schema": "audit-event", "valid": true },
     { "file": "audit-event/valid-retrieval-served.json", "schema": "audit-event", "valid": true },
@@ -117,6 +132,26 @@
     },
     { "file": "audit-event/valid-approval-granted.json", "schema": "audit-event", "valid": true },
     { "file": "audit-event/valid-approval-timeout.json", "schema": "audit-event", "valid": true },
+    {
+      "file": "audit-event/valid-compensation-started.json",
+      "schema": "audit-event",
+      "valid": true
+    },
+    {
+      "file": "audit-event/valid-compensation-step-failed.json",
+      "schema": "audit-event",
+      "valid": true
+    },
+    {
+      "file": "audit-event/valid-compensation-completed.json",
+      "schema": "audit-event",
+      "valid": true
+    },
+    {
+      "file": "audit-event/valid-task-cancel-requested.json",
+      "schema": "audit-event",
+      "valid": true
+    },
     { "file": "eval-report/valid-knowledge-run.json", "schema": "eval-report", "valid": true },
     {
       "file": "eval-report/invalid-metric-out-of-range.json",

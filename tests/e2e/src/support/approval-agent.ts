@@ -9,7 +9,7 @@
  */
 
 import { join } from 'node:path';
-import { Agent } from '@acp/agent-sdk';
+import { Agent, CapabilityError, ErrorClass } from '@acp/agent-sdk';
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { repoRoot } from './platform.js';
 
@@ -24,31 +24,47 @@ export const APPROVAL_MANIFEST_PATH = join(
 
 export interface RunningAgent {
   shutdown(): Promise<void>;
+  /** Every capability invocation, in order — the compensation slice asserts the undo call + its {original} input. */
+  readonly calls: { capability: string; input: Record<string, unknown> }[];
 }
 
 /** Starts the in-process approval-test-agent worker; resolves once it is polling. */
 export async function startApprovalAgent(): Promise<RunningAgent> {
   const agent = Agent.fromManifest(APPROVAL_MANIFEST_PATH);
+  const calls: { capability: string; input: Record<string, unknown> }[] = [];
 
   // Canned handlers: return a valid Answer envelope so the task synthesizes to
-  // completed. The point under test is that the write only runs AFTER a human
-  // approval — the content is incidental.
-  const canned = (verb: string) => (_ctx: unknown, input: Record<string, unknown>) => {
-    const target = typeof input.target === 'string' ? input.target : 'record';
-    return Promise.resolve({
-      text: `${verb} applied to ${target} [1]`,
-      citations: [
-        {
-          doc_id: 'gov/change-log',
-          version: '1',
-          lineage_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3faa',
-        },
-      ],
-      confidence: 0.95,
-    });
-  };
-  agent.capability('gov.test_write', canned('write'));
-  agent.capability('gov.test_undo', canned('undo'));
+  // completed. The point under test is governance (approval + compensation),
+  // not the content. Every call is recorded so the compensation slice can
+  // assert gov.test_undo ran with the {original} write context.
+  const canned =
+    (verb: string, capability: string) => (_ctx: unknown, input: Record<string, unknown>) => {
+      calls.push({ capability, input });
+      const target = typeof input.target === 'string' ? input.target : 'record';
+      return Promise.resolve({
+        text: `${verb} applied to ${target} [1]`,
+        citations: [
+          {
+            doc_id: 'gov/change-log',
+            version: '1',
+            lineage_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3faa',
+          },
+        ],
+        confidence: 0.95,
+      });
+    };
+  agent.capability('gov.test_write', canned('write', 'gov.test_write'));
+  agent.capability('gov.test_undo', canned('undo', 'gov.test_undo'));
+  // Always fails permanently — used to trigger a saga unwind of the write.
+  agent.capability('gov.test_fail', (_ctx: unknown, input: Record<string, unknown>) => {
+    calls.push({ capability: 'gov.test_fail', input });
+    return Promise.reject(
+      new CapabilityError(
+        ErrorClass.Permanent,
+        'gov.test_fail always fails (compensation trigger)',
+      ),
+    );
+  });
 
   const connection = await NativeConnection.connect({
     address: process.env.ACP_TEMPORAL_ADDRESS ?? 'localhost:7233',
@@ -64,6 +80,7 @@ export async function startApprovalAgent(): Promise<RunningAgent> {
   // run() resolves when shutdown() is called; keep the handle to await it.
   const running = worker.run();
   return {
+    calls,
     async shutdown() {
       worker.shutdown();
       await running;

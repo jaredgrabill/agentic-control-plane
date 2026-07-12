@@ -58,6 +58,7 @@ export interface TaskResult {
   gaps?: string[];
   error?: CapabilityError;
   plan?: Plan;
+  compensation?: CompensationReport;
   workflow_run_id?: string;
   completed_at?: Timestamp;
 }
@@ -320,6 +321,43 @@ export interface PlanStep {
    */
   depends_on?: Uuid[];
   rationale?: string;
+}
+/**
+ * Saga unwind summary, present iff a compensation trigger fired on a task that had completed R2+ writes with declared compensators. Compensators run in reverse (LIFO) of the order the writes completed; each entry names the original write and its compensating dispatch. Human-readable lines are additionally carried in `gaps`.
+ */
+export interface CompensationReport {
+  /**
+   * complete = every pushed compensator succeeded; incomplete = at least one compensator failed or could not be dispatched (a write remains in effect).
+   */
+  status: 'complete' | 'incomplete';
+  /**
+   * Why the unwind ran: a failed/skipped step, budget exhaustion, or task cancellation (incl. kill-switch-driven discovery failure).
+   */
+  trigger: 'step_failure' | 'budget_exhausted' | 'cancellation';
+  /**
+   * Writes successfully reversed, in the order the compensators ran (reverse of completion).
+   */
+  compensated: CompensationEntry[];
+  /**
+   * Writes whose compensator failed or could not be dispatched — each remains in effect.
+   */
+  failed: CompensationEntry[];
+  /**
+   * Completed R2+ writes flagged irreversible: not compensable, listed for honest reporting.
+   */
+  irreversible: {
+    step_id: Uuid;
+    capability: CapabilityName;
+  }[];
+}
+export interface CompensationEntry {
+  original_step_id: Uuid;
+  original_capability: CapabilityName;
+  compensator: CapabilityName;
+  /**
+   * For a failed entry: why the compensator did not run to completion.
+   */
+  error?: string;
 }
 /**
  * One delegated step from the Orchestrator to one agent capability, dispatched as a Temporal activity. All state the handler needs is here — handlers are stateless.

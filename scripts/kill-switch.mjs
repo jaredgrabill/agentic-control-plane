@@ -92,6 +92,23 @@ async function runRegistry(action, agentId, reason) {
   console.log(
     `${action} ${agentId} propagated in ${Date.now() - started}ms (SLO < 10s): ${JSON.parse(body).lifecycle_state}`,
   );
+  if (action === 'suspend') {
+    // Suspension stops NEW dispatch, but does not signal running Temporal
+    // workflows. In-flight tasks auto-unwind at their next dispatch (discovery
+    // fails); to stop one NOW, cancel it explicitly (agent-lifecycle.md runbook).
+    console.log(
+      '\nreminder: in-flight tasks are NOT interrupted by suspension alone.\n' +
+        '  - they auto-unwind at their next step (discovery of the suspended agent fails), OR\n' +
+        `  - force a drain-then-unwind now: POST ${gatewayUrl()}/v1/tasks/<task_id>/cancel\n` +
+        '  - a compensation whose ONLY server is the suspended agent stays incomplete —\n' +
+        '    compensate manually (see docs/architecture/agent-lifecycle.md kill-switch runbook).',
+    );
+  }
+}
+
+/** The gateway base URL used in the post-suspend reminder. */
+function gatewayUrl() {
+  return process.env.ACP_GATEWAY_URL ?? 'http://localhost:7100';
 }
 
 async function runDenylist(action, principal, reason, tenant) {

@@ -23,6 +23,8 @@ const started: TaskRequest[] = [];
 const auditEvents: AuditEvent[] = [];
 let fleetHalt: KillSwitchState | undefined;
 let statusResponse: Awaited<ReturnType<Parameters<typeof buildGatewayApp>[0]['starter']['status']>>;
+let cancelResponse: Awaited<ReturnType<Parameters<typeof buildGatewayApp>[0]['starter']['cancel']>>;
+const cancelCalls: { tenant: string; taskId: string }[] = [];
 
 const APPROVAL_ID = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90';
 const SUBJECT_DIGEST = `sha256:${'a'.repeat(64)}`;
@@ -68,6 +70,10 @@ beforeAll(async () => {
         return Promise.resolve({ workflowRunId: `run-${req.task_id}` });
       },
       status: () => Promise.resolve(statusResponse),
+      cancel: (tenant, taskId) => {
+        cancelCalls.push({ tenant, taskId });
+        return Promise.resolve(cancelResponse);
+      },
     },
     approvals: {
       // Mirrors TemporalApprovalGateway: cross-tenant reads as absent.
@@ -94,6 +100,8 @@ beforeEach(() => {
   auditEvents.length = 0;
   fleetHalt = undefined;
   statusResponse = { status: 'running' };
+  cancelResponse = { outcome: 'cancelling' };
+  cancelCalls.length = 0;
   approvalView = makeApprovalView();
   decideCalls.length = 0;
 });
@@ -252,6 +260,7 @@ describe('POST /v1/tasks', () => {
       starter: {
         start: () => Promise.resolve({ workflowRunId: 'run-x' }),
         status: () => Promise.resolve({ status: 'running' as const }),
+        cancel: () => Promise.resolve({ outcome: 'cancelling' as const }),
       },
       approvals: {
         status: () => Promise.resolve(undefined),
@@ -306,6 +315,56 @@ describe('GET /v1/tasks/:task_id', () => {
     expect(missing.statusCode).toBe(404);
 
     const unauthed = await app.inject({ url: '/v1/tasks/nope' });
+    expect(unauthed.statusCode).toBe(401);
+  });
+});
+
+describe('POST /v1/tasks/:task_id/cancel', () => {
+  const TASK = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40';
+  const cancel = async (token: string, taskId = TASK, body: Record<string, unknown> = {}) =>
+    app.inject({
+      method: 'POST',
+      url: `/v1/tasks/${taskId}/cancel`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: body,
+    });
+
+  it('202s, calls the tenant-scoped starter, and audits task.cancel_requested', async () => {
+    cancelResponse = { outcome: 'cancelling' };
+    const res = await cancel(await makeToken(), TASK, { reason: 'kill switch drill' });
+    expect(res.statusCode).toBe(202);
+    expect(res.json<{ status: string }>().status).toBe('cancelling');
+    expect(cancelCalls).toEqual([{ tenant: 'acme', taskId: TASK }]);
+    const event = auditEvents.find((e) => e.event_type === 'task.cancel_requested');
+    expect(event).toBeDefined();
+    expect(event!.actor.principal).toBe('user:jane.doe');
+    expect((event!.details as { reason: string }).reason).toBe('kill switch drill');
+    expect(event!.reason?.task_id).toBe(TASK);
+  });
+
+  it('404s for an unknown OR cross-tenant task (reads as absent), with no audit', async () => {
+    cancelResponse = { outcome: 'not_found' };
+    const res = await cancel(await makeToken());
+    expect(res.statusCode).toBe(404);
+    expect(auditEvents.some((e) => e.event_type === 'task.cancel_requested')).toBe(false);
+  });
+
+  it('409s for an already-terminal task', async () => {
+    cancelResponse = { outcome: 'already_terminal' };
+    const res = await cancel(await makeToken());
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('403s without the task:submit scope', async () => {
+    const res = await cancel(await makeToken({ scope: 'audit:read' }));
+    expect(res.statusCode).toBe(403);
+    expect(cancelCalls).toHaveLength(0);
+  });
+
+  it('400s for a non-uuid task id and 401s without auth', async () => {
+    const bad = await cancel(await makeToken(), 'not-a-uuid');
+    expect(bad.statusCode).toBe(400);
+    const unauthed = await app.inject({ method: 'POST', url: `/v1/tasks/${TASK}/cancel` });
     expect(unauthed.statusCode).toBe(401);
   });
 });
