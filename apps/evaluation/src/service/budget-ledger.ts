@@ -224,16 +224,34 @@ export async function startBudgetLedgerConsumer(
 }
 
 /**
- * Interval reaper: releases reservations older than maxAgeSeconds. Never
- * throws out of the tick (pg hiccups retry next tick); unref'd so it never
- * keeps the process alive.
+ * Interval reaper: re-applies the current period's caps, then releases
+ * reservations older than maxAgeSeconds. Never throws out of the tick (pg
+ * hiccups retry next tick); unref'd so it never keeps the process alive.
+ *
+ * The cap re-upsert is what keeps caps alive across a UTC month rollover:
+ * caps are upserted for the CURRENT period only (at boot and here), so after
+ * the month turns over there is no tenant_budget row for the new period and
+ * reserve() would find no cap → skip admission (every capped tenant runs
+ * UNCAPPED until restart). Re-upserting each tick (idempotent ON CONFLICT)
+ * guarantees the new period's cap rows exist within one interval of the
+ * rollover. `caps` is undefined only when ACP_TENANT_BUDGETS is unset (no
+ * caps configured at all).
  */
 export function startBudgetReaper(
   ledger: PgBudgetLedger,
   logger: Logger,
-  options: { maxAgeSeconds: number; intervalMs: number },
+  options: { maxAgeSeconds: number; intervalMs: number; caps?: TenantBudgetCaps | undefined },
 ): { stop(): void } {
   const tick = async (): Promise<void> => {
+    if (options.caps !== undefined) {
+      try {
+        // Idempotent: refreshes existing rows and materializes the new
+        // period's rows after a month rollover.
+        await ledger.upsertCaps(options.caps);
+      } catch (err) {
+        logger.error({ err }, 'budget reaper cap re-upsert failed — retrying next interval');
+      }
+    }
     try {
       const released = await ledger.reapExpiredReservations(options.maxAgeSeconds);
       if (released > 0) {

@@ -49,17 +49,22 @@ export async function startEvalService(): Promise<void> {
   // reaper releases reservations of tasks that never completed.
   const ledger = new PgBudgetLedger(pool);
   const capsPath = env('ACP_TENANT_BUDGETS', '');
+  let caps: TenantBudgetCaps | undefined;
   if (capsPath !== '') {
-    const caps = JSON.parse(readFileSync(capsPath, 'utf8')) as TenantBudgetCaps;
+    caps = JSON.parse(readFileSync(capsPath, 'utf8')) as TenantBudgetCaps;
     await ledger.upsertCaps(caps);
     logger.info({ tenants: Object.keys(caps) }, 'tenant budget caps applied for current period');
   } else {
     logger.warn('ACP_TENANT_BUDGETS not set — no tenant budget caps (all tenants uncapped)');
   }
   const ledgerConsumer = await startBudgetLedgerConsumer(nc, ledger, logger);
+  // The reaper re-upserts caps every tick so the current period's cap rows
+  // survive a UTC month rollover (else capped tenants run uncapped until a
+  // restart re-runs the boot upsert above).
   const reaper = startBudgetReaper(ledger, logger, {
     maxAgeSeconds: envInt('ACP_TASK_RESERVATION_MAX_AGE_SECONDS', 86_400),
     intervalMs: envInt('ACP_BUDGET_REAPER_INTERVAL_SECONDS', 300) * 1000,
+    caps,
   });
 
   const { actions, agentMeta } = createActionClients({
