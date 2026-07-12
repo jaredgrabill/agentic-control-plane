@@ -100,6 +100,31 @@ exchange so the tool gateway can bind it. Five audit events —
 context, the approver, and `rubber_stamp = latency_ms < 1000`. Slack/ITSM
 surfaces and per-task timeout overrides remain future work.
 
+**Compensation is pre-authorized by the original approval (Phase 3 item 2).**
+When a saga unwinds, the orchestrator re-dispatches each completed write's
+declared compensator through the same delegation PEP tagged
+`context.compensation.active == true`. `permit-compensation.cedar` (a plain
+permit for R1/R2, same tenant) allows these **outright**, and
+`gate-r2-delegation.cedar` carries `!(context has compensation)` so the
+restrictive lift never fires on an unwind. The justification is threefold:
+(1) **liveness** — the unwind runs precisely when a task failed, was cancelled,
+or was kill-switched, often unattended; a human gate there would leave a live
+R2 write dangling and a timeout-deny would make every unattended failure
+permanently un-compensated; (2) **consent already given** — the ApprovalSubject
+the approver saw names the compensator, so approving `change.submit ⇄
+change.withdraw` *is* approving the pair, and the compensator's input is derived
+mechanically from recorded history, never attacker-supplied; (3) **risk
+asymmetry** — a compensator restores the prior state, so refusing it preserves
+the *higher*-risk state. This is enforced structurally: the compensation branch
+of `AgentStepWorkflow` has no `ApprovalWorkflow` path, so a `require-approval`
+verdict there fails closed as compensation-incomplete (never a deadlock). The
+compensator's broker-minted token carries a signed `compensation` claim
+(correlation-bound, with the original `approval_id`); v1 does not cross-verify
+that id against a live approval record — the audit stream joins them (documented
+residual). Per the exemption matrix, compensators are exempt from fleet + risk
+kill switches (a halt must not strand an in-flight write), but not from
+named-capability or agent-tier switches.
+
 ## Risk Classes Drive Everything
 
 | | R0 read | R1 draft | R2 write-gated | R3 write-auto |

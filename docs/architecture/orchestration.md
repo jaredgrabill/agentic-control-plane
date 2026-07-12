@@ -97,9 +97,73 @@ storms.
 | Agent returns schema-invalid output | One structured-repair retry, then step failure — never "best-effort parse" |
 | Agent step exceeds SLA | Activity timeout → retry on healthy worker → step failure → plan-level fallback (degrade, or report partial results honestly) |
 | Approval times out | Deny by default; task reports the unapproved step as not executed |
-| Kill switch mid-task | Cancellation signal → compensation stack unwinds → task reports partial state |
+| Kill switch mid-task (v1) | Dispatch-time discovery of a suspended agent fails the next step → the unwind trigger fires and the compensation stack unwinds. A `POST /v1/tasks/:id/cancel` (or fleet cancel) drains the in-flight wave, unwinds, and returns status `cancelled`. Fleet-wide auto-cancellation via NATS is item 5. |
 | Worker crash | Temporal replays; activities are idempotent by standard (idempotency keys on all writes) |
 
 Partial results are a first-class outcome: a cross-domain brief with four of
 five agents reporting is delivered as such, with the gap stated — never
 silently backfilled by the LLM.
+
+## Compensation (saga stacks) — v1
+
+The orchestrator keeps a **compensation stack**: after every wave it pushes, in
+wave order (deterministic under replay), one entry per step that **completed**
+and whose executed capability is an **R2/R3 write with a declared compensator**.
+Only the child `AgentStepWorkflow` knows the discovered capability (dispatch-time
+discovery), so it returns the write's risk, compensator, and approval grounds to
+the parent as executed metadata.
+
+**All-or-nothing for change plans.** A plan that contains R2 writes is a change
+plan; half a change is worse than none. The stack unwinds when it is non-empty
+AND a trigger fired — `step_failure` (any failed/skipped step, including
+dependency skips), `budget_exhausted`, or `cancellation`. If every step
+completed and nothing was cancelled, the writes are kept (no compensation
+events). Accepted v1 cost: an unrelated R0 branch failure tears down a good
+write in the same plan — governed plans are cohesive, and the report states what
+was undone and why. Dependency-scoped compensation is documented future work.
+
+**Unwind is LIFO, sequential, and re-gated at nothing.** Each compensator is
+dispatched through the SAME governed pipeline (discovery → policy → broker →
+audits) with a `compensation` flag, in reverse of the push order. The
+compensator's input is derived **mechanically** from the recorded write —
+`{original: {step_id, capability, input, output}}` — never attacker-supplied.
+The unwind runs with **no budget gate** (cleanup is a safety obligation, and
+budget exhaustion may be the very trigger; usage is still tallied). Compensator
+executions reuse `step.dispatched`/`step.completed` with `details.compensation`,
+bracketed by `compensation.started` (entries in unwind order) and
+`compensation.completed` (status/trigger/compensated/failed/irreversible).
+
+**Failed writes are never compensated (v1).** A write that *failed* left the
+side-effect state unknown; re-running its compensator could corrupt or double
+an effect. Only completed writes are on the stack. **Irreversible** completed
+writes (declared `irreversible: true`, no compensator) are never dispatched —
+they are listed in the compensation block and a gap states the write "was not
+undone".
+
+**Compensator failure is first-class.** A compensator that fails (or whose agent
+cannot be discovered) emits `compensation.step_failed`, is recorded under
+`failed`, and the unwind **continues** for the remaining entries (they are
+independent; aborting would strand them). The task reports
+`compensation.status: incomplete` with a gap naming the write that "remains in
+effect". It never changes the task status by itself.
+
+**Cancellation drains, then unwinds, and reports `cancelled`.** The TaskWorkflow
+body runs inside `CancellationScope.nonCancellable`; a cancel (operator abort or
+kill switch) sets a flag and cancels only the current wave's explicit scope.
+Pre-dispatch phases (discovery, policy, **approval wait**, broker) abort
+promptly — the child catches the cancellation and reports the step as *not
+executed* (nothing to compensate). The dangerous `execute_capability` phase and
+its `step.completed` audit are **shielded** in a non-cancellable scope, so a
+mid-write cancel lets the write finish and be recorded — the platform then KNOWS
+the write happened and unwinds it, rather than leaving unknown state. The task
+then marks unstarted steps skipped, unwinds, and returns a `TaskResult` with
+status **`cancelled`** — deliberately NOT a `CancelledFailure`, so
+`handle.result()` still retrieves the honest report (gaps + compensation block).
+
+**Compensators are pre-authorized; unwind never re-gates.** See
+governance-and-policy.md: the original write's approval authorizes its
+compensator, so a `require-approval` verdict on a compensation dispatch is a
+policy bug that fails closed as compensation-incomplete — the compensation
+branch has no `ApprovalWorkflow`. The `compensation` flag can only originate in
+the TaskWorkflow unwind loop (agents never construct a `StepDispatch`), and is
+carried defense-in-depth by a signed, broker-minted `compensation` token claim.

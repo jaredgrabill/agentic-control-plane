@@ -104,6 +104,37 @@ Each tier has a named owner and a runbook, requires no vendor involvement,
 and is exercised quarterly (game days). Every activation is itself an audit
 event.
 
+**Kill-switch mid-task delivery (v1, Phase 3 item 2).** Suspending an agent
+(`scripts/kill-switch.mjs suspend <id>`) does NOT by itself signal running
+Temporal workflows. Two mechanisms cover in-flight tasks:
+
+1. **Auto-unwind via discovery.** Every step re-discovers its agent at dispatch
+   time, and a suspended agent is not `active`, so the *next* step of any
+   in-flight task fails — which fires the compensation trigger and unwinds the
+   writes already completed (the main payoff, with zero new delivery
+   machinery). A task blocked on an approval or a long activity is not
+   interrupted until its next dispatch.
+2. **Explicit cancel** for tasks that must stop *now*:
+   `POST /v1/tasks/:task_id/cancel` (scope `task:submit`, tenant-scoped;
+   emits `task.cancel_requested`). The workflow drains the in-flight wave,
+   unwinds the compensation stack, and returns status `cancelled`.
+
+**Runbook — suspend an agent with in-flight write tasks:**
+1. `scripts/kill-switch.mjs suspend <agent-id> --reason "<why>"` — flips the
+   registry flag; new dispatch to that agent stops within seconds.
+2. Identify in-flight tasks touching the agent (audit stream: `step.dispatched`
+   for the agent with no terminal `task.completed`). A fleet task→agent index
+   for automatic routing arrives with item 5; until then this is a manual join.
+3. For each such task, `POST /v1/tasks/:task_id/cancel` to force the
+   drain-then-unwind, or let auto-unwind fire at the next dispatch.
+4. Verify each task's terminal `compensation.completed`. A
+   `compensation.status: incomplete` means a write remains in effect —
+   **if the suspended agent was the only server of the compensator, the unwind
+   cannot route through it** (auto-routing a compensator through a just-killed
+   agent would contradict the kill switch). Compensate manually per the
+   capability's runbook and record it.
+5. On `reinstate`, re-run any incomplete compensations.
+
 ## Dynamic Registration and Discovery
 
 - **Register:** agent deployment (CI-driven) submits the manifest to the
