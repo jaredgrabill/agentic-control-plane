@@ -56,8 +56,22 @@ class Usage(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
     )
-    input_tokens: int | None = Field(None, ge=0)
+    input_tokens: int | None = Field(
+        None,
+        description="Non-cached input tokens only. Cache reads/writes are counted separately below and priced at their own rates; they do NOT count toward max_tokens.",
+        ge=0,
+    )
     output_tokens: int | None = Field(None, ge=0)
+    cache_read_tokens: int | None = Field(
+        None,
+        description="Input tokens served from the provider's prompt cache. Priced at the cache-read rate; excluded from max_tokens accounting.",
+        ge=0,
+    )
+    cache_write_tokens: int | None = Field(
+        None,
+        description="Input tokens written to the provider's prompt cache (cache creation). Priced at the cache-write rate; excluded from max_tokens accounting.",
+        ge=0,
+    )
     model: str | None = None
     llm_calls: int | None = Field(None, ge=0)
     tool_calls: int | None = Field(None, ge=0)

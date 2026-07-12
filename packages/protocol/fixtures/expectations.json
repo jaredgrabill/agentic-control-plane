@@ -54,6 +54,11 @@
       "valid": true
     },
     {
+      "file": "task-contract/valid-step-result-cache-tokens.json",
+      "schema": "task-contract",
+      "valid": true
+    },
+    {
       "file": "task-contract/invalid-unknown-status.json",
       "schema": "task-contract",
       "valid": false

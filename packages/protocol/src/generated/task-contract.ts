@@ -368,8 +368,19 @@ export interface StepResult {
   usage?: Usage;
 }
 export interface Usage {
+  /**
+   * Non-cached input tokens only. Cache reads/writes are counted separately below and priced at their own rates; they do NOT count toward max_tokens.
+   */
   input_tokens?: number;
   output_tokens?: number;
+  /**
+   * Input tokens served from the provider's prompt cache. Priced at the cache-read rate; excluded from max_tokens accounting.
+   */
+  cache_read_tokens?: number;
+  /**
+   * Input tokens written to the provider's prompt cache (cache creation). Priced at the cache-write rate; excluded from max_tokens accounting.
+   */
+  cache_write_tokens?: number;
   model?: string;
   llm_calls?: number;
   tool_calls?: number;
