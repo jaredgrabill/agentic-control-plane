@@ -9,6 +9,7 @@ export {
   intersectScopes,
   scopesOf,
   type ActClaim,
+  type ApprovalClaim,
   type BrokeredClaim,
   type PlatformClaims,
 } from './auth.js';
@@ -27,4 +28,4 @@ export {
   KillSwitchWatcher,
   type KillSwitchState,
 } from './killswitch.js';
-export { sha256Digest } from './digest.js';
+export { sha256Digest, stableStringify } from './digest.js';

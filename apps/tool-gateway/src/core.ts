@@ -38,6 +38,8 @@ import { ToolInputValidators } from './validate.js';
 export interface KillSwitch {
   fleetHalt(): { active: boolean; reason?: string } | undefined;
   agentSuspension(agentId: string): { active: boolean; reason?: string } | undefined;
+  /** Broker-time denylist backstop: revokes a specific user/service/agent principal. */
+  principalDenied(sub: string): { active: boolean; reason?: string } | undefined;
 }
 
 export interface AuditSink {
@@ -147,6 +149,24 @@ export class ToolGatewayCore {
         );
       }
     }
+    // Principal-denylist backstop (0c QA MEDIUM). 0c revoked denylisted
+    // principals only at broker time, so an outstanding ≤15min acp:tools token
+    // for a denylisted principal kept opening tools until it expired — and a
+    // denylisted user/service was never revoked at the gateway at all. Check
+    // BOTH the acting principal (act.sub — the agent) and the original subject
+    // (sub — the user/service the chain started from) against the raw-string
+    // denylist; the watcher applies the KV key encoding symmetrically. Like
+    // the sibling kill-switch refusals, this precedes the Cedar decision and
+    // carries no policy reference; auditing all kill-switch refusals uniformly
+    // is item 5's retrofit (SPRINT routed-to-item-5, from 0a QA #1).
+    for (const sub of new Set([caller.principal, caller.sub])) {
+      if (this.deps.killSwitch?.principalDenied(sub) !== undefined) {
+        return refuse(
+          fail('upstream_auth', `principal ${sub} is denylisted (kill switch)`),
+          'error:upstream_auth',
+        );
+      }
+    }
 
     // (2) governed lookup — the config allowlist IS the tool surface.
     const entry = this.deps.config.servers.get(serverId);
@@ -161,6 +181,14 @@ export class ToolGatewayCore {
       );
     }
 
+    // Approval grounds derived from the VERIFIED token claims only — never
+    // request-supplied. Trustworthy (bound) iff the token carries an approval
+    // claim AND the brokered task binding matches THIS call's correlation AND
+    // the approval's step matches THIS step. Absent correlation reads as "no
+    // approval": an agent can neither forge nor replay a gate. Item 3 lights
+    // up an R2 tool pair-policy that permits only when context.approval.granted.
+    const approval = deriveApproval(caller.claims, corr);
+
     // (3) Cedar. Deny means NO upstream contact of any kind.
     const decision = await this.deps.policy.authorize({
       principal: {
@@ -170,7 +198,7 @@ export class ToolGatewayCore {
       },
       action: `tool:${serverId}:${tool}`,
       resource: { type: 'Service', id: `svc:${serverId}`, attrs: {} },
-      context: { scopes: caller.scopes, tenant: caller.tenant },
+      context: { scopes: caller.scopes, tenant: caller.tenant, approval },
       reason: {
         ...(corr.taskId !== undefined ? { task_id: corr.taskId } : {}),
         ...(corr.stepId !== undefined ? { step_id: corr.stepId } : {}),
@@ -180,7 +208,7 @@ export class ToolGatewayCore {
     const audit = (outcome: Outcome, extras: AuditExtras = {}) =>
       this.emitAudit(caller, serverId, tool, args, corr, decision, outcome, extras);
 
-    if (decision.decision !== 'allow') {
+    if (decision.decision === 'deny') {
       await audit('denied');
       return {
         ...refuse(
@@ -189,6 +217,31 @@ export class ToolGatewayCore {
             `Cedar decision: deny for tool:${serverId}:${tool} by ${caller.principal} ` +
               `(bundle ${decision.bundle_version}); the delegated token lacks a scope any ` +
               'permit accepts',
+          ),
+          'denied',
+        ),
+        decision,
+      };
+    }
+    // require-approval → REFUSE (the tool gateway is a verify-only PEP; it
+    // never suspends). A three-way lift reaching here means the token carries
+    // no approval grounds bound to this step — an approved call would have
+    // presented the claim and Cedar would have permitted it via the pair
+    // policy. Fail closed: an R2 write cannot execute on an R2-scoped token
+    // alone.
+    if (decision.decision === 'require-approval') {
+      await audit('denied', {
+        ...(!approval.granted && approval.approval_id !== undefined
+          ? { approvalId: approval.approval_id }
+          : {}),
+      });
+      return {
+        ...refuse(
+          fail(
+            'upstream_auth',
+            `Cedar decision: require-approval for tool:${serverId}:${tool} by ${caller.principal} ` +
+              `(bundle ${decision.bundle_version}); the token carries no approval grounds bound to ` +
+              'this step — an R2 write requires a human-approved, step-bound token',
           ),
           'denied',
         ),
@@ -347,6 +400,7 @@ export class ToolGatewayCore {
         tool,
         outcome,
         ...(extras.retryAfterS !== undefined ? { retry_after_s: extras.retryAfterS } : {}),
+        ...(extras.approvalId !== undefined ? { approval_id: extras.approvalId } : {}),
       },
     };
     try {
@@ -361,4 +415,38 @@ export class ToolGatewayCore {
 interface AuditExtras {
   lineageIds?: string[];
   retryAfterS?: number;
+  /** Present when a require-approval refusal saw an approval claim that did not bind to this step. */
+  approvalId?: string;
+}
+
+/** The approval context handed to Cedar: granted only when a claim binds to THIS step. */
+type ApprovalContext =
+  | { granted: true; capability: string; approval_id: string; step_id: string }
+  | { granted: false; approval_id?: string };
+
+/**
+ * Derives approval grounds from VERIFIED claims. Bound (granted) only when the
+ * token's approval claim is tied to THIS exact call: the brokered task binding
+ * matches the correlation's task, and the approval's step matches the
+ * correlation's step. Any gap — no claim, no correlation, task/step mismatch —
+ * is {granted:false}, so an agent cannot forge a gate or replay an approval
+ * onto a different step. When a claim is present but unbound, its id rides the
+ * refusal audit for investigation.
+ */
+function deriveApproval(claims: Caller['claims'], corr: Correlation): ApprovalContext {
+  const claim = claims.approval;
+  if (claim === undefined) return { granted: false };
+  const bound =
+    claims.brokered?.task_id !== undefined &&
+    corr.taskId !== undefined &&
+    claims.brokered.task_id === corr.taskId &&
+    corr.stepId !== undefined &&
+    corr.stepId === claim.step_id;
+  if (!bound) return { granted: false, approval_id: claim.id };
+  return {
+    granted: true,
+    capability: claim.capability,
+    approval_id: claim.id,
+    step_id: claim.step_id,
+  };
 }

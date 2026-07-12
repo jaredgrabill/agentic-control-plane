@@ -1,0 +1,33 @@
+{
+  "event_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f81",
+  "occurred_at": "2026-07-11T09:20:00Z",
+  "tenant": "acme",
+  "event_type": "approval.granted",
+  "actor": {
+    "principal": "user:approver.ops",
+    "delegation_chain": [{ "sub": "user:approver.ops" }]
+  },
+  "action": {
+    "name": "approval.granted",
+    "inputs_digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
+  },
+  "reason": {
+    "task_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40",
+    "step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51"
+  },
+  "artifacts": {
+    "agent_id": "approval-test-agent",
+    "agent_version": "0.1.0",
+    "workflow_run_id": "task-0197a3b0-run-1"
+  },
+  "details": {
+    "approval_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90",
+    "decision_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f91",
+    "subject_digest": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    "latency_ms": 1190000,
+    "rubber_stamp": false,
+    "escalated": false,
+    "rejected_signals": 0,
+    "note": "reviewed the diff; blast radius is one record"
+  }
+}

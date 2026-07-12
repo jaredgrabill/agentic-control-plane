@@ -60,6 +60,46 @@ approval latency and rubber-stamp rate (sub-second approvals get flagged);
 repeated 100%-approval capabilities become candidates for R3 *by explicit
 governance decision*, never by drift.
 
+**Approval machinery v1 (as-built, Phase 3 item 1).** Cedar stays two-verdict
+in-engine; a `@decision("require-approval")` annotation on a **permit** lifts
+the allow it determines into a three-way `require-approval` (`apps/policy`).
+The lift is restrictive: if any policy determining an allow is annotated, the
+decision is require-approval — a later broad plain permit can only over-gate,
+never bypass. `gate-r2-delegation.cedar` gates R2 user→agent delegation. Two
+PEPs consume the three-way, with different verbs:
+
+- The **orchestrator delegation PEP is the suspending gate.** On
+  require-approval, `AgentStepWorkflow` builds an `ApprovalSubject` (plan, exact
+  step input, capability + risk, agent@version, scopes, compensator or
+  `irreversible`), digests it (`subject_digest = sha256(stableStringify(subject))`,
+  computed in an activity), and launches an `ApprovalWorkflow` child that waits
+  durably on a signal. It escalates (notification only) at `T1 = 3600s` and
+  **DENIES by default** at `T2 = 86400s` — no path grants without an accepted
+  signal. First valid decision wins; already-decided, bad-value, empty-approver,
+  self-approval (`approver === subject.principal`), and digest-mismatch signals
+  are rejected and counted (rubber-stamp/tampering signal). On grant the
+  orchestrator re-discovers the agent (suspension during the wait still stops
+  traffic) and brokers the step token WITH a signed `approval` claim.
+- The **tool gateway is a verify-only PEP: it refuses, never suspends.** It
+  derives `context.approval` from VERIFIED token claims only, granted iff the
+  approval claim binds to the exact call (`brokered.task_id === corr.taskId &&
+  corr.stepId === approval.step_id`); a require-approval verdict is refused
+  (`upstream_auth`, audited). v1 binds approval at STEP granularity
+  (tool-call-level divergence is item-3 risk-class territory).
+
+The approver decides via the gateway approval API (`GET /v1/approvals/:id`,
+`POST /:id/decision`, scope `approvals:decide`) or `scripts/approve.mjs`
+(show-first, so deciding blind is structurally impossible). The approver
+identity is the verified JWT `sub`, never the body; separation of duties (403),
+stale digest (409), already-decided (409), and cross-tenant (404) are enforced
+at the gateway AND re-validated inside the workflow. The signed `approval`
+claim IS "the approval token returning through the platform, signed and
+audited"; it propagates verbatim across the agent's same-actor `acp:tools`
+exchange so the tool gateway can bind it. Five audit events —
+`approval.requested/granted/denied/timeout/escalated` — carry the full subject
+context, the approver, and `rubber_stamp = latency_ms < 1000`. Slack/ITSM
+surfaces and per-task timeout overrides remain future work.
+
 ## Risk Classes Drive Everything
 
 | | R0 read | R1 draft | R2 write-gated | R3 write-auto |

@@ -5,7 +5,12 @@ import { InMemorySpanExporter, SimpleSpanProcessor } from '@opentelemetry/sdk-tr
 import type { FastifyInstance } from 'fastify';
 import { exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { buildGatewayApp, GATEWAY_AUDIENCE } from '../src/app.js';
+import {
+  buildGatewayApp,
+  GATEWAY_AUDIENCE,
+  type ApprovalDecisionInput,
+  type ApprovalView,
+} from '../src/app.js';
 import { taskWorkflowId } from '../src/temporal.js';
 
 const ISSUER = 'https://token.test.local';
@@ -18,6 +23,37 @@ const started: TaskRequest[] = [];
 const auditEvents: AuditEvent[] = [];
 let fleetHalt: KillSwitchState | undefined;
 let statusResponse: Awaited<ReturnType<Parameters<typeof buildGatewayApp>[0]['starter']['status']>>;
+
+const APPROVAL_ID = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90';
+const SUBJECT_DIGEST = `sha256:${'a'.repeat(64)}`;
+let approvalView: ApprovalView | undefined;
+const decideCalls: { approvalId: string; signal: ApprovalDecisionInput }[] = [];
+
+function makeApprovalView(over: Partial<ApprovalView> = {}): ApprovalView {
+  return {
+    status: 'pending',
+    subject: {
+      approval_id: APPROVAL_ID,
+      task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+      tenant: 'acme',
+      principal: 'user:jane.doe',
+      agent_id: 'gov-agent',
+      agent_version: '0.1.0',
+      capability: 'gov.test_write',
+      risk: 'R2',
+      input: { target: 'record-42' },
+      requested_scopes: ['gov:test:write'],
+      compensator: 'gov.test_undo',
+      plan: { plan_id: 'p', steps: [] },
+      plan_digest: `sha256:${'0'.repeat(64)}`,
+    },
+    subject_digest: SUBJECT_DIGEST,
+    requested_at: '2026-07-11T09:00:10Z',
+    escalated: false,
+    ...over,
+  };
+}
 
 beforeAll(async () => {
   const pair = await generateKeyPair('EdDSA');
@@ -32,6 +68,15 @@ beforeAll(async () => {
         return Promise.resolve({ workflowRunId: `run-${req.task_id}` });
       },
       status: () => Promise.resolve(statusResponse),
+    },
+    approvals: {
+      // Mirrors TemporalApprovalGateway: cross-tenant reads as absent.
+      status: (_id, tenant) =>
+        Promise.resolve(approvalView?.subject.tenant === tenant ? approvalView : undefined),
+      decide: (approvalId, signal) => {
+        decideCalls.push({ approvalId, signal });
+        return Promise.resolve();
+      },
     },
     killSwitch: { fleetHalt: () => fleetHalt },
     audit: {
@@ -49,6 +94,8 @@ beforeEach(() => {
   auditEvents.length = 0;
   fleetHalt = undefined;
   statusResponse = { status: 'running' };
+  approvalView = makeApprovalView();
+  decideCalls.length = 0;
 });
 
 async function makeToken(overrides: Record<string, unknown> = {}): Promise<string> {
@@ -206,6 +253,10 @@ describe('POST /v1/tasks', () => {
         start: () => Promise.resolve({ workflowRunId: 'run-x' }),
         status: () => Promise.resolve({ status: 'running' as const }),
       },
+      approvals: {
+        status: () => Promise.resolve(undefined),
+        decide: () => Promise.resolve(),
+      },
       killSwitch: { fleetHalt: () => undefined },
       audit: { publish: () => Promise.reject(new Error('stream down')) },
       logger: createLogger('gateway-test'),
@@ -263,5 +314,176 @@ describe('taskWorkflowId', () => {
   it('is tenant-scoped so lookups cannot cross tenants', () => {
     expect(taskWorkflowId('acme', 'abc')).toBe('task-acme-abc');
     expect(taskWorkflowId('acme', 'abc')).not.toBe(taskWorkflowId('globex', 'abc'));
+  });
+});
+
+describe('approval API', () => {
+  const APPROVER_SUB = 'user:approver.ops';
+  async function approverToken(scope = 'approvals:decide'): Promise<string> {
+    return makeToken({ sub: APPROVER_SUB, scope });
+  }
+  async function getApproval(token: string, id = APPROVAL_ID) {
+    return app.inject({
+      method: 'GET',
+      url: `/v1/approvals/${id}`,
+      headers: { authorization: `Bearer ${token}` },
+    });
+  }
+  async function decide(token: string, body: Record<string, unknown>, id = APPROVAL_ID) {
+    return app.inject({
+      method: 'POST',
+      url: `/v1/approvals/${id}/decision`,
+      headers: { authorization: `Bearer ${token}` },
+      payload: body,
+    });
+  }
+
+  describe('GET /v1/approvals/:id', () => {
+    it('returns the full context to a scoped approver', async () => {
+      const res = await getApproval(await approverToken());
+      expect(res.statusCode).toBe(200);
+      const body = res.json<{
+        subject: { plan: unknown; capability: string };
+        subject_digest: string;
+      }>();
+      expect(body.subject.capability).toBe('gov.test_write');
+      expect(body.subject.plan).toBeDefined();
+      expect(body.subject_digest).toBe(SUBJECT_DIGEST);
+    });
+
+    it('401 without a token, 403 without the approvals:decide scope', async () => {
+      const anon = await app.inject({ method: 'GET', url: `/v1/approvals/${APPROVAL_ID}` });
+      expect(anon.statusCode).toBe(401);
+      const wrongScope = await getApproval(await approverToken('task:submit'));
+      expect(wrongScope.statusCode).toBe(403);
+    });
+
+    it('404 for a cross-tenant approval (reads as absent)', async () => {
+      approvalView = makeApprovalView({
+        subject: { ...makeApprovalView().subject, tenant: 'globex', principal: 'user:eve' },
+      });
+      const res = await getApproval(await approverToken());
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('404 for an unknown approval', async () => {
+      approvalView = undefined;
+      const res = await getApproval(await approverToken());
+      expect(res.statusCode).toBe(404);
+    });
+
+    it('400 for a non-uuid approval id', async () => {
+      const res = await getApproval(await approverToken(), 'not-a-uuid');
+      expect(res.statusCode).toBe(400);
+    });
+  });
+
+  describe('POST /v1/approvals/:id/decision', () => {
+    it('approves: signals the workflow and returns 202 with a decision id, no gateway audit', async () => {
+      const res = await decide(await approverToken(), {
+        decision: 'approve',
+        subject_digest: SUBJECT_DIGEST,
+      });
+      expect(res.statusCode).toBe(202);
+      const body = res.json<{ approval_id: string; decision_id: string }>();
+      expect(body.approval_id).toBe(APPROVAL_ID);
+      expect(body.decision_id).toMatch(/^[0-9a-f-]{36}$/);
+      expect(decideCalls).toHaveLength(1);
+      const { signal } = decideCalls[0]!;
+      expect(signal).toMatchObject({
+        decision: 'approve',
+        approver: APPROVER_SUB,
+        subject_digest: SUBJECT_DIGEST,
+      });
+      expect(signal.approver_chain[0]!.sub).toBe(APPROVER_SUB);
+      // The workflow's approval.granted is the record — the gateway emits none.
+      expect(auditEvents).toHaveLength(0);
+    });
+
+    it('denies with a mandatory note', async () => {
+      const res = await decide(await approverToken(), {
+        decision: 'deny',
+        subject_digest: SUBJECT_DIGEST,
+        note: 'blast radius too wide',
+      });
+      expect(res.statusCode).toBe(202);
+      expect(decideCalls[0]!.signal.decision).toBe('deny');
+    });
+
+    it('403 without the approvals:decide scope', async () => {
+      const res = await decide(await approverToken('task:submit'), {
+        decision: 'approve',
+        subject_digest: SUBJECT_DIGEST,
+      });
+      expect(res.statusCode).toBe(403);
+      expect(decideCalls).toHaveLength(0);
+    });
+
+    it('400 for a bad decision value or a missing subject_digest', async () => {
+      expect(
+        (await decide(await approverToken(), { decision: 'maybe', subject_digest: SUBJECT_DIGEST }))
+          .statusCode,
+      ).toBe(400);
+      expect((await decide(await approverToken(), { decision: 'approve' })).statusCode).toBe(400);
+      // deny requires a note
+      expect(
+        (await decide(await approverToken(), { decision: 'deny', subject_digest: SUBJECT_DIGEST }))
+          .statusCode,
+      ).toBe(400);
+    });
+
+    it('404 for a cross-tenant approval', async () => {
+      approvalView = makeApprovalView({
+        subject: { ...makeApprovalView().subject, tenant: 'globex', principal: 'user:eve' },
+      });
+      const res = await decide(await approverToken(), {
+        decision: 'approve',
+        subject_digest: SUBJECT_DIGEST,
+      });
+      expect(res.statusCode).toBe(404);
+      expect(decideCalls).toHaveLength(0);
+    });
+
+    it('409 when the approval is already decided', async () => {
+      approvalView = makeApprovalView({ status: 'granted' });
+      const res = await decide(await approverToken(), {
+        decision: 'approve',
+        subject_digest: SUBJECT_DIGEST,
+      });
+      expect(res.statusCode).toBe(409);
+      expect(decideCalls).toHaveLength(0);
+    });
+
+    it('403 for self-approval: the subject may not decide their own delegation', async () => {
+      // The approver token's sub equals the subject principal.
+      const selfToken = await makeToken({ sub: 'user:jane.doe', scope: 'approvals:decide' });
+      const res = await decide(selfToken, { decision: 'approve', subject_digest: SUBJECT_DIGEST });
+      expect(res.statusCode).toBe(403);
+      expect(JSON.stringify(res.json())).toContain('separation of duties');
+      expect(decideCalls).toHaveLength(0);
+    });
+
+    it('409 for a stale subject digest', async () => {
+      const res = await decide(await approverToken(), {
+        decision: 'approve',
+        subject_digest: `sha256:${'b'.repeat(64)}`,
+      });
+      expect(res.statusCode).toBe(409);
+      expect(JSON.stringify(res.json())).toContain('stale approval context');
+      expect(decideCalls).toHaveLength(0);
+    });
+
+    it('400 for a non-uuid approval id (never interpolated into a workflow id)', async () => {
+      const res = await decide(
+        await approverToken(),
+        {
+          decision: 'approve',
+          subject_digest: SUBJECT_DIGEST,
+        },
+        'not-a-uuid',
+      );
+      expect(res.statusCode).toBe(400);
+      expect(decideCalls).toHaveLength(0);
+    });
   });
 });

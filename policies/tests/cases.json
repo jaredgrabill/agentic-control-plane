@@ -249,6 +249,47 @@
       }
     },
     {
+      "name": "R2 delegation with task:submit lifts to require-approval (gated, not allowed)",
+      "expect": "require-approval",
+      "determined_by": "gate-r2-delegation",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R2", "scopes": ["task:submit"] }
+      }
+    },
+    {
+      "name": "R2 cross-tenant delegation is denied, never gated",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:mallory", "attrs": { "tenant": "globex" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R2", "scopes": ["task:submit"] }
+      }
+    },
+    {
+      "name": "R2 delegation without task:submit is denied, never gated",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R2", "scopes": ["knowledge:search:read"] }
+      }
+    },
+    {
+      "name": "R3 delegation stays default-deny (the gate pins to R2 only)",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": { "risk": "R3", "scopes": ["task:submit"] }
+      }
+    },
+    {
       "name": "an unmodeled action falls to default deny",
       "expect": "deny",
       "request": {

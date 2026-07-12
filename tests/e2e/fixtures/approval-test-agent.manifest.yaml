@@ -1,0 +1,66 @@
+id: approval-test-agent
+name: Approval Test Agent
+owner: team-platform
+description: >
+  A minimal R2 write agent used only by the governed-approval E2E slice. Its
+  gov.test_write capability is risk R2, so a delegation to it lifts to
+  require-approval at the orchestrator gate; the handler is canned (no real
+  side effect) because this slice exercises the approval machinery, not a tool
+  write. gov.test_undo is its declared compensator (compensation itself is
+  item 2).
+capabilities:
+  - name: gov.test_write
+    description: >
+      A governed write used to exercise the require-approval gate. Applies a
+      canned change to a target record and returns a citation-bearing summary.
+    risk: R2
+    compensator: gov.test_undo
+    input_schema:
+      type: object
+      additionalProperties: true
+      properties:
+        text: { type: string }
+        target: { type: string }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: { target: record-1 }
+        description: apply a governed write to record-1
+      - input: { target: record-2 }
+        description: apply a governed write to record-2
+      - input: { target: record-3 }
+        description: apply a governed write to record-3
+  - name: gov.test_undo
+    description: >
+      Compensator for gov.test_write — reverses the governed write. Declared
+      for registration completeness; invoked by the compensation machinery
+      (item 2), never by this slice.
+    risk: R1
+    input_schema:
+      type: object
+      additionalProperties: true
+      properties:
+        target: { type: string }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: { target: record-1 }
+        description: undo the governed write to record-1
+      - input: { target: record-2 }
+        description: undo the governed write to record-2
+      - input: { target: record-3 }
+        description: undo the governed write to record-3

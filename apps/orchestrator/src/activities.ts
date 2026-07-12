@@ -9,6 +9,7 @@ import {
 import {
   scopesOf,
   sha256Digest,
+  stableStringify,
   type AuditPublisher,
   type Logger,
   type PlatformClaims,
@@ -214,6 +215,10 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
             ...(input.snapshot.jti === undefined ? {} : { subject_jti: input.snapshot.jti }),
             verified_at: input.snapshot.verified_at,
           },
+          // Signed approval grounds — present only when the step passed an
+          // approval gate. The token service shape-validates and refuses
+          // self-approval before it signs the claim.
+          ...(input.approval === undefined ? {} : { approval: input.approval }),
         }),
       });
       if (!res.ok) {
@@ -222,6 +227,13 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
         );
       }
       return { token: ((await res.json()) as { access_token: string }).access_token };
+    },
+
+    digestApprovalSubject(subject) {
+      // sha256 over the canonical (key-sorted) subject — the isolate has no
+      // crypto, so this must run activity-side. The digest binds the exact
+      // context the approver saw to the decision signal and the minted token.
+      return Promise.resolve({ subject_digest: sha256Digest(stableStringify(subject)) });
     },
 
     async emitAudit(event) {

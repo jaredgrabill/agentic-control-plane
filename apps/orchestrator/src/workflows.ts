@@ -9,8 +9,12 @@
  */
 import {
   ApplicationFailure,
+  condition,
+  defineQuery,
+  defineSignal,
   executeChild,
   proxyActivities,
+  setHandler,
   uuid4,
   workflowInfo,
 } from '@temporalio/workflow';
@@ -30,9 +34,16 @@ import type {
 import { priceUsageMicros, type ResolvedPriceBook } from '@acp/cost-meter/pricing';
 import { synthesizeAnswer, type StepOutcome } from './synthesis.js';
 import {
+  APPROVAL_DENY_AFTER_S,
+  APPROVAL_ESCALATE_AFTER_S,
   MAX_DELEGATION_DEPTH,
   agentTaskQueue,
   type AgentActivities,
+  type ApprovalDecisionSignal,
+  type ApprovalGateInput,
+  type ApprovalOutcome,
+  type ApprovalSubject,
+  type ApprovalTokenGrounds,
   type ControlActivities,
   type PrincipalSnapshot,
   type StepDispatch,
@@ -238,6 +249,8 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
               total,
             },
             depth: 1,
+            plan,
+            planDigest,
             ...(remaining === undefined ? {} : { budget: remaining }),
           }),
         ),
@@ -413,7 +426,7 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
     taskId: dispatch.taskId,
     stepId: planStep.step_id,
   });
-  if (decision.decision !== 'allow') {
+  if (decision.decision === 'deny') {
     return failed({
       class: 'policy_denied',
       message:
@@ -423,13 +436,100 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
     });
   }
 
+  // Three-way: a require-approval decision SUSPENDS this step on a durable
+  // ApprovalWorkflow child until a verified human decides (or it times out
+  // and DENIES). The gate fires from the PDP verdict inside this workflow —
+  // an agent can neither trigger nor skip it. Parallel siblings complete
+  // independently; the wave's Promise.all simply waits for this one.
+  let approvalGrounds: ApprovalTokenGrounds | undefined;
+  if (decision.decision === 'require-approval') {
+    const approvalId = uuid4();
+    const subject: ApprovalSubject = {
+      approval_id: approvalId,
+      task_id: dispatch.taskId,
+      step_id: planStep.step_id,
+      tenant: dispatch.tenant,
+      principal: dispatch.principal,
+      agent_id: card.manifest.id,
+      agent_version: card.version,
+      capability: planStep.capability,
+      risk: declared.risk,
+      input: planStep.input,
+      requested_scopes: requestedScopes,
+      ...(declared.compensator === undefined ? {} : { compensator: declared.compensator }),
+      ...(declared.irreversible === undefined ? {} : { irreversible: declared.irreversible }),
+      plan: dispatch.plan,
+      plan_digest: dispatch.planDigest,
+    };
+    // sha256 in an activity (no crypto in the isolate); the digest binds the
+    // exact subject the approver sees to the decision and the eventual token.
+    const { subject_digest } = await control.digestApprovalSubject(subject);
+
+    const outcome: ApprovalOutcome = await executeChild(ApprovalWorkflow, {
+      workflowId: `approval-${approvalId}`,
+      args: [
+        {
+          subject,
+          subject_digest,
+          escalate_after_s: APPROVAL_ESCALATE_AFTER_S,
+          deny_after_s: APPROVAL_DENY_AFTER_S,
+        } satisfies ApprovalGateInput,
+      ],
+    });
+
+    if (!outcome.granted) {
+      // Denied or timed out → the step is NOT executed and the task reports it
+      // as a gap (dependents skip). Nothing ran, so there is nothing to
+      // compensate.
+      return failed({
+        class: 'policy_denied',
+        message:
+          `approval ${outcome.reason} for ${planStep.capability} on ${card.manifest.id} ` +
+          `(approval ${approvalId}) — step not executed`,
+      });
+    }
+
+    // Re-discover after the wait: suspension DURING the approval window must
+    // still stop traffic. If the agent is gone or its active version moved,
+    // the approval no longer applies to what would run — fail permanent.
+    const current = await control.discoverAgent(planStep.capability, dispatch.tenant);
+    if (current?.manifest.id !== card.manifest.id || current.version !== card.version) {
+      return failed({
+        class: 'permanent',
+        message:
+          `agent ${card.manifest.id}@${card.version} serving ${planStep.capability} is no longer ` +
+          'active after the approval wait — the granted approval does not apply to a changed agent',
+      });
+    }
+
+    // A granted outcome always carries decision metadata; guard defensively so
+    // the token grounds are never built from a partial outcome.
+    if (outcome.decision_id === undefined || outcome.approver === undefined) {
+      return failed({
+        class: 'permanent',
+        message: `approval ${approvalId} granted without decision metadata — refusing to broker`,
+      });
+    }
+    approvalGrounds = {
+      approval_id: approvalId,
+      decision_id: outcome.decision_id,
+      approver: outcome.approver,
+      step_id: planStep.step_id,
+      capability: planStep.capability,
+      subject_digest,
+    };
+  }
+
   // Minted per step at dispatch — the ADR-0007 payoff: a step running at
-  // t+3h carries a token as fresh as one minted at t+3s.
+  // t+3h carries a token as fresh as one minted at t+3s. When the step passed
+  // an approval gate, the mint carries the signed approval grounds; the token
+  // service refuses self-approval before it signs the claim.
   const { token } = await control.brokerToken({
     snapshot,
     agent: card,
     scopes: requestedScopes,
     taskId: dispatch.taskId,
+    ...(approvalGrounds === undefined ? {} : { approval: approvalGrounds }),
   });
 
   const request: StepRequest = {
@@ -450,6 +550,7 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
     stepAudit(dispatch, 'step.dispatched', card, {
       capability: planStep.capability,
       policy: decision,
+      ...(approvalGrounds === undefined ? {} : { approval_id: approvalGrounds.approval_id }),
     }),
   );
 
@@ -472,6 +573,197 @@ export async function AgentStepWorkflow(dispatch: StepDispatch): Promise<StepRes
     }),
   );
   return result;
+}
+
+/** Signal the gateway sends a verified human decision on. */
+export const approvalDecisionSignal = defineSignal<[ApprovalDecisionSignal]>('approvalDecision');
+
+/** Status query the gateway/CLI reads (source of truth; immune to audit lag). */
+export interface ApprovalStatus {
+  status: 'pending' | 'granted' | 'denied' | 'timeout';
+  subject: ApprovalSubject;
+  subject_digest: string;
+  requested_at: string;
+  escalated: boolean;
+  rejected_signals: number;
+}
+export const approvalStatusQuery = defineQuery<ApprovalStatus>('approvalStatus');
+
+/**
+ * Durable human-approval gate (governance-and-policy: require-approval
+ * suspends the workflow). Waits on a signal for up to deny_after_s, escalating
+ * (notification only, NO authority change) at escalate_after_s. FIRST VALID
+ * DECISION WINS; a timeout DENIES by default — no path returns granted without
+ * an accepted signal. The digest is re-validated in the handler even though the
+ * gateway pre-validates: defense in depth against raw Temporal signal access.
+ */
+export async function ApprovalWorkflow(input: ApprovalGateInput): Promise<ApprovalOutcome> {
+  const { subject, subject_digest } = input;
+  const requestedAt = new Date().toISOString();
+  const startMs = Date.now();
+  let decision: ApprovalDecisionSignal | undefined;
+  let escalated = false;
+  let rejectedSignals = 0;
+
+  setHandler(approvalDecisionSignal, (signal) => {
+    // Validate-and-enqueue only; first valid decision wins. Every rejection
+    // is COUNTED (rubber-stamp / tampering signal) but never obeyed.
+    if (decision !== undefined) {
+      rejectedSignals += 1; // already decided
+      return;
+    }
+    // Defensive against raw Temporal signal access: the value is typed but the
+    // wire is not, so validate as a string.
+    const kind: string = signal.decision;
+    if (kind !== 'approve' && kind !== 'deny') {
+      rejectedSignals += 1; // bad decision value
+      return;
+    }
+    if (typeof signal.approver !== 'string' || signal.approver === '') {
+      rejectedSignals += 1; // empty approver
+      return;
+    }
+    if (signal.approver === subject.principal) {
+      rejectedSignals += 1; // structural self-approval refusal
+      return;
+    }
+    if (signal.subject_digest !== subject_digest) {
+      rejectedSignals += 1; // stale/forged context
+      return;
+    }
+    decision = signal;
+  });
+
+  setHandler(approvalStatusQuery, (): ApprovalStatus => ({
+    status:
+      decision === undefined ? 'pending' : decision.decision === 'approve' ? 'granted' : 'denied',
+    subject,
+    subject_digest,
+    requested_at: requestedAt,
+    escalated,
+    rejected_signals: rejectedSignals,
+  }));
+
+  await emitApprovalAudit(subject, subject_digest, 'approval.requested', {
+    approval_id: subject.approval_id,
+    capability: subject.capability,
+    risk: subject.risk,
+    principal: subject.principal,
+    requested_scopes: subject.requested_scopes,
+    ...(subject.compensator === undefined ? {} : { compensator: subject.compensator }),
+    ...(subject.irreversible === undefined ? {} : { irreversible: subject.irreversible }),
+    input: subject.input,
+    plan: subject.plan,
+    plan_digest: subject.plan_digest,
+    escalate_after_s: input.escalate_after_s,
+    deny_after_s: input.deny_after_s,
+  });
+
+  const decidedInT1 = await condition(() => decision !== undefined, `${input.escalate_after_s}s`);
+  if (!decidedInT1) {
+    // Escalation is notification-only — it changes nothing about who may
+    // decide or how long remains; the same deny_after_s deadline still holds.
+    escalated = true;
+    await emitApprovalAudit(subject, subject_digest, 'approval.escalated', {
+      approval_id: subject.approval_id,
+      escalate_after_s: input.escalate_after_s,
+    });
+    await condition(
+      () => decision !== undefined,
+      `${input.deny_after_s - input.escalate_after_s}s`,
+    );
+  }
+
+  const latencyMs = Date.now() - startMs;
+
+  if (decision === undefined) {
+    // TIMEOUT → DENY. The only terminal path that returns without an accepted
+    // signal, and it never grants.
+    await emitApprovalAudit(subject, subject_digest, 'approval.timeout', {
+      approval_id: subject.approval_id,
+      deny_after_s: input.deny_after_s,
+      escalated,
+      rejected_signals: rejectedSignals,
+      latency_ms: latencyMs,
+    });
+    return {
+      granted: false,
+      reason: 'timeout',
+      approval_id: subject.approval_id,
+      latency_ms: latencyMs,
+      subject_digest,
+    };
+  }
+
+  const granted = decision.decision === 'approve';
+  await emitApprovalAudit(
+    subject,
+    subject_digest,
+    granted ? 'approval.granted' : 'approval.denied',
+    {
+      approval_id: subject.approval_id,
+      decision_id: decision.decision_id,
+      latency_ms: latencyMs,
+      // Rubber-stamp: a sub-second human decision is flagged for review.
+      rubber_stamp: latencyMs < 1000,
+      subject_digest,
+      escalated,
+      rejected_signals: rejectedSignals,
+      ...(decision.note === undefined ? {} : { note: decision.note }),
+    },
+    // The APPROVER is the actor of a grant/deny — the chain they presented.
+    { principal: decision.approver, chain: decision.approver_chain },
+  );
+
+  return {
+    granted,
+    reason: granted ? 'approved' : 'denied',
+    approval_id: subject.approval_id,
+    decision_id: decision.decision_id,
+    approver: decision.approver,
+    latency_ms: latencyMs,
+    subject_digest,
+  };
+}
+
+/**
+ * Emits an approval-lifecycle audit event. Actor defaults to the orchestrator
+ * (requested/escalated/timeout are platform-emitted); grant/deny pass the
+ * approver as actor with the chain they presented.
+ */
+async function emitApprovalAudit(
+  subject: ApprovalSubject,
+  subjectDigest: string,
+  eventType:
+    | 'approval.requested'
+    | 'approval.granted'
+    | 'approval.denied'
+    | 'approval.timeout'
+    | 'approval.escalated',
+  details: Record<string, unknown>,
+  actor?: { principal: string; chain: { sub: string }[] },
+): Promise<void> {
+  await control.emitAudit({
+    event_id: uuid4(),
+    occurred_at: new Date().toISOString(),
+    tenant: subject.tenant,
+    event_type: eventType,
+    actor:
+      actor === undefined
+        ? {
+            principal: 'svc:orchestrator',
+            delegation_chain: [{ sub: subject.principal }, { sub: 'svc:orchestrator' }],
+          }
+        : { principal: actor.principal, delegation_chain: actor.chain },
+    action: { name: eventType, inputs_digest: subjectDigest },
+    reason: { task_id: subject.task_id, step_id: subject.step_id },
+    artifacts: {
+      agent_id: subject.agent_id,
+      agent_version: subject.agent_version,
+      workflow_run_id: workflowInfo().runId,
+    },
+    details,
+  });
 }
 
 function fail(task: TaskRequest, error: NonNullable<TaskResult['error']>): TaskResult {

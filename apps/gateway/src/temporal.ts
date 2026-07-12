@@ -2,16 +2,29 @@ import type { TaskRequest, TaskResult } from '@acp/protocol';
 import { Client, Connection, WorkflowNotFoundError } from '@temporalio/client';
 import { OpenTelemetryWorkflowClientInterceptor } from '@temporalio/interceptors-opentelemetry';
 import { env } from '@acp/service-kit';
-import type { TaskStarter } from './app.js';
+import type { ApprovalDecisionInput, ApprovalGateway, ApprovalView, TaskStarter } from './app.js';
 
 export const TASK_QUEUE = 'acp-tasks';
+
+/** Signal/query names the ApprovalWorkflow registers (apps/orchestrator/src/workflows.ts). */
+const APPROVAL_DECISION_SIGNAL = 'approvalDecision';
+const APPROVAL_STATUS_QUERY = 'approvalStatus';
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** Deterministic workflow id: tenant-scoped so status lookups cannot cross tenants. */
 export function taskWorkflowId(tenant: string, taskId: string): string {
   return `task-${tenant}-${taskId}`;
 }
 
-export async function connectTemporal(): Promise<TemporalTaskStarter> {
+/** The ApprovalWorkflow instance id — the approval id is a uuid (validated before interpolation). */
+export function approvalWorkflowId(approvalId: string): string {
+  return `approval-${approvalId}`;
+}
+
+export async function connectTemporal(): Promise<{
+  starter: TemporalTaskStarter;
+  approvals: TemporalApprovalGateway;
+}> {
   const connection = await Connection.connect({
     address: env('ACP_TEMPORAL_ADDRESS', 'localhost:7233'),
   });
@@ -22,7 +35,10 @@ export async function connectTemporal(): Promise<TemporalTaskStarter> {
     // from HTTP intake through the agent's activities.
     interceptors: { workflow: [new OpenTelemetryWorkflowClientInterceptor()] },
   });
-  return new TemporalTaskStarter(client);
+  return {
+    starter: new TemporalTaskStarter(client),
+    approvals: new TemporalApprovalGateway(client),
+  };
 }
 
 export class TemporalTaskStarter implements TaskStarter {
@@ -68,5 +84,66 @@ export class TemporalTaskStarter implements TaskStarter {
       }
       throw err;
     }
+  }
+}
+
+/** The shape the ApprovalWorkflow's approvalStatus query returns. */
+interface ApprovalStatusQueryResult {
+  status: 'pending' | 'granted' | 'denied' | 'timeout';
+  subject: ApprovalView['subject'];
+  subject_digest: string;
+  requested_at: string;
+  escalated: boolean;
+  rejected_signals: number;
+}
+
+/**
+ * Reads and decides approvals against the running ApprovalWorkflow — the
+ * source of truth (immune to audit lag). A missing OR cross-tenant workflow
+ * reads as absent so foreign approval ids cannot be probed.
+ */
+export class TemporalApprovalGateway implements ApprovalGateway {
+  constructor(private readonly client: Client) {}
+
+  async status(approvalId: string, tenant: string): Promise<ApprovalView | undefined> {
+    if (!UUID_RE.test(approvalId)) return undefined;
+    const handle = this.client.workflow.getHandle(approvalWorkflowId(approvalId));
+    let closed: boolean;
+    try {
+      const description = await handle.describe();
+      closed = description.status.name !== 'RUNNING';
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) return undefined;
+      throw err;
+    }
+    let view: ApprovalStatusQueryResult;
+    try {
+      view = await handle.query<ApprovalStatusQueryResult>(APPROVAL_STATUS_QUERY);
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) return undefined;
+      throw err;
+    }
+    // Cross-tenant reads as absent (404 at the route), never leaking the
+    // existence of another tenant's approval.
+    if (view.subject.tenant !== tenant) return undefined;
+    // A closed workflow whose query still reports pending timed out (deny by
+    // default) — surface it as terminal so a decision attempt gets 409, never
+    // a signal to a workflow that can no longer accept it.
+    const status = closed && view.status === 'pending' ? 'timeout' : view.status;
+    return {
+      status,
+      subject: view.subject,
+      subject_digest: view.subject_digest,
+      requested_at: view.requested_at,
+      escalated: view.escalated,
+    };
+  }
+
+  async decide(approvalId: string, signal: ApprovalDecisionInput): Promise<void> {
+    if (!UUID_RE.test(approvalId)) {
+      throw new Error(`refusing to signal a non-uuid approval id ${JSON.stringify(approvalId)}`);
+    }
+    const handle = this.client.workflow.getHandle(approvalWorkflowId(approvalId));
+    await handle.signal(APPROVAL_DECISION_SIGNAL, signal);
   }
 }

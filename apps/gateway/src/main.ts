@@ -23,12 +23,15 @@ const nc = await connectBus({
 });
 await ensureAuditStream(nc);
 
+const temporal = await connectTemporal();
+
 const app = buildGatewayApp({
   verifier: new JwtVerifier(
     { jwksUrl: env('ACP_JWKS_URL', 'http://localhost:7101/.well-known/jwks.json') },
     env('ACP_TOKEN_ISSUER', 'https://token.acp.local'),
   ),
-  starter: await connectTemporal(),
+  starter: temporal.starter,
+  approvals: temporal.approvals,
   killSwitch: await KillSwitchWatcher.start(nc, logger),
   audit: new AuditPublisher(nc, logger),
   logger,

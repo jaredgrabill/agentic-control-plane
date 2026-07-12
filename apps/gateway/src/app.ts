@@ -16,6 +16,9 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 
 export const GATEWAY_AUDIENCE = 'acp:gateway';
 export const TASK_SUBMIT_SCOPE = 'task:submit';
+export const APPROVALS_DECIDE_SCOPE = 'approvals:decide';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 /** Temporal is behind this seam so unit tests exercise the gateway without a cluster. */
 export interface TaskStarter {
@@ -24,6 +27,51 @@ export interface TaskStarter {
     tenant: string,
     taskId: string,
   ): Promise<{ status: 'running' | 'completed' | 'failed' | 'not_found'; result?: TaskResult }>;
+}
+
+/** The approver-facing view of a running (or just-closed) ApprovalWorkflow. */
+export interface ApprovalView {
+  status: 'pending' | 'granted' | 'denied' | 'timeout';
+  subject: {
+    approval_id: string;
+    task_id: string;
+    step_id: string;
+    tenant: string;
+    principal: string;
+    agent_id: string;
+    agent_version: string;
+    capability: string;
+    risk: string;
+    input: Record<string, unknown>;
+    requested_scopes: string[];
+    compensator?: string;
+    irreversible?: boolean;
+    plan: unknown;
+    plan_digest: string;
+  };
+  subject_digest: string;
+  requested_at: string;
+  escalated: boolean;
+}
+
+/** A verified human decision the gateway relays to the ApprovalWorkflow as a signal. */
+export interface ApprovalDecisionInput {
+  decision: 'approve' | 'deny';
+  decision_id: string;
+  approver: string;
+  approver_chain: { sub: string }[];
+  subject_digest: string;
+  note?: string;
+}
+
+/**
+ * Temporal-backed approval gate behind a seam. status() reads the running
+ * workflow (source of truth, immune to audit lag) and treats a missing OR
+ * cross-tenant workflow as absent; decide() relays the decision as a signal.
+ */
+export interface ApprovalGateway {
+  status(approvalId: string, tenant: string): Promise<ApprovalView | undefined>;
+  decide(approvalId: string, signal: ApprovalDecisionInput): Promise<void>;
 }
 
 export interface KillSwitchReader {
@@ -37,6 +85,7 @@ export interface AuditSink {
 export interface GatewayDeps {
   verifier: JwtVerifier;
   starter: TaskStarter;
+  approvals: ApprovalGateway;
   killSwitch: KillSwitchReader;
   audit: AuditSink;
   logger: Logger;
@@ -141,7 +190,118 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
     return reply.send({ task_id, status: status.status, result: status.result ?? null });
   });
 
+  // Full approval context for an approver to decide on: capability + risk,
+  // agent@version, exact step input, scopes, compensator/irreversible, the
+  // whole plan (blast radius), and the subject digest they must echo.
+  app.get('/v1/approvals/:approval_id', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, APPROVALS_DECIDE_SCOPE);
+    const approvalId = approvalIdParam(request);
+    // Tenant-scoped by construction: a cross-tenant approval reads as absent.
+    const view = await deps.approvals.status(approvalId, claims.tenant);
+    if (view === undefined) {
+      return reply.status(404).send({
+        error: { message: `no approval ${approvalId} in tenant ${claims.tenant}`, status: 404 },
+      });
+    }
+    return reply.send({
+      approval_id: approvalId,
+      status: view.status,
+      subject: view.subject,
+      subject_digest: view.subject_digest,
+      requested_at: view.requested_at,
+      escalated: view.escalated,
+    });
+  });
+
+  app.post('/v1/approvals/:approval_id/decision', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, APPROVALS_DECIDE_SCOPE);
+    const approvalId = approvalIdParam(request);
+    const body = (request.body ?? {}) as {
+      decision?: string;
+      subject_digest?: string;
+      note?: string;
+    };
+    if (body.decision !== 'approve' && body.decision !== 'deny') {
+      throw new AuthError('decision must be "approve" or "deny"', 400);
+    }
+    if (typeof body.subject_digest !== 'string' || body.subject_digest === '') {
+      throw new AuthError(
+        'subject_digest is required — echo the digest shown at GET /v1/approvals/:id so a stale ' +
+          'context is refused',
+        400,
+      );
+    }
+    if (body.decision === 'deny' && (typeof body.note !== 'string' || body.note.trim() === '')) {
+      throw new AuthError('a note is required when denying', 400);
+    }
+
+    const view = await deps.approvals.status(approvalId, claims.tenant);
+    if (view === undefined) {
+      return reply.status(404).send({
+        error: { message: `no approval ${approvalId} in tenant ${claims.tenant}`, status: 404 },
+      });
+    }
+    // Already decided (or timed out / closed): the first valid decision won.
+    if (view.status !== 'pending') {
+      return reply.status(409).send({
+        error: { message: `approval ${approvalId} is already ${view.status}`, status: 409 },
+      });
+    }
+    // Separation of duties: an approver may not approve their own delegation.
+    // Enforced here AND independently re-checked inside the workflow.
+    if (claims.sub === view.subject.principal) {
+      return reply.status(403).send({
+        error: {
+          message:
+            `separation of duties: ${claims.sub} is the subject of approval ${approvalId} ` +
+            'and may not decide it',
+          status: 403,
+        },
+      });
+    }
+    // Stale/forged context: the approver must echo the digest they were shown.
+    if (body.subject_digest !== view.subject_digest) {
+      return reply.status(409).send({
+        error: {
+          message:
+            `stale approval context: the subject changed since it was shown (digest mismatch) ` +
+            `for approval ${approvalId}`,
+          status: 409,
+        },
+      });
+    }
+
+    const decisionId = randomUUID();
+    const span = trace.getActiveSpan();
+    span?.setAttributes({ 'acp.approval_id': approvalId, 'acp.decision': body.decision });
+
+    // NO gateway-side audit: the workflow's approval.granted/denied IS the
+    // record. Double-recording invites divergence. The workflow re-validates
+    // the digest and self-approval independently before obeying.
+    await deps.approvals.decide(approvalId, {
+      decision: body.decision,
+      decision_id: decisionId,
+      approver: claims.sub,
+      approver_chain: delegationChain(claims),
+      subject_digest: body.subject_digest,
+      ...(body.note === undefined ? {} : { note: body.note }),
+    });
+
+    return reply.status(202).send({ approval_id: approvalId, decision_id: decisionId });
+  });
+
   return app;
+}
+
+/** Validates the approval id: it is interpolated into a workflow id, so a non-uuid is a 400. */
+function approvalIdParam(request: FastifyRequest): string {
+  const { approval_id } = request.params as { approval_id: string };
+  if (typeof approval_id !== 'string' || !UUID_RE.test(approval_id)) {
+    throw new AuthError('approval_id must be a uuid', 400);
+  }
+  return approval_id;
 }
 
 async function authenticate(deps: GatewayDeps, request: FastifyRequest): Promise<PlatformClaims> {

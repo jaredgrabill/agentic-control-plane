@@ -110,6 +110,13 @@
     { "file": "audit-event/valid-token-denied.json", "schema": "audit-event", "valid": true },
     { "file": "audit-event/valid-bus-auth.json", "schema": "audit-event", "valid": true },
     { "file": "audit-event/valid-model-invoked.json", "schema": "audit-event", "valid": true },
+    {
+      "file": "audit-event/valid-approval-requested.json",
+      "schema": "audit-event",
+      "valid": true
+    },
+    { "file": "audit-event/valid-approval-granted.json", "schema": "audit-event", "valid": true },
+    { "file": "audit-event/valid-approval-timeout.json", "schema": "audit-event", "valid": true },
     { "file": "eval-report/valid-knowledge-run.json", "schema": "eval-report", "valid": true },
     {
       "file": "eval-report/invalid-metric-out-of-range.json",

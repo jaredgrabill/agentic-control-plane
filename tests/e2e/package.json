@@ -11,10 +11,12 @@
     "test:e2e": "vitest run"
   },
   "devDependencies": {
+    "@acp/agent-sdk": "workspace:*",
     "@acp/cost-meter": "workspace:*",
     "@acp/protocol": "workspace:*",
     "@acp/service-kit": "workspace:*",
     "@acp/tool-client": "workspace:*",
+    "@temporalio/worker": "^1.13.0",
     "@types/node": "^22.15.0",
     "nats": "^2.29.3",
     "vitest": "^3.2.4",
