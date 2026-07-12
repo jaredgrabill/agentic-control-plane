@@ -81,6 +81,20 @@ async function submitSequence(
   return ((await res.json()) as { task_id: string }).task_id;
 }
 
+/** Explicit single-capability route: the step input is the task context, byte for byte. */
+async function submitCapability(
+  capability: string,
+  input: Record<string, unknown>,
+): Promise<string> {
+  const res = await fetch(`${GATEWAY_URL}/v1/tasks`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${await janeToken()}` },
+    body: JSON.stringify({ text: `governed ${capability}`, capability, context: input }),
+  });
+  expect(res.status, await res.clone().text()).toBe(202);
+  return ((await res.json()) as { task_id: string }).task_id;
+}
+
 async function auditEvents(taskId: string): Promise<AuditEvent[]> {
   const token = await ciToken('acp:audit', 'audit:read');
   const res = await fetch(`${AUDIT_URL}/v1/events?tenant=acme&task_id=${taskId}`, {
@@ -206,7 +220,7 @@ afterAll(async () => {
 describe('governed writes slice', () => {
   it('gated ITSM write: approve change.submit CHG-1001 → the mock shows it submitted', async () => {
     expect(await changeStatus('CHG-1001')).toBe('draft');
-    const taskId = await submitSequence(['change.submit'], [{ change_id: 'CHG-1001' }]);
+    const taskId = await submitCapability('change.submit', { change_id: 'CHG-1001' });
     await approveWhenRequested(taskId);
     const result = await waitForResult(taskId);
     expect(result.status, JSON.stringify(result)).toBe('completed');
