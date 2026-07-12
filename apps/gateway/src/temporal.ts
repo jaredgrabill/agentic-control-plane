@@ -220,7 +220,12 @@ export class TemporalDeploymentController implements DeploymentController {
         taskQueue: TASK_QUEUE,
         workflowId: deploymentWorkflowId(input.request.agent_id),
         args: [input.request],
-        workflowIdReusePolicy: 'REJECT_DUPLICATE',
+        // One RUNNING deployment per agent, but re-deployable after the previous
+        // one closes: ALLOW_DUPLICATE lets a new deployment start once the prior
+        // is terminal, while the FAIL conflict policy rejects a start while one
+        // is still running (surfaced as already_running → 409).
+        workflowIdReusePolicy: 'ALLOW_DUPLICATE',
+        workflowIdConflictPolicy: 'FAIL',
       });
       return { outcome: 'started', workflowRunId: handle.firstExecutionRunId };
     } catch (err) {
