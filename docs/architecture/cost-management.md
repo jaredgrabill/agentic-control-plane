@@ -56,6 +56,11 @@ org → tenant → team/feature → agent → task
    cache-aware prompt layout (static system prompt and tool schemas first,
    volatile context last); the LLM gateway manages provider cache features.
    Cache hit rate is a per-agent dashboard metric.
+   *Status:* LLM Gateway v1 makes the layout structural — the wire shape
+   separates static from variable, assembly is strictly prefix-first, the
+   prefix digest rides every span (`acp.llm.prefix_digest` /
+   `acp.llm.prefix_stable`), and the anthropic adapter sets ephemeral
+   cache breakpoints; the dev provider simulates cache accounting.
 2. **Model routing** — manifests declare model *classes*
    (`default-tier`, `reasoning-tier`, `cheap-tier`), the LLM gateway binds
    classes to concrete models. Small-model-first with escalation-on-failure
@@ -63,6 +68,10 @@ org → tenant → team/feature → agent → task
    rebinding is a config change — when a cheaper model clears the eval bar,
    the fleet moves without code changes, and *eval gates apply to model
    changes exactly as to prompt changes*.
+   *Status:* LLM Gateway v1 ships the versioned `acp-model-classes/v1`
+   registry (`deploy/dev/model-classes.json`) with intra-call provider
+   failover; `llm.complete` spans carry `gen_ai.usage.*` and the registry
+   version — the Cost Meter's (0b) pricing record.
 3. **Batch APIs** — non-interactive workloads (ingestion embedding, offline
    evals, corpus reprocessing) route to provider batch endpoints (~50%
    discount) via dedicated task queues.

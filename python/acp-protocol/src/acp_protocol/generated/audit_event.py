@@ -30,6 +30,7 @@ class EventType(StrEnum):
     corpus_mutation = "corpus.mutation"
     retrieval_served = "retrieval.served"
     tool_called = "tool.called"
+    model_invoked = "model.invoked"
     killswitch_activated = "killswitch.activated"
     killswitch_cleared = "killswitch.cleared"
 

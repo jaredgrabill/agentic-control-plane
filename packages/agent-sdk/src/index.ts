@@ -18,7 +18,16 @@ export {
   type CaseResult,
   type GoldenCase,
 } from './evals.js';
-export { FakeModel, type FakeModelStep, type ModelClient, type ModelResponse } from './model.js';
+export { GatewayModel, type GatewayModelOptions } from './gateway-model.js';
+export {
+  FakeModel,
+  isContextualModel,
+  type ContextualModel,
+  type FakeModelStep,
+  type ModelCallContext,
+  type ModelClient,
+  type ModelResponse,
+} from './model.js';
 export {
   KNOWLEDGE_AUDIENCE,
   NatsRetriever,

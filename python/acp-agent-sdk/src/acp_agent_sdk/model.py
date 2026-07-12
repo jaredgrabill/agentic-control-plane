@@ -6,7 +6,7 @@ in Phase 2."""
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from acp_agent_sdk.errors import CapabilityError, ErrorClass
 
@@ -21,6 +21,29 @@ class ModelResponse:
 
 class ModelClient(Protocol):
     async def complete(self, prompt: str, *, max_tokens: int = 1024) -> ModelResponse: ...
+
+
+@dataclass
+class ModelCallContext:
+    """Everything a gateway-bound model needs from the step: identity + correlation."""
+
+    task_id: str
+    step_id: str
+    tenant: str
+    capability: str
+    # The step's delegated token — the ONLY credential a model call rides on.
+    delegated_token: str | None = None
+
+
+@runtime_checkable
+class ContextualModel(Protocol):
+    """Optional seam over ModelClient: a model that can bind itself to one
+    step's call context. The SDK binds it in execute(); FakeModel is NOT
+    contextual, so handler unit tests are untouched."""
+
+    async def complete(self, prompt: str, *, max_tokens: int = 1024) -> ModelResponse: ...
+
+    def with_call_context(self, context: ModelCallContext) -> ModelClient: ...
 
 
 @dataclass

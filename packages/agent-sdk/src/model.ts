@@ -21,6 +21,29 @@ export interface ModelClient {
   complete(prompt: string, options?: { maxTokens?: number }): Promise<ModelResponse>;
 }
 
+/** Everything a gateway-bound model needs from the step: identity + correlation. */
+export interface ModelCallContext {
+  /** The step's delegated token — the ONLY credential a model call rides on. */
+  delegatedToken: string | undefined;
+  taskId: string;
+  stepId: string;
+  tenant: string;
+  capability: string;
+}
+
+/**
+ * Optional seam over ModelClient: a model that can bind itself to one
+ * step's call context. The SDK binds it in execute(); FakeModel is NOT
+ * contextual, so handler unit tests are untouched.
+ */
+export interface ContextualModel extends ModelClient {
+  withCallContext(context: ModelCallContext): ModelClient;
+}
+
+export function isContextualModel(model: ModelClient): model is ContextualModel {
+  return typeof (model as Partial<ContextualModel>).withCallContext === 'function';
+}
+
 /** A scripted step: string, response, error, or prompt → text function. */
 export type FakeModelStep = string | ModelResponse | Error | ((prompt: string) => string);
 

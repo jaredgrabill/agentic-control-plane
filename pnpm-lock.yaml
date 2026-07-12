@@ -237,6 +237,43 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
 
+  apps/llm-gateway:
+    dependencies:
+      '@acp/llm-client':
+        specifier: workspace:*
+        version: link:../../packages/llm-client
+      '@acp/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@acp/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
+      '@opentelemetry/api':
+        specifier: ^1.9.1
+        version: 1.9.1
+      fastify:
+        specifier: ^5.4.0
+        version: 5.10.0
+    devDependencies:
+      '@acp/agent-sdk':
+        specifier: workspace:*
+        version: link:../../packages/agent-sdk
+      '@temporalio/common':
+        specifier: ^1.13.0
+        version: 1.20.2
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      jose:
+        specifier: ^6.0.11
+        version: 6.2.3
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
+
   apps/orchestrator:
     dependencies:
       '@acp/protocol':
@@ -455,6 +492,9 @@ importers:
 
   packages/agent-sdk:
     dependencies:
+      '@acp/llm-client':
+        specifier: workspace:*
+        version: link:../llm-client
       '@acp/protocol':
         specifier: workspace:*
         version: link:../protocol
@@ -525,6 +565,22 @@ importers:
       yaml:
         specifier: ^2.8.0
         version: 2.9.0
+
+  packages/llm-client:
+    dependencies:
+      ajv:
+        specifier: ^8.17.1
+        version: 8.20.0
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
 
   packages/protocol:
     dependencies:
@@ -624,6 +680,9 @@ importers:
       '@acp/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
+      '@acp/service-kit':
+        specifier: workspace:*
+        version: link:../../packages/service-kit
       '@acp/tool-client':
         specifier: workspace:*
         version: link:../../packages/tool-client

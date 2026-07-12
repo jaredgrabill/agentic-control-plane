@@ -48,6 +48,18 @@ const services = [
       ACP_TOOL_SERVERS: join(repoRoot, 'deploy', 'dev', 'tool-servers.json'),
     },
   ],
+  [
+    'llm-gateway',
+    'node',
+    ['apps/llm-gateway/dist/main.js'],
+    {
+      ACP_LLM_GATEWAY_CLIENT_ID: 'svc-llm-gateway',
+      ACP_LLM_GATEWAY_CLIENT_SECRET: 'llm-gateway-dev-secret',
+      ACP_NATS_SERVICE_USER: 'llm-gateway',
+      ACP_NATS_SERVICE_PASSWORD: 'llm-gateway-dev-password',
+      ACP_MODEL_CLASSES: join(repoRoot, 'deploy', 'dev', 'model-classes.json'),
+    },
+  ],
   ['gateway', 'node', ['apps/gateway/dist/main.js'], {}],
   [
     'orchestrator',
@@ -67,6 +79,7 @@ const services = [
       ACP_AGENT_CLIENT_SECRET: 'agent-knowledge-dev-secret',
       ACP_NATS_AGENT_USER: 'agent-knowledge',
       ACP_NATS_AGENT_PASSWORD: 'agent-knowledge-dev-password',
+      ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
     },
   ],
   // Mock MCP tool servers (dev/CI stand-ins for enterprise systems) and the
@@ -90,13 +103,19 @@ const services = [
     'cloud-agent',
     'node',
     ['agents/cloud/dist/main.js'],
-    { ACP_TOOL_SERVER_CLOUD_ESTATE_URL: 'http://localhost:7106/mcp/cloud-estate' },
+    {
+      ACP_TOOL_SERVER_CLOUD_ESTATE_URL: 'http://localhost:7106/mcp/cloud-estate',
+      ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+    },
   ],
   [
     'code-agent',
     'node',
     ['agents/code/dist/main.js'],
-    { ACP_TOOL_SERVER_CODE_FORGE_URL: 'http://localhost:7106/mcp/code-forge' },
+    {
+      ACP_TOOL_SERVER_CODE_FORGE_URL: 'http://localhost:7106/mcp/code-forge',
+      ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+    },
   ],
 ];
 
@@ -149,7 +168,7 @@ process.on('SIGTERM', () => shutdown(0));
 
 // Readiness gate: every HTTP door answers /healthz. The mocks (7301/7302)
 // have one; the agents are Temporal workers with no HTTP door.
-const healthPorts = [7101, 7102, 7103, 7104, 7105, 7106, 7100, 7301, 7302];
+const healthPorts = [7101, 7102, 7103, 7104, 7105, 7106, 7107, 7100, 7301, 7302];
 const deadline = Date.now() + 120_000;
 for (const port of healthPorts) {
   for (;;) {
