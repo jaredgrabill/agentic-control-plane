@@ -5,7 +5,10 @@
 // verified approver decides, and reports a denied/timed-out step as not
 // executed. R3 stays default-deny (no permit); R1 delegation permits arrive
 // with the change agent (item 3). The restrictive lift makes this fail-safe:
-// a sloppy pair policy can only over-gate (block), never bypass.
+// a sloppy pair policy can only over-gate (block), never bypass. Compensation
+// unwinds are excluded structurally (`!(context has compensation)`): a
+// compensator is pre-authorized by the write's original approval and must
+// never re-suspend on a human gate (permit-compensation.cedar).
 @id("gate-r2-delegation")
 @decision("require-approval")
 permit (
@@ -16,5 +19,6 @@ permit (
 when {
   context.risk == "R2" &&
   principal.tenant == resource.tenant &&
-  context.scopes.contains("task:submit")
+  context.scopes.contains("task:submit") &&
+  !(context has compensation)
 };

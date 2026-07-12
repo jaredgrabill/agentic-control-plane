@@ -290,6 +290,68 @@
       }
     },
     {
+      "name": "an R2 compensation delegation is permitted outright, never re-gated",
+      "expect": "allow",
+      "determined_by": "permit-compensation",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": {
+          "risk": "R2",
+          "scopes": ["task:submit"],
+          "compensation": {
+            "active": true,
+            "original_step_id": "0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51",
+            "original_capability": "change.submit"
+          }
+        }
+      }
+    },
+    {
+      "name": "an R1 compensation delegation is permitted (a compensator may be a draft-risk undo)",
+      "expect": "allow",
+      "determined_by": "permit-compensation",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": {
+          "risk": "R1",
+          "scopes": ["task:submit"],
+          "compensation": { "active": true, "original_capability": "change.submit" }
+        }
+      }
+    },
+    {
+      "name": "a cross-tenant compensation delegation is denied, never permitted",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:mallory", "attrs": { "tenant": "globex" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": {
+          "risk": "R2",
+          "scopes": ["task:submit"],
+          "compensation": { "active": true, "original_capability": "change.submit" }
+        }
+      }
+    },
+    {
+      "name": "an R3 compensation delegation stays default-deny (never a safe unwind target)",
+      "expect": "deny",
+      "request": {
+        "principal": { "type": "User", "id": "user:jane.doe", "attrs": { "tenant": "acme" } },
+        "action": "delegate",
+        "resource": { "type": "Agent", "id": "change-agent", "attrs": { "tenant": "acme" } },
+        "context": {
+          "risk": "R3",
+          "scopes": ["task:submit"],
+          "compensation": { "active": true, "original_capability": "change.submit" }
+        }
+      }
+    },
+    {
       "name": "an unmodeled action falls to default deny",
       "expect": "deny",
       "request": {

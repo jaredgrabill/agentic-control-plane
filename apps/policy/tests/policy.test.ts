@@ -65,6 +65,47 @@ describe('golden policy suite (the active bundle)', () => {
   });
 });
 
+describe('compensation carve-out (item 2)', () => {
+  const compensationRequest = (over: Record<string, unknown> = {}): AuthzRequest => ({
+    principal: { type: 'User', id: 'user:jane.doe', attrs: { tenant: 'acme' } },
+    action: 'delegate',
+    resource: { type: 'Agent', id: 'change-agent', attrs: { tenant: 'acme' } },
+    context: {
+      risk: 'R2',
+      scopes: ['task:submit'],
+      compensation: { active: true, original_capability: 'change.submit' },
+      ...over,
+    },
+  });
+
+  it('permits an R2 compensation delegation outright — permit-compensation, NOT the gate', () => {
+    const decision = pdp.authorize(compensationRequest());
+    expect(decision.decision).toBe('allow');
+    expect(decision.determining_policies).toContain('permit-compensation');
+    // The restrictive lift must NOT fire: gate-r2-delegation excludes the
+    // compensation case, so it never determines this allow (else it would
+    // become require-approval — a deadlock during unwind).
+    expect(decision.determining_policies).not.toContain('gate-r2-delegation');
+  });
+
+  it('still gates an identical R2 delegation that carries no compensation flag', () => {
+    const decision = pdp.authorize({
+      principal: { type: 'User', id: 'user:jane.doe', attrs: { tenant: 'acme' } },
+      action: 'delegate',
+      resource: { type: 'Agent', id: 'change-agent', attrs: { tenant: 'acme' } },
+      context: { risk: 'R2', scopes: ['task:submit'] },
+    });
+    expect(decision.decision).toBe('require-approval');
+    expect(decision.determining_policies).toContain('gate-r2-delegation');
+  });
+
+  it('does not permit a compensation delegation with active !== true', () => {
+    expect(pdp.authorize(compensationRequest({ compensation: { active: false } })).decision).toBe(
+      'deny',
+    );
+  });
+});
+
 describe('bundle loading', () => {
   it('derives a content-addressed version', () => {
     expect(bundle.version).toMatch(/^2026\.07\+[0-9a-f]{12}$/);
