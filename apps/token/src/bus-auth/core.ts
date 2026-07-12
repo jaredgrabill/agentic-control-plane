@@ -73,6 +73,15 @@ export class BusAuthCore {
         issuer: this.issuer,
         audience: BUS_AUDIENCE,
       });
+      // jose's audience check passes for an ARRAY aud that merely CONTAINS
+      // acp:bus. Mirror the tool gateway's single-string strictness: a bus
+      // token must be good for exactly acp:bus and nothing else — a
+      // multi-audience token would silently widen where it can be replayed.
+      if (typeof payload.aud !== 'string') {
+        throw new AuthError(
+          'bus token aud must be a single string, not an array (multi-audience refused)',
+        );
+      }
       claims = assertPlatformClaims(payload);
       if (typeof payload.exp !== 'number') {
         return { ok: false, error: 'bus token has no exp — refusing an unbounded session' };
