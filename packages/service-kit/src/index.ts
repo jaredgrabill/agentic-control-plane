@@ -11,6 +11,7 @@ export {
   type ActClaim,
   type ApprovalClaim,
   type BrokeredClaim,
+  type CapabilityClaim,
   type CompensationClaim,
   type PlatformClaims,
 } from './auth.js';

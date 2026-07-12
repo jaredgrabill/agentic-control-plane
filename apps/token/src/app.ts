@@ -70,6 +70,16 @@ interface TokenBody {
     approval_id?: string;
     approver?: string;
   };
+  /**
+   * Capability grounds. Legal ONLY on the broker delegation grant — the issue
+   * and exchange routes refuse a body-supplied capability so no client can
+   * forge the risk class its own token declares. The only legitimate source is
+   * delegate(), which shape-validates name + risk.
+   */
+  capability?: {
+    name?: string;
+    risk?: string;
+  };
 }
 
 export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance> {
@@ -119,6 +129,7 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     }
     rejectApproval(body, 'client_credentials issuance');
     rejectCompensation(body, 'client_credentials issuance');
+    rejectCapability(body, 'client_credentials issuance');
     const audience = body.audience;
     const issued = await guarded('client_credentials', audience, client, () =>
       issuerSvc.issue({
@@ -155,6 +166,7 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     }
     rejectApproval(body, 'token exchange');
     rejectCompensation(body, 'token exchange');
+    rejectCapability(body, 'token exchange');
     const audience = body.audience;
     const subjectToken = body.subject_token;
     const issued = await guarded(TOKEN_EXCHANGE_GRANT, audience, client, () =>
@@ -239,6 +251,15 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
                 Parameters<typeof issuerSvc.delegate>[0]['compensation']
               >,
             }),
+        // Passed through verbatim; delegate() shape-validates name + risk
+        // before it signs the capability claim the tool gateway enforces on.
+        ...(body.capability === undefined
+          ? {}
+          : {
+              capability: body.capability as NonNullable<
+                Parameters<typeof issuerSvc.delegate>[0]['capability']
+              >,
+            }),
         ttlSeconds: parseTtl(body.requested_ttl),
       }),
     );
@@ -261,6 +282,9 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
         // see which write this dispatch unwinds, and the approval that
         // pre-authorized it.
         ...(body.compensation === undefined ? {} : { compensation: body.compensation }),
+        // The capability grounds bound into the token — auditors see the
+        // executing capability and the risk class the tool gateway enforces on.
+        ...(body.capability === undefined ? {} : { capability: body.capability }),
       },
     });
     return reply.send({
@@ -317,6 +341,23 @@ function rejectCompensation(body: TokenBody, grant: string): void {
     throw new AuthError(
       `compensation grounds are not accepted on ${grant} — only the broker delegation grant may ` +
         'assert a compensation, and only from the orchestrator unwind loop',
+      400,
+    );
+  }
+}
+
+/**
+ * Capability grounds may ONLY be asserted on the broker delegation grant. A
+ * body-supplied capability on the issue or exchange route is refused (400) so
+ * no client can forge the risk class its own token declares — the tool gateway
+ * enforces risk from this exact claim, so a self-declared R0 on an R2 write
+ * would launder the write. The only legitimate source is delegate().
+ */
+function rejectCapability(body: TokenBody, grant: string): void {
+  if (body.capability !== undefined) {
+    throw new AuthError(
+      `capability grounds are not accepted on ${grant} — only the broker delegation grant may ` +
+        'assert a capability, and only from the orchestrator dispatch',
       400,
     );
   }

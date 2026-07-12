@@ -756,6 +756,171 @@ describe('compensation binding (item 2)', () => {
   });
 });
 
+describe('capability binding (item 3)', () => {
+  const CAPABILITY = { name: 'change.submit', risk: 'R2' };
+  const APPROVAL = {
+    approval_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90',
+    decision_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f91',
+    approver: 'user:approver.ops',
+    step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51',
+    capability: 'change.submit',
+    subject_digest: 'sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+  };
+  const SNAPSHOT = {
+    sub: 'user:jane.doe',
+    tenant: 'acme',
+    roles: ['tenant-user'],
+    scopes: ['task:submit', 'gov:test:write'],
+  };
+  const NO_CAP = Symbol('none');
+  const base = (capability: unknown = CAPABILITY) => ({
+    grant_type: BROKER_DELEGATION_GRANT,
+    subject: SNAPSHOT,
+    audience: 'acp:agent:approval-test-agent',
+    scope: 'gov:test:write',
+    actor: 'agent:approval-test-agent@0.1.0',
+    grounds: {
+      task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      verified_at: new Date().toISOString(),
+    },
+    ...(capability === NO_CAP ? {} : { capability }),
+  });
+
+  async function delegate(payload: unknown, auth = basic('svc-orchestrator', 'orch-secret')) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/delegate',
+      headers: { authorization: auth },
+      payload: payload as Record<string, unknown>,
+    });
+    return { statusCode: res.statusCode, body: res.json<{ access_token?: string }>() };
+  }
+
+  it('signs a well-formed capability claim into the brokered token', async () => {
+    const res = await delegate(base());
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token!) as unknown as PlatformClaims;
+    expect(claims.capability).toEqual({ name: 'change.submit', risk: 'R2' });
+  });
+
+  it('a delegation without capability grounds carries no capability claim', async () => {
+    const res = await delegate(base(NO_CAP));
+    expect(res.statusCode).toBe(200);
+    expect(decodeJwt(res.body.access_token!).capability).toBeUndefined();
+  });
+
+  it('rejects a malformed capability name or unknown risk → 400', async () => {
+    for (const bad of [
+      { name: 'NotACapability', risk: 'R2' },
+      { name: '', risk: 'R2' },
+      { name: 'change.submit', risk: 'R9' },
+      { name: 'change.submit', risk: '' },
+      { name: 'change.submit' },
+      { risk: 'R2' },
+    ]) {
+      const res = await delegate(base(bad));
+      expect(res.statusCode, JSON.stringify(bad)).toBe(400);
+    }
+  });
+
+  it('carries capability ALONGSIDE approval grounds (a gated R2 write declares both)', async () => {
+    const res = await delegate({ ...base(), approval: APPROVAL });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token!) as unknown as PlatformClaims;
+    expect(claims.capability).toEqual({ name: 'change.submit', risk: 'R2' });
+    expect(claims.approval?.capability).toBe('change.submit');
+  });
+
+  it('the issue route refuses a body-supplied capability field (no self-declared risk)', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: { grant_type: 'client_credentials', audience: 'acp:tools', capability: CAPABILITY },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain('capability');
+  });
+
+  it('the exchange route refuses a body-supplied capability field', async () => {
+    const userToken = await issueUserToken('knowledge:search:read');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: userToken,
+        audience: 'acp:tools',
+        capability: CAPABILITY,
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('propagates capability verbatim across the agent same-actor acp:tools exchange (SPRINT contract)', async () => {
+    const delegated = (await delegate(base())).body.access_token!;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('agent-approval', 'agent-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: delegated,
+        audience: 'acp:tools',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.json<{ access_token: string }>().access_token) as unknown as PlatformClaims;
+    expect(claims.capability).toEqual({ name: 'change.submit', risk: 'R2' });
+    // The brokered task binding rides with it — the tool gateway needs both.
+    expect(claims.brokered?.task_id).toBe('0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40');
+  });
+
+  it('DROPS capability when a platform client appends a NEW actor (no risk-laundering across actors)', async () => {
+    const delegated = (await delegate(base())).body.access_token!;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('svc-orchestrator', 'orch-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: delegated,
+        audience: 'acp:tools',
+        actor: 'agent:someone-else@0.1.0',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(
+      decodeJwt(res.json<{ access_token: string }>().access_token).capability,
+    ).toBeUndefined();
+  });
+
+  it('DROPS capability on a chain-free rescope (actor === subject, no chain)', async () => {
+    const userToken = await issueUserToken('knowledge:search:read');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: userToken,
+        audience: 'acp:tools',
+        actor: 'user:jane.doe',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(decodeJwt(res.json<{ access_token: string }>().access_token).capability).toBeUndefined();
+  });
+
+  it('emits token.brokered audit carrying the capability grounds', async () => {
+    auditEvents.length = 0;
+    await delegate(base());
+    const event = auditEvents.find((e) => e.event_type === 'token.brokered');
+    expect((event?.details as { capability?: { risk: string } }).capability?.risk).toBe('R2');
+  });
+});
+
 describe('ADR-0007 broker delegation', () => {
   const SNAPSHOT = {
     sub: 'user:jane.doe',
