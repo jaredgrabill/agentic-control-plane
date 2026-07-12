@@ -19,6 +19,34 @@ import type { AuditStore } from './store.js';
 
 export const AUDIT_AUDIENCE = 'acp:audit';
 const VERIFY_PAGE = 1000;
+/**
+ * The hot-tier retention floor: six months. Audit records must be retained in
+ * the hot store for at least this long — the EU AI Act Art.19 record-keeping
+ * minimum. Boot REFUSES a configured value below it (fail-closed governance).
+ */
+export const RETENTION_FLOOR_DAYS = 183;
+
+/**
+ * Resolves the configured hot-tier retention (ACP_AUDIT_RETENTION_HOT_DAYS),
+ * enforcing the six-month floor. Throws at boot on an invalid or sub-floor value
+ * so a misconfiguration cannot silently shorten regulated retention.
+ */
+export function resolveRetentionHotDays(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return RETENTION_FLOOR_DAYS;
+  const days = Number.parseInt(raw, 10);
+  if (Number.isNaN(days) || days < 1) {
+    throw new Error(
+      `ACP_AUDIT_RETENTION_HOT_DAYS=${JSON.stringify(raw)} is not a positive integer number of days`,
+    );
+  }
+  if (days < RETENTION_FLOOR_DAYS) {
+    throw new Error(
+      `ACP_AUDIT_RETENTION_HOT_DAYS=${days} is below the ${RETENTION_FLOOR_DAYS}-day floor ` +
+        '(EU AI Act Art.19 six-month audit record-keeping minimum) — refusing to boot',
+    );
+  }
+  return days;
+}
 /** Reconstruction caps the records it assembles; more than this sets `truncated`. */
 const RECONSTRUCT_CAP = 1000;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -27,6 +55,8 @@ export interface AuditDeps {
   verifier: JwtVerifier;
   store: AuditStore;
   logger: Logger;
+  /** Hot-tier retention in days (>= RETENTION_FLOOR_DAYS); resolved at boot. */
+  retentionHotDays?: number;
 }
 
 /** Provenance queries: the E2E "show me the delegation chain for this task" join. */
@@ -154,6 +184,20 @@ export function buildAuditApp(deps: AuditDeps): FastifyInstance {
     }
     const truncated = rows.length > RECONSTRUCT_CAP;
     return reply.send(reconstructTask(task_id, q.tenant, rows.slice(0, RECONSTRUCT_CAP), truncated));
+  });
+
+  // Retention policy surface (D9). The hot floor is enforced at boot; archival
+  // and WORM tiers are deployment policy (see the audit-integrity runbook).
+  app.get('/v1/retention', async (request) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'audit:read');
+    return {
+      hot_days: deps.retentionHotDays ?? RETENTION_FLOOR_DAYS,
+      floor_days: RETENTION_FLOOR_DAYS,
+      archival: 'deployment-policy',
+      worm: 'deployment-policy',
+      runbook: 'docs/runbooks/audit-integrity-and-retention.md',
+    };
   });
 
   return app;

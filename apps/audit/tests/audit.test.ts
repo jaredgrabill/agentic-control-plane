@@ -3,7 +3,12 @@ import { JwtVerifier, createLogger } from '@acp/service-kit';
 import type { FastifyInstance } from 'fastify';
 import { exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildAuditApp, AUDIT_AUDIENCE } from '../src/app.js';
+import {
+  buildAuditApp,
+  AUDIT_AUDIENCE,
+  RETENTION_FLOOR_DAYS,
+  resolveRetentionHotDays,
+} from '../src/app.js';
 import { handleAuditMessage } from '../src/consumer.js';
 import {
   CHAIN_ALGORITHM,
@@ -345,5 +350,40 @@ describe('provenance API', () => {
     expect((await reconstruct('not-a-uuid', 'tenant=acme')).statusCode).toBe(400);
     expect((await reconstruct(RECON_TASK, '')).statusCode).toBe(400);
     expect((await reconstruct(RECON_TASK, 'tenant=acme', 'task:submit')).statusCode).toBe(403);
+  });
+
+  it('serves the retention policy (default floor) behind audit:read', async () => {
+    const res = await app.inject({
+      url: '/v1/retention',
+      headers: { authorization: `Bearer ${await makeToken()}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      hot_days: RETENTION_FLOOR_DAYS,
+      floor_days: RETENTION_FLOOR_DAYS,
+      archival: 'deployment-policy',
+      worm: 'deployment-policy',
+    });
+    const wrong = await app.inject({
+      url: '/v1/retention',
+      headers: { authorization: `Bearer ${await makeToken('task:submit')}` },
+    });
+    expect(wrong.statusCode).toBe(403);
+  });
+});
+
+describe('resolveRetentionHotDays (six-month floor)', () => {
+  it('defaults to the floor when unset', () => {
+    expect(resolveRetentionHotDays(undefined)).toBe(RETENTION_FLOOR_DAYS);
+    expect(resolveRetentionHotDays('')).toBe(RETENTION_FLOOR_DAYS);
+  });
+  it('accepts a value at or above the floor', () => {
+    expect(resolveRetentionHotDays('183')).toBe(183);
+    expect(resolveRetentionHotDays('365')).toBe(365);
+  });
+  it('refuses a sub-floor or invalid value (fail-closed at boot)', () => {
+    expect(() => resolveRetentionHotDays('182')).toThrow(/below the 183-day floor/);
+    expect(() => resolveRetentionHotDays('0')).toThrow();
+    expect(() => resolveRetentionHotDays('nope')).toThrow(/positive integer/);
   });
 });
