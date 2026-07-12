@@ -9,6 +9,7 @@ CLI: uv run --directory python python -m knowledge_agent.eval_report --out <file
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -19,9 +20,12 @@ from acp_protocol import validate
 from knowledge_agent.capabilities.answer import register
 from knowledge_agent.fixture_retriever import FixtureRetriever
 
-# Must equal the version the agent registers with (the E2E suite registers
-# 0.1.0); the registry refuses baselines recorded for any other version.
-AGENT_VERSION = "0.1.0"
+# Must equal the version the agent registers with (the registry refuses
+# baselines recorded for any other version). Env-overridable so a deployment
+# rehearsal genuinely regenerates a candidate's baseline against its own
+# version (e.g. ACP_EVAL_AGENT_VERSION=0.2.0), with --agent-version still
+# taking precedence.
+AGENT_VERSION = os.environ.get("ACP_EVAL_AGENT_VERSION", "0.1.0")
 
 AGENT_DIR = Path(__file__).resolve().parents[2]
 GOLDEN_DIR = AGENT_DIR / "evals" / "golden"

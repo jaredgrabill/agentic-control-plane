@@ -6,10 +6,11 @@ polish phrasing later (Phase 2 LLM gateway); the citation and abstention
 behavior — the gated metrics — do not depend on it.
 """
 
+import os
 import re
 from typing import Any
 
-from acp_agent_sdk import Agent, CapabilityContext
+from acp_agent_sdk import Agent, CapabilityContext, CapabilityError, ErrorClass
 
 STOPWORDS = frozenset(
     "a about all also an and any are as at be but by do does for from has have how in is it "
@@ -28,6 +29,16 @@ def register(agent: Agent) -> None:
 
     @agent.capability("knowledge.answer_with_citations")
     async def answer(ctx: CapabilityContext, input: dict[str, Any]) -> dict[str, Any]:
+        # Deployment-rehearsal failure directive (item 4): a v3 candidate worker
+        # set with ACP_KNOWLEDGE_AGENT_FAILURE=permanent fails every answer, so a
+        # canary gate breaches and the controller auto-rolls back. Runtime-only —
+        # the golden suite (no env set) is unaffected, so the baseline still
+        # regenerates cleanly.
+        if os.environ.get("ACP_KNOWLEDGE_AGENT_FAILURE") == "permanent":
+            raise CapabilityError(
+                ErrorClass.PERMANENT,
+                "knowledge agent failure directive active (deployment rehearsal)",
+            )
         question = input["question"]
         results = await ctx.retrieve(question, k=6)
         builder = agent.answer_builder()
