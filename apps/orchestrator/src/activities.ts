@@ -153,6 +153,60 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
       return agents[0] ?? null;
     },
 
+    async resolveRoute(input) {
+      const token = await serviceToken('acp:registry', 'registry:read');
+      // Deterministic session bucket: the same for every step of a task, so a
+      // whole task pins to one version end-to-end (session pinning). Monotonic
+      // ramp keeps a canary task canary; a rollback (ramp DOWN) re-routes the
+      // vacated bucket to the incumbent mid-task — the point of a rollback.
+      const bucket = parseInt(sha256Digest(input.taskId).slice('sha256:'.length, 15), 16) % 100;
+
+      // A pinned dispatch (a compensator) routes to EXACTLY the version that did
+      // the original write, and is NEVER shadow-mirrored.
+      if (input.pin !== undefined) {
+        const res = await doFetch(
+          `${deps.registryUrl}/v1/agents/${encodeURIComponent(input.pin.agentId)}` +
+            `/versions/${encodeURIComponent(input.pin.version)}`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        if (res.status === 404) return null;
+        if (!res.ok) throw new Error(`route pin lookup failed: ${res.status} ${await res.text()}`);
+        const card = (await res.json()) as AgentCard;
+        return { card, route: 'pinned', bucket };
+      }
+
+      const res = await doFetch(
+        `${deps.registryUrl}/v1/routing?capability=${encodeURIComponent(input.capability)}`,
+        { headers: { authorization: `Bearer ${token}` } },
+      );
+      if (!res.ok) throw new Error(`routing lookup failed: ${res.status} ${await res.text()}`);
+      const set = (await res.json()) as {
+        active?: AgentCard;
+        canary?: { card: AgentCard; ramp_percent: number };
+        shadow?: AgentCard;
+      };
+
+      // Canary session pinning: this task's bucket falls under the ramp → the
+      // whole task runs the candidate; otherwise the incumbent.
+      if (set.canary !== undefined && bucket < set.canary.ramp_percent) {
+        return {
+          card: set.canary.card,
+          route: 'canary',
+          rampPercent: set.canary.ramp_percent,
+          bucket,
+        };
+      }
+      if (set.active === undefined) return null;
+      return {
+        card: set.active,
+        route: 'active',
+        bucket,
+        // A shadow candidate (shadow soak only — an agent has at most one
+        // shadow-or-canary) is mirrored; the primary still runs the incumbent.
+        ...(set.shadow === undefined ? {} : { shadowCard: set.shadow }),
+      };
+    },
+
     async authorizeDelegation(input) {
       // The principal's scopes come from the intake snapshot — verified
       // once, while fresh (ADR-0007) — never the manifest's wishlist.
@@ -238,6 +292,10 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
           // risk, on every mint. The tool gateway enforces risk classes from
           // this claim; the token service shape-validates name + risk.
           ...(input.capability === undefined ? {} : { capability: input.capability }),
+          // Signed deployment grounds — present ONLY for a shadow step token.
+          // The token service shape-validates the mode; the tool gateway
+          // suppresses side effects for it.
+          ...(input.deployment === undefined ? {} : { deployment: input.deployment }),
         }),
       });
       if (!res.ok) {
@@ -257,6 +315,13 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
 
     async emitAudit(event) {
       await deps.audit.publish(auditEventParser.parse(event));
+    },
+
+    digestValue(value) {
+      // sha256 over the canonical (key-sorted) value — the isolate has no
+      // crypto. The shadow gate joins a candidate's output_digest to the
+      // incumbent's for comparison.
+      return Promise.resolve({ digest: sha256Digest(stableStringify(value)) });
     },
 
     getPriceBook() {

@@ -70,6 +70,14 @@ export interface CompensationDispatch {
   originalCapability: string;
   /** The approval that authorized the original write, if it was gated. */
   approval?: ExecutedApproval;
+  /**
+   * The agent id + version that executed the original write. A compensator is
+   * PINNED to this exact version (resolveRoute pin), so the undo runs on the
+   * same code that did the write — never re-routed to a canary/active that may
+   * behave differently — and it is NEVER shadow-mirrored.
+   */
+  agentId: string;
+  agentVersion: string;
 }
 
 /** The approval grounds recorded when a gated write executed (subset carried for compensation). */
@@ -225,6 +233,41 @@ export interface CapabilityTokenGrounds {
   risk: string;
 }
 
+/**
+ * The version-aware routing decision for one step (item 4, D5). `route`
+ * distinguishes the incumbent (`active`), a session-pinned canary
+ * (`canary` — this task's bucket fell under the ramp), and a compensator pinned
+ * to its original version (`pinned`). `bucket` is the deterministic
+ * sha256(task_id)%100 — the same for every step of a task, so a task stays on
+ * one version end-to-end (session pinning). `shadowCard`, present only during a
+ * shadow soak (never for a pinned compensator), names the candidate to mirror.
+ */
+export interface RouteResult {
+  card: AgentCard;
+  route: 'active' | 'canary' | 'pinned';
+  /** The canary ramp percentage this bucket was compared against (route==='canary'). */
+  rampPercent?: number;
+  /** Deterministic session bucket, sha256(task_id)%100. */
+  bucket: number;
+  /** The shadow candidate to mirror this step to (shadow soak only). */
+  shadowCard?: AgentCard;
+}
+
+/** Input to the ShadowStepWorkflow — a fire-and-forget mirror of one primary step. */
+export interface ShadowStepInput {
+  taskId: string;
+  stepId: string;
+  tenant: string;
+  principal: string;
+  snapshot: PrincipalSnapshot;
+  capability: string;
+  input: Record<string, unknown>;
+  /** The shadow candidate card (agent id + version + declared capability). */
+  shadowCard: AgentCard;
+  /** The incumbent version this shadow is compared against (for the gate join). */
+  incumbentVersion: string;
+}
+
 /** Control-plane activities implemented by the orchestrator's own worker. */
 export interface ControlActivities {
   /**
@@ -244,6 +287,19 @@ export interface ControlActivities {
   planTask(task: TaskRequest): Promise<{ plan: Plan; planDigest: string }>;
   /** Registry lookup: active agents serving a capability. Truth, not bus scanning. */
   discoverAgent(capability: string, tenant: string): Promise<AgentCard | null>;
+  /**
+   * Version-aware routing (item 4, D5). Reads the registry routing set for a
+   * capability, computes the deterministic session bucket, and returns the card
+   * to run plus any shadow candidate to mirror. A `pin` (a compensator's
+   * original agent+version) routes to exactly that version and never mirrors.
+   * Returns null when nothing serves the capability.
+   */
+  resolveRoute(input: {
+    capability: string;
+    tenant: string;
+    taskId: string;
+    pin?: { agentId: string; version: string };
+  }): Promise<RouteResult | null>;
   /**
    * Cedar decision for one delegation. The orchestrator is the PEP for
    * agent-to-agent and user-to-agent delegation. Presents the principal's
@@ -304,9 +360,17 @@ export interface ControlActivities {
      * from. Independent of approval/compensation (a gated write carries both).
      */
     capability?: CapabilityTokenGrounds;
+    /**
+     * Signed into the token's deployment claim — present ONLY when the
+     * ShadowStepWorkflow brokers a shadow step token. The tool gateway reads it
+     * to suppress side effects for the shadow step.
+     */
+    deployment?: { mode: string };
   }): Promise<{ token: string }>;
   /** Protocol-validated audit emission (JetStream-acked). */
   emitAudit(event: Record<string, unknown>): Promise<void>;
+  /** sha256 over the canonical form of a value (the shadow result's output digest). */
+  digestValue(value: unknown): Promise<{ digest: string }>;
   /**
    * Loads and resolves the current price book to integer micro-USD rates
    * (Cost Meter). Called once per task; the resolved book is pinned into

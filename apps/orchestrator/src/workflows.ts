@@ -10,6 +10,7 @@
 import {
   ApplicationFailure,
   CancellationScope,
+  ParentClosePolicy,
   condition,
   defineQuery,
   defineSignal,
@@ -17,6 +18,7 @@ import {
   isCancellation,
   proxyActivities,
   setHandler,
+  startChild,
   uuid4,
   workflowInfo,
 } from '@temporalio/workflow';
@@ -51,6 +53,8 @@ import {
   type ControlActivities,
   type ExecutedWrite,
   type PrincipalSnapshot,
+  type RouteResult,
+  type ShadowStepInput,
   type StepDispatch,
   type StepExecution,
 } from './types.js';
@@ -454,6 +458,9 @@ async function runTaskBody(
           compensation: {
             originalStepId: entry.originalStepId,
             originalCapability: entry.originalCapability,
+            // Pin the compensator to the version that did the write (D5).
+            agentId: entry.agentId,
+            agentVersion: entry.agentVersion,
             ...(entry.approval === undefined ? {} : { approval: entry.approval }),
           },
         });
@@ -698,11 +705,25 @@ async function runAgentStep(
     });
   }
 
-  // Dispatch-time discovery: a suspended agent is not `active` in the
-  // registry, so the kill switch keeps stopping traffic per step — even for
-  // steps planned hours ago.
-  const card = await control.discoverAgent(planStep.capability, dispatch.tenant);
-  if (card === null) {
+  // Dispatch-time version-aware routing (D5): resolveRoute reads the registry
+  // routing set, computes the deterministic session bucket, and returns the
+  // card to run plus any shadow candidate to mirror. A suspended agent is not
+  // `active`, so the kill switch keeps stopping traffic per step. A compensator
+  // is PINNED to the version that did the write and is never mirrored.
+  const route = await control.resolveRoute({
+    capability: planStep.capability,
+    tenant: dispatch.tenant,
+    taskId: dispatch.taskId,
+    ...(dispatch.compensation === undefined
+      ? {}
+      : {
+          pin: {
+            agentId: dispatch.compensation.agentId,
+            version: dispatch.compensation.agentVersion,
+          },
+        }),
+  });
+  if (route === null) {
     return failed({
       class: 'permanent',
       message:
@@ -710,6 +731,7 @@ async function runAgentStep(
         'the agent may be suspended or not yet promoted (check the registry)',
     });
   }
+  const card = route.card;
   if (planStep.agent_id !== undefined && planStep.agent_id !== card.manifest.id) {
     return failed({
       class: 'permanent',
@@ -831,10 +853,16 @@ async function runAgentStep(
       });
     }
 
-    // Re-discover after the wait: suspension DURING the approval window must
-    // still stop traffic. If the agent is gone or its active version moved,
+    // Re-route after the wait: suspension DURING the approval window must
+    // still stop traffic. If the agent is gone or its routed version moved,
     // the approval no longer applies to what would run — fail permanent.
-    const current = await control.discoverAgent(planStep.capability, dispatch.tenant);
+    const current = (
+      await control.resolveRoute({
+        capability: planStep.capability,
+        tenant: dispatch.tenant,
+        taskId: dispatch.taskId,
+      })
+    )?.card;
     if (current?.manifest.id !== card.manifest.id || current.version !== card.version) {
       return failed({
         class: 'permanent',
@@ -920,14 +948,44 @@ async function runAgentStep(
           },
         };
 
+  // Routing details on step.dispatched — the canary gate folds route +
+  // ramp_percent to split candidate vs incumbent samples (open details, no
+  // schema change).
   await control.emitAudit(
     stepAudit(dispatch, 'step.dispatched', card, {
       capability: planStep.capability,
       policy: decision,
+      route: route.route,
+      ...(route.rampPercent === undefined ? {} : { ramp_percent: route.rampPercent }),
       ...(approvalGrounds === undefined ? {} : { approval_id: approvalGrounds.approval_id }),
       ...compensationDetails,
     }),
   );
+
+  // Shadow mirroring (D6): during a shadow soak the primary runs the incumbent,
+  // and a fire-and-forget ShadowStepWorkflow runs the SAME step against the
+  // candidate. ABANDON parent-close policy + never awaited: shadow latency or
+  // failure can NEVER touch production, and shadow usage never lands in the
+  // ledger/budget. Compensators pin and never mirror (route.shadowCard absent).
+  if (route.shadowCard !== undefined) {
+    await startChild(ShadowStepWorkflow, {
+      workflowId: `${workflowInfo().workflowId}-shadow-${planStep.step_id}`,
+      parentClosePolicy: ParentClosePolicy.ABANDON,
+      args: [
+        {
+          taskId: dispatch.taskId,
+          stepId: planStep.step_id,
+          tenant: dispatch.tenant,
+          principal: dispatch.principal,
+          snapshot,
+          capability: planStep.capability,
+          input: planStep.input,
+          shadowCard: route.shadowCard,
+          incumbentVersion: card.version,
+        } satisfies ShadowStepInput,
+      ],
+    });
+  }
 
   const agent = proxyActivities<AgentActivities>({
     taskQueue: agentTaskQueue(card.manifest.id, card.version),
@@ -943,12 +1001,17 @@ async function runAgentStep(
   // finish and be recorded — so the parent KNOWS the write happened and can
   // unwind it ("we did X and undid it") rather than leaving unknown state.
   const result = await CancellationScope.nonCancellable(async (): Promise<StepResult> => {
+    // duration_ms is the workflow-clock delta around execute_capability — the
+    // canary gate's p95 latency signal (open details, no schema change).
+    const startedMs = Date.now();
     const stepResult = await agent.execute_capability(request);
+    const durationMs = Date.now() - startedMs;
     await control.emitAudit(
       stepAudit(dispatch, 'step.completed', card, {
         capability: planStep.capability,
         status: stepResult.status,
         usage: stepResult.usage ?? null,
+        duration_ms: durationMs,
         ...compensationDetails,
       }),
     );
@@ -976,6 +1039,118 @@ async function runAgentStep(
         }),
   };
   return { result, executed };
+}
+
+/**
+ * Fire-and-forget mirror of one primary step against a shadow candidate (D6).
+ * Started with ParentClosePolicy.ABANDON and NEVER awaited, so its latency or
+ * failure can never touch production. It runs the SAME PEP (authorizeDelegation)
+ * — a gated (require-approval) capability is NOT mirrored in v0, recorded and
+ * skipped — mints a token carrying `deployment {mode:'shadow'}` (the tool
+ * gateway suppresses its side effects), executes the candidate, and emits
+ * `deployment.shadow_result` joined to the primary on (task_id, step_id). It
+ * NEVER throws: every failure is caught and recorded as the shadow result, so
+ * the abandoned child always closes cleanly.
+ */
+export async function ShadowStepWorkflow(input: ShadowStepInput): Promise<void> {
+  const { shadowCard } = input;
+  const declared = shadowCard.manifest.capabilities.find((c) => c.name === input.capability);
+
+  const emitResult = async (
+    status: 'completed' | 'failed' | 'skipped',
+    extra: Record<string, unknown>,
+  ): Promise<void> => {
+    await control.emitAudit({
+      event_id: uuid4(),
+      occurred_at: new Date().toISOString(),
+      // Task tenant — the shadow result is paired to the task's primary steps.
+      tenant: input.tenant,
+      event_type: 'deployment.shadow_result',
+      actor: {
+        principal: 'svc:orchestrator',
+        delegation_chain: [{ sub: input.principal }, { sub: 'svc:orchestrator' }],
+      },
+      action: { name: 'deployment.shadow_result' },
+      reason: { task_id: input.taskId, step_id: input.stepId },
+      artifacts: {
+        agent_id: shadowCard.manifest.id,
+        agent_version: shadowCard.version,
+        workflow_run_id: workflowInfo().runId,
+      },
+      details: { status, incumbent_version: input.incumbentVersion, ...extra },
+    });
+  };
+
+  try {
+    if (declared === undefined) {
+      await emitResult('skipped', { reason: 'shadow candidate does not declare the capability' });
+      return;
+    }
+    const requestedScopes = (shadowCard.manifest.tools ?? []).flatMap((t) => t.scopes);
+
+    // Same PEP as the primary. v0 does not mirror a gated capability (a
+    // require-approval verdict would need a human) — record and stop.
+    const decision = await control.authorizeDelegation({
+      principal: input.principal,
+      tenant: input.tenant,
+      agent: shadowCard,
+      capability: input.capability,
+      snapshot: input.snapshot,
+      requestedScopes,
+      taskId: input.taskId,
+      stepId: input.stepId,
+    });
+    if (decision.decision !== 'allow') {
+      await emitResult('skipped', {
+        reason: `shadow not mirrored: policy verdict ${decision.decision} (v0 mirrors only allow)`,
+      });
+      return;
+    }
+
+    const { token } = await control.brokerToken({
+      snapshot: input.snapshot,
+      agent: shadowCard,
+      scopes: requestedScopes,
+      taskId: input.taskId,
+      capability: { name: input.capability, risk: declared.risk },
+      // The shadow claim — the tool gateway suppresses this step's side effects.
+      deployment: { mode: 'shadow' },
+    });
+
+    const request: StepRequest = {
+      kind: 'step_request',
+      step_id: input.stepId,
+      task_id: input.taskId,
+      tenant: input.tenant,
+      agent_id: shadowCard.manifest.id,
+      agent_version: shadowCard.version,
+      capability: input.capability,
+      input: input.input,
+      delegation_depth: 1,
+      delegated_token: token,
+    };
+
+    const agent = proxyActivities<AgentActivities>({
+      taskQueue: agentTaskQueue(shadowCard.manifest.id, shadowCard.version),
+      // 2× the SLA — a slow shadow must not hang, but it gets room to complete.
+      startToCloseTimeout: `${(declared.sla?.p95_latency_s ?? shadowCard.manifest.sla?.p95_latency_s ?? 30) * 2} seconds`,
+      retry: { maximumAttempts: 1 },
+    });
+
+    const startedMs = Date.now();
+    const result = await agent.execute_capability(request);
+    const durationMs = Date.now() - startedMs;
+    const { digest } = await control.digestValue(result.output ?? null);
+    await emitResult(result.status === 'completed' ? 'completed' : 'failed', {
+      output_digest: digest,
+      usage: result.usage ?? null,
+      duration_ms: durationMs,
+      ...(result.error?.class === undefined ? {} : { error_class: result.error.class }),
+    });
+  } catch (err) {
+    // A shadow failure is data, never an incident: record it and close cleanly.
+    await emitResult('failed', { error_class: 'shadow_error', error: rootMessage(err) });
+  }
 }
 
 /** Signal the gateway sends a verified human decision on. */

@@ -244,6 +244,103 @@ describe('discoverAgent', () => {
   });
 });
 
+describe('resolveRoute', () => {
+  const routingFetch = (set: Record<string, unknown>) =>
+    vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token')
+        ? jsonResponse({ access_token: 't' })
+        : jsonResponse(set),
+    ) as unknown as typeof fetch;
+
+  it('routes to the active incumbent and computes a deterministic bucket', async () => {
+    const acts = makeActivities(routingFetch({ active: card }));
+    const r1 = await acts.resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    });
+    expect(r1?.route).toBe('active');
+    expect(r1?.card.manifest.id).toBe('knowledge-agent');
+    expect(r1?.bucket).toBeGreaterThanOrEqual(0);
+    expect(r1?.bucket).toBeLessThan(100);
+    // Same task_id → same bucket (session pinning is a pure function of task_id).
+    const r2 = await acts.resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    });
+    expect(r2?.bucket).toBe(r1?.bucket);
+  });
+
+  it('routes to the canary when the bucket is under the ramp, else the incumbent', async () => {
+    const alwaysCanary = await makeActivities(
+      routingFetch({ active: card, canary: { card, ramp_percent: 100 } }),
+    ).resolveRoute({ capability: 'knowledge.answer_with_citations', tenant: 'acme', taskId: 't-1' });
+    expect(alwaysCanary?.route).toBe('canary');
+    expect(alwaysCanary?.rampPercent).toBe(100);
+
+    const neverCanary = await makeActivities(
+      routingFetch({ active: card, canary: { card, ramp_percent: 0 } }),
+    ).resolveRoute({ capability: 'knowledge.answer_with_citations', tenant: 'acme', taskId: 't-1' });
+    expect(neverCanary?.route).toBe('active');
+  });
+
+  it('surfaces a shadow candidate to mirror (shadow soak)', async () => {
+    const r = await makeActivities(routingFetch({ active: card, shadow: card })).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+    });
+    expect(r?.route).toBe('active');
+    expect(r?.shadowCard?.manifest.id).toBe('knowledge-agent');
+  });
+
+  it('returns null when nothing is active', async () => {
+    const r = await makeActivities(routingFetch({})).resolveRoute({
+      capability: 'x.y',
+      tenant: 'acme',
+      taskId: 't-1',
+    });
+    expect(r).toBeNull();
+  });
+
+  it('pins to an exact version (compensator) and never mirrors; 404 → null', async () => {
+    const pinFetch = vi.fn((url: string | URL) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      if (s.includes('/versions/0.1.0')) return jsonResponse(card);
+      return jsonResponse({ error: 'nope' }, 404);
+    }) as unknown as typeof fetch;
+    const acts = makeActivities(pinFetch);
+    const pinned = await acts.resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+      pin: { agentId: 'knowledge-agent', version: '0.1.0' },
+    });
+    expect(pinned?.route).toBe('pinned');
+    expect(pinned?.shadowCard).toBeUndefined();
+
+    const missing = await acts.resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+      pin: { agentId: 'knowledge-agent', version: '9.9.9' },
+    });
+    expect(missing).toBeNull();
+  });
+});
+
+describe('digestValue', () => {
+  it('is a stable sha256 over the canonical value (key-order independent)', async () => {
+    const acts = makeActivities(vi.fn() as unknown as typeof fetch);
+    const a = await acts.digestValue({ b: 1, a: 2 });
+    const b = await acts.digestValue({ a: 2, b: 1 });
+    expect(a.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
+    expect(a.digest).toBe(b.digest);
+  });
+});
+
 describe('authorizeDelegation', () => {
   it('sends the Cedar request with risk and the SNAPSHOT scopes — no verifier call', async () => {
     verify.mockClear();

@@ -17,6 +17,7 @@ import { randomUUID } from 'node:crypto';
 import {
   AgentStepWorkflow,
   ApprovalWorkflow,
+  ShadowStepWorkflow,
   TaskWorkflow,
   approvalDecisionSignal,
   approvalStatusQuery,
@@ -33,6 +34,7 @@ import {
   type ApprovalSubject,
   type ControlActivities,
   type PrincipalSnapshot,
+  type ShadowStepInput,
   type StepDispatch,
 } from '../src/types.js';
 
@@ -147,6 +149,7 @@ const control: ControlActivities = {
   snapshotPrincipal: vi.fn(),
   planTask: vi.fn(),
   discoverAgent: vi.fn(),
+  resolveRoute: vi.fn(),
   authorizeDelegation: vi.fn(),
   brokerToken: vi.fn(),
   digestApprovalSubject: vi.fn(),
@@ -154,6 +157,7 @@ const control: ControlActivities = {
     audited.push(e);
     return Promise.resolve();
   }),
+  digestValue: vi.fn(),
   getPriceBook: vi.fn(),
 };
 
@@ -218,6 +222,20 @@ beforeEach(() => {
   vi.mocked(control.discoverAgent)
     .mockReset()
     .mockImplementation((capability: string) => Promise.resolve(CARDS[capability] ?? null));
+  // resolveRoute delegates to discoverAgent so every discoverAgent override
+  // below keeps driving routing; it wraps the card in a version-active route
+  // (or a pinned route for a compensator). Bucket is fixed (single-version
+  // tests don't split traffic).
+  vi.mocked(control.resolveRoute)
+    .mockReset()
+    .mockImplementation(async (input) => {
+      const card = await control.discoverAgent(input.capability, input.tenant);
+      if (card === null) return null;
+      return { card, route: input.pin === undefined ? 'active' : 'pinned', bucket: 0 };
+    });
+  vi.mocked(control.digestValue)
+    .mockReset()
+    .mockResolvedValue({ digest: `sha256:${'0'.repeat(64)}` });
   vi.mocked(control.authorizeDelegation)
     .mockReset()
     .mockResolvedValue({
@@ -381,6 +399,12 @@ describe('TaskWorkflow v1', () => {
     const planned = audited[0]!;
     expect((planned.details as { plan: Plan }).plan.plan_id).toBe(PLAN_ID);
     expect((planned.action as { outputs_digest: string }).outputs_digest).toBe(DIGEST);
+
+    // Item 4: routing + latency ride the step audits the canary gate folds.
+    const dispatched = audited.find((e) => e.event_type === 'step.dispatched')!;
+    expect((dispatched.details as { route: string }).route).toBe('active');
+    const completed = audited.find((e) => e.event_type === 'step.completed')!;
+    expect((completed.details as { duration_ms: number }).duration_ms).toBeGreaterThanOrEqual(0);
   });
 
   it('(2) fan-out happy path: parallel sections, renumbered markers, one snapshot, two brokered mints', async () => {
@@ -1750,5 +1774,116 @@ describe('planner sequence shape', () => {
     );
     expect(specs).toHaveLength(1);
     expect(specs[0]!.capability).toBe('knowledge.answer_with_citations');
+  });
+});
+
+describe('ShadowStepWorkflow (D6 mirror)', () => {
+  // A candidate version of the knowledge agent serving on its own versioned
+  // queue (agent-knowledge-agent@0.2.0).
+  const shadowCard: AgentCard = { ...knowledgeCard, version: '0.2.0' };
+  const SHADOW_STEP = STEP_IDS[0];
+
+  const shadowInput = (): ShadowStepInput => ({
+    taskId: TASK_ID,
+    stepId: SHADOW_STEP,
+    tenant: 'acme',
+    principal: 'user:jane.doe',
+    snapshot,
+    capability: 'knowledge.answer_with_citations',
+    input: { text: 'q' },
+    shadowCard,
+    incumbentVersion: '0.1.0',
+  });
+
+  /** Runs a control worker + a shadow agent worker on the versioned queue. */
+  async function withShadowWorker<T>(run: () => Promise<T>): Promise<T> {
+    const namespace = env.namespace ?? 'default';
+    const controlWorker = await Worker.create({
+      connection: env.nativeConnection,
+      namespace,
+      taskQueue: CONTROL_TASK_QUEUE,
+      workflowBundle,
+      activities: { ...control },
+    });
+    const shadowWorker = await Worker.create({
+      connection: env.nativeConnection,
+      namespace,
+      taskQueue: agentTaskQueue('knowledge-agent', '0.2.0'),
+      activities: { execute_capability: knowledgeExec },
+    });
+    return controlWorker.runUntil(shadowWorker.runUntil(run()));
+  }
+
+  it('mirrors an allowed step and emits a paired deployment.shadow_result', async () => {
+    knowledgeExec.mockResolvedValue({
+      kind: 'step_result',
+      step_id: SHADOW_STEP,
+      task_id: TASK_ID,
+      tenant: 'acme',
+      status: 'completed',
+      output: { text: 'shadow answer', citations: [], confidence: 0.9 },
+      usage: { input_tokens: 10, output_tokens: 5, llm_calls: 1 },
+    });
+
+    await withShadowWorker(async () => {
+      await env.client.workflow.execute(ShadowStepWorkflow, {
+        taskQueue: CONTROL_TASK_QUEUE,
+        workflowId: workflowId(),
+        args: [shadowInput()],
+      });
+    });
+
+    const shadow = audited.find((e) => e.event_type === 'deployment.shadow_result')!;
+    expect(shadow).toBeDefined();
+    // Paired to the primary on (task_id, step_id).
+    expect((shadow.reason as { task_id: string; step_id: string })).toEqual({
+      task_id: TASK_ID,
+      step_id: SHADOW_STEP,
+    });
+    const details = shadow.details as { status: string; incumbent_version: string; output_digest: string };
+    expect(details.status).toBe('completed');
+    expect(details.incumbent_version).toBe('0.1.0');
+    expect(details.output_digest).toMatch(/^sha256:/);
+    // Attributed to the CANDIDATE version.
+    expect((shadow.artifacts as { agent_version: string }).agent_version).toBe('0.2.0');
+    // The shadow claim was minted (deployment grounds).
+    expect(vi.mocked(control.brokerToken)).toHaveBeenCalledWith(
+      expect.objectContaining({ deployment: { mode: 'shadow' } }),
+    );
+  });
+
+  it('does NOT mirror a gated capability (verdict != allow) — records skipped', async () => {
+    vi.mocked(control.authorizeDelegation).mockResolvedValue({
+      decision: 'require-approval',
+      bundle_version: '2026.07+gate',
+      determining_policies: ['gate-r2-delegation'],
+    });
+    await withShadowWorker(async () => {
+      await env.client.workflow.execute(ShadowStepWorkflow, {
+        taskQueue: CONTROL_TASK_QUEUE,
+        workflowId: workflowId(),
+        args: [shadowInput()],
+      });
+    });
+    const shadow = audited.find((e) => e.event_type === 'deployment.shadow_result')!;
+    expect((shadow.details as { status: string }).status).toBe('skipped');
+    // No token minted for a non-mirrored gated capability.
+    expect(vi.mocked(control.brokerToken)).not.toHaveBeenCalled();
+  });
+
+  it('never throws: an execute failure is recorded as a failed shadow result', async () => {
+    knowledgeExec.mockRejectedValue(
+      ApplicationFailure.nonRetryable('shadow agent boom', 'Permanent'),
+    );
+    await withShadowWorker(async () => {
+      // execute() resolves (void) even though the shadow agent failed.
+      await env.client.workflow.execute(ShadowStepWorkflow, {
+        taskQueue: CONTROL_TASK_QUEUE,
+        workflowId: workflowId(),
+        args: [shadowInput()],
+      });
+    });
+    const shadow = audited.find((e) => e.event_type === 'deployment.shadow_result')!;
+    expect((shadow.details as { status: string }).status).toBe('failed');
   });
 });
