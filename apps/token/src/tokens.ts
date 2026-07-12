@@ -8,6 +8,7 @@ import {
   type ApprovalClaim,
   type CapabilityClaim,
   type CompensationClaim,
+  type DeploymentClaim,
   type PlatformClaims,
 } from '@acp/service-kit';
 import { SignJWT, createLocalJWKSet, jwtVerify } from 'jose';
@@ -105,6 +106,20 @@ export interface CapabilityGrounds {
   risk: string;
 }
 
+/**
+ * Deployment grounds a broker asserts when minting a SHADOW step token (Phase 3
+ * item 4): the deployment mode. Set ONLY by the orchestrator's
+ * ShadowStepWorkflow. Shape-validated at the mint; the signed `deployment`
+ * claim is what the tool gateway reads to suppress side effects for a shadow
+ * step (R0 reads execute; R1+ writes are refused and recorded). v0 accepts
+ * `mode: 'shadow'` only.
+ */
+export interface DeploymentGrounds {
+  mode: string;
+}
+
+const DEPLOYMENT_MODES = new Set(['shadow']);
+
 /** `agent:{id}@{version}` (or `agent:{id}`) → the bare kill-switch id; undefined for non-agents. */
 function agentIdOf(principal: string): string | undefined {
   if (!principal.startsWith('agent:')) return undefined;
@@ -173,6 +188,12 @@ export interface DelegateRequest {
    * downstream (fail-safe — only R0 tools pass).
    */
   capability?: CapabilityGrounds | undefined;
+  /**
+   * Deployment grounds — present only when the orchestrator's
+   * ShadowStepWorkflow brokers a shadow step token. Signed into the token as
+   * the `deployment` claim; the tool gateway reads it to suppress side effects.
+   */
+  deployment?: DeploymentGrounds | undefined;
   ttlSeconds?: number | undefined;
 }
 
@@ -391,6 +412,17 @@ export class TokenIssuer {
     // No injection path: the claim can only come from the verified subject
     // token; the exchange endpoint accepts no body-supplied capability.
     const capability = sameActor ? subject.capability : undefined;
+    // Item 4: the deployment claim rides the SAME same-actor branch as the four
+    // before it (brokered, approval, compensation, capability). This is the
+    // load-bearing propagation for shadow suppression: the ShadowStepWorkflow's
+    // shadow agent presents an exchanged acp:tools token, so the tool gateway
+    // reads `deployment.mode === 'shadow'` from the EXCHANGED token — which only
+    // works because it propagates here. A new actor (actor-appending exchange)
+    // or a chain-free rescope inherits NONE of the five claims: a stolen shadow
+    // token cannot be laundered onto a different actor. No injection path: the
+    // claim can only come from the verified subject token; the exchange endpoint
+    // accepts no body-supplied deployment.
+    const deployment = sameActor ? subject.deployment : undefined;
 
     return this.sign(
       {
@@ -404,6 +436,7 @@ export class TokenIssuer {
         ...(approval !== undefined ? { approval } : {}),
         ...(compensation !== undefined ? { compensation } : {}),
         ...(capability !== undefined ? { capability } : {}),
+        ...(deployment !== undefined ? { deployment } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
@@ -457,6 +490,8 @@ export class TokenIssuer {
       request.compensation === undefined ? undefined : buildCompensationClaim(request.compensation);
     const capabilityClaim =
       request.capability === undefined ? undefined : buildCapabilityClaim(request.capability);
+    const deploymentClaim =
+      request.deployment === undefined ? undefined : buildDeploymentClaim(request.deployment);
 
     // Explicit-or-nothing: no "default to the snapshot" branch. A toolless
     // agent (requested = []) mints a token with zero scopes, keeping the
@@ -500,6 +535,7 @@ export class TokenIssuer {
         ...(approvalClaim !== undefined ? { approval: approvalClaim } : {}),
         ...(compensationClaim !== undefined ? { compensation: compensationClaim } : {}),
         ...(capabilityClaim !== undefined ? { capability: capabilityClaim } : {}),
+        ...(deploymentClaim !== undefined ? { deployment: deploymentClaim } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
@@ -650,4 +686,22 @@ function buildCapabilityClaim(raw: unknown): CapabilityClaim {
     bad('risk must be one of R0, R1, R2, R3');
   }
   return { name: grounds.name, risk: grounds.risk };
+}
+
+/**
+ * Validates deployment grounds and shapes the signed `deployment` claim. The
+ * mode must be a known deployment mode — v0 accepts `shadow` only. A malformed
+ * or unknown mode never becomes a signed claim, because the tool gateway
+ * suppresses side effects from exactly this field.
+ */
+function buildDeploymentClaim(raw: unknown): DeploymentClaim {
+  const bad = (msg: string): never => {
+    throw new AuthError(`deployment grounds rejected: ${msg}`, 400);
+  };
+  if (typeof raw !== 'object' || raw === null) bad('must be an object');
+  const grounds = raw as DeploymentGrounds;
+  if (typeof grounds.mode !== 'string' || !DEPLOYMENT_MODES.has(grounds.mode)) {
+    bad("mode must be 'shadow' (the only v0 deployment mode)");
+  }
+  return { mode: grounds.mode };
 }

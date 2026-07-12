@@ -921,6 +921,160 @@ describe('capability binding (item 3)', () => {
   });
 });
 
+describe('deployment binding (item 4 — 5th propagated claim)', () => {
+  const CAPABILITY = { name: 'knowledge.search', risk: 'R0' };
+  const SNAPSHOT = {
+    sub: 'user:jane.doe',
+    tenant: 'acme',
+    roles: ['tenant-user'],
+    scopes: ['task:submit'],
+  };
+  const NO_DEP = Symbol('none');
+  const base = (deployment: unknown = { mode: 'shadow' }) => ({
+    grant_type: BROKER_DELEGATION_GRANT,
+    subject: SNAPSHOT,
+    audience: 'acp:agent:approval-test-agent',
+    scope: '',
+    actor: 'agent:approval-test-agent@0.1.0',
+    grounds: {
+      task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      verified_at: new Date().toISOString(),
+    },
+    capability: CAPABILITY,
+    ...(deployment === NO_DEP ? {} : { deployment }),
+  });
+
+  async function delegate(payload: unknown, auth = basic('svc-orchestrator', 'orch-secret')) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/delegate',
+      headers: { authorization: auth },
+      payload: payload as Record<string, unknown>,
+    });
+    return { statusCode: res.statusCode, body: res.json<{ access_token?: string }>() };
+  }
+
+  it('signs a well-formed deployment claim into the shadow step token', async () => {
+    const res = await delegate(base());
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token!) as unknown as PlatformClaims;
+    expect(claims.deployment).toEqual({ mode: 'shadow' });
+    // A shadow step still declares its executing capability (both ride together).
+    expect(claims.capability).toEqual({ name: 'knowledge.search', risk: 'R0' });
+  });
+
+  it('a delegation without deployment grounds carries no deployment claim', async () => {
+    const res = await delegate(base(NO_DEP));
+    expect(res.statusCode).toBe(200);
+    expect(decodeJwt(res.body.access_token!).deployment).toBeUndefined();
+  });
+
+  it('rejects an unknown deployment mode → 400', async () => {
+    for (const bad of [{ mode: 'canary' }, { mode: '' }, { mode: 42 }, {}]) {
+      const res = await delegate(base(bad));
+      expect(res.statusCode, JSON.stringify(bad)).toBe(400);
+    }
+  });
+
+  it('the issue route refuses a body-supplied deployment field', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: {
+        grant_type: 'client_credentials',
+        audience: 'acp:tools',
+        deployment: { mode: 'shadow' },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.json())).toContain('deployment');
+  });
+
+  it('the exchange route refuses a body-supplied deployment field', async () => {
+    const userToken = await issueUserToken('knowledge:search:read');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: userToken,
+        audience: 'acp:tools',
+        deployment: { mode: 'shadow' },
+      },
+    });
+    expect(res.statusCode).toBe(400);
+  });
+
+  it('propagates deployment verbatim across the shadow agent same-actor acp:tools exchange', async () => {
+    const delegated = (await delegate(base())).body.access_token!;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('agent-approval', 'agent-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: delegated,
+        audience: 'acp:tools',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(
+      res.json<{ access_token: string }>().access_token,
+    ) as unknown as PlatformClaims;
+    // All five governance claims survive a same-actor narrowing exchange.
+    expect(claims.deployment).toEqual({ mode: 'shadow' });
+    expect(claims.capability).toEqual({ name: 'knowledge.search', risk: 'R0' });
+    expect(claims.brokered?.task_id).toBe('0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40');
+  });
+
+  it('DROPS deployment when a platform client appends a NEW actor', async () => {
+    const delegated = (await delegate(base())).body.access_token!;
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('svc-orchestrator', 'orch-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: delegated,
+        audience: 'acp:tools',
+        actor: 'agent:someone-else@0.1.0',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(
+      decodeJwt(res.json<{ access_token: string }>().access_token).deployment,
+    ).toBeUndefined();
+  });
+
+  it('DROPS deployment on a chain-free rescope (actor === subject, no chain)', async () => {
+    const userToken = await issueUserToken('knowledge:search:read');
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: {
+        grant_type: TOKEN_EXCHANGE_GRANT,
+        subject_token: userToken,
+        audience: 'acp:tools',
+        actor: 'user:jane.doe',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(
+      decodeJwt(res.json<{ access_token: string }>().access_token).deployment,
+    ).toBeUndefined();
+  });
+
+  it('emits token.brokered audit carrying the deployment grounds', async () => {
+    auditEvents.length = 0;
+    await delegate(base());
+    const event = auditEvents.find((e) => e.event_type === 'token.brokered');
+    expect((event?.details as { deployment?: { mode: string } }).deployment?.mode).toBe('shadow');
+  });
+});
+
 describe('ADR-0007 broker delegation', () => {
   const SNAPSHOT = {
     sub: 'user:jane.doe',

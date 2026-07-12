@@ -80,6 +80,17 @@ interface TokenBody {
     name?: string;
     risk?: string;
   };
+  /**
+   * Deployment grounds. Legal ONLY on the broker delegation grant — the issue
+   * and exchange routes refuse a body-supplied deployment so no client can mint
+   * itself a shadow token (which the tool gateway would then suppress writes
+   * for — a caller-controlled shadow flag is a way to evade a write, not to
+   * request one). The only legitimate source is delegate() from the
+   * ShadowStepWorkflow.
+   */
+  deployment?: {
+    mode?: string;
+  };
 }
 
 export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance> {
@@ -130,6 +141,7 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     rejectApproval(body, 'client_credentials issuance');
     rejectCompensation(body, 'client_credentials issuance');
     rejectCapability(body, 'client_credentials issuance');
+    rejectDeployment(body, 'client_credentials issuance');
     const audience = body.audience;
     const issued = await guarded('client_credentials', audience, client, () =>
       issuerSvc.issue({
@@ -167,6 +179,7 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     rejectApproval(body, 'token exchange');
     rejectCompensation(body, 'token exchange');
     rejectCapability(body, 'token exchange');
+    rejectDeployment(body, 'token exchange');
     const audience = body.audience;
     const subjectToken = body.subject_token;
     const issued = await guarded(TOKEN_EXCHANGE_GRANT, audience, client, () =>
@@ -260,6 +273,16 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
                 Parameters<typeof issuerSvc.delegate>[0]['capability']
               >,
             }),
+        // Deployment grounds — present only when the ShadowStepWorkflow brokers
+        // a shadow step token. The token service shape-validates the mode before
+        // it signs the deployment claim the tool gateway suppresses writes on.
+        ...(body.deployment === undefined
+          ? {}
+          : {
+              deployment: body.deployment as NonNullable<
+                Parameters<typeof issuerSvc.delegate>[0]['deployment']
+              >,
+            }),
         ttlSeconds: parseTtl(body.requested_ttl),
       }),
     );
@@ -285,6 +308,9 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
         // The capability grounds bound into the token — auditors see the
         // executing capability and the risk class the tool gateway enforces on.
         ...(body.capability === undefined ? {} : { capability: body.capability }),
+        // The deployment grounds bound into a shadow step token — auditors see
+        // that this token's writes are suppressed at the tool gateway.
+        ...(body.deployment === undefined ? {} : { deployment: body.deployment }),
       },
     });
     return reply.send({
@@ -358,6 +384,24 @@ function rejectCapability(body: TokenBody, grant: string): void {
     throw new AuthError(
       `capability grounds are not accepted on ${grant} — only the broker delegation grant may ` +
         'assert a capability, and only from the orchestrator dispatch',
+      400,
+    );
+  }
+}
+
+/**
+ * Deployment grounds may ONLY be asserted on the broker delegation grant. A
+ * body-supplied deployment on the issue or exchange route is refused (400) so
+ * no client can mint itself a shadow token — the tool gateway suppresses side
+ * effects for a shadow token, so a caller-controlled shadow flag is a way to
+ * make a write vanish, not to request one. The only legitimate source is
+ * delegate() from the ShadowStepWorkflow.
+ */
+function rejectDeployment(body: TokenBody, grant: string): void {
+  if (body.deployment !== undefined) {
+    throw new AuthError(
+      `deployment grounds are not accepted on ${grant} — only the broker delegation grant may ` +
+        'assert a deployment, and only from the orchestrator shadow-step workflow',
       400,
     );
   }

@@ -13,6 +13,7 @@ export {
   type BrokeredClaim,
   type CapabilityClaim,
   type CompensationClaim,
+  type DeploymentClaim,
   type PlatformClaims,
 } from './auth.js';
 export {
