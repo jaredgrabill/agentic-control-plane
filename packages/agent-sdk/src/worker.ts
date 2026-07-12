@@ -8,6 +8,7 @@ import { OpenTelemetryActivityInboundInterceptor } from '@temporalio/interceptor
 import { NativeConnection, Worker } from '@temporalio/worker';
 import { connect, type NatsConnection } from 'nats';
 import type { Agent } from './agent.js';
+import { GatewayModel } from './gateway-model.js';
 import { NatsRetriever, TokenExchanger } from './retriever.js';
 import { configureTracing } from './telemetry.js';
 
@@ -15,6 +16,14 @@ import { configureTracing } from './telemetry.js';
 export async function serveAgent(agent: Agent): Promise<void> {
   agent.assertComplete();
   configureTracing(agent.agentId);
+
+  // A served agent with no configured model completes through the LLM
+  // Gateway on its manifest's first allowed class (the NatsRetriever
+  // precedent). Unit-tested agents keep the FakeModel fallback.
+  agent.model ??= new GatewayModel({
+    url: process.env.ACP_LLM_GATEWAY_URL ?? 'http://localhost:7107',
+    modelClass: agent.manifest.models?.allowed[0] ?? 'default-tier',
+  });
 
   let nc: NatsConnection | undefined;
   if (agent.retriever === undefined) {

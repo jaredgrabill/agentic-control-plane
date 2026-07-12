@@ -19,7 +19,13 @@ from temporalio.exceptions import ApplicationError
 from acp_agent_sdk.answer import AnswerBuilder
 from acp_agent_sdk.context import CapabilityContext
 from acp_agent_sdk.errors import CapabilityError, ErrorClass
-from acp_agent_sdk.model import FakeModel, ModelClient, ModelResponse
+from acp_agent_sdk.model import (
+    ContextualModel,
+    FakeModel,
+    ModelCallContext,
+    ModelClient,
+    ModelResponse,
+)
 from acp_agent_sdk.retriever import Retriever
 from acp_agent_sdk.telemetry import configure_logging
 
@@ -48,13 +54,16 @@ class Agent:
     """One agent = manifest + handlers + tool bindings + eval suite."""
 
     manifest: dict[str, Any]
-    model: ModelClient = field(default_factory=FakeModel)
+    # Mutable: run() installs a GatewayModel when none was configured.
+    model: ModelClient | None = None
     retriever: Retriever | None = None
     handlers: dict[str, Handler] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         configure_logging()
         self.log: structlog.stdlib.BoundLogger = structlog.get_logger(self.manifest["id"])
+        # Lazy unit-test fallback: an unconfigured, unserved agent still fakes.
+        self._fallback_fake: FakeModel | None = None
 
     @classmethod
     def from_manifest(
@@ -66,11 +75,7 @@ class Agent:
     ) -> "Agent":
         raw = yaml.safe_load(Path(manifest_path).read_text(encoding="utf-8"))
         validate("agent-manifest", raw)
-        return cls(
-            manifest=raw,
-            model=model if model is not None else FakeModel(),
-            retriever=retriever,
-        )
+        return cls(manifest=raw, model=model, retriever=retriever)
 
     @property
     def agent_id(self) -> str:
@@ -132,7 +137,28 @@ class Agent:
                 ),
             )
 
-        counting = _CountingModel(self.model)
+        # A contextual model (the GatewayModel) is bound to THIS step's
+        # delegated identity + correlation before it reaches the handler;
+        # FakeModel is not contextual, so unit tests see zero change.
+        base: ModelClient
+        if self.model is not None:
+            base = self.model
+        else:
+            if self._fallback_fake is None:
+                self._fallback_fake = FakeModel()
+            base = self._fallback_fake
+        if isinstance(base, ContextualModel):
+            base = base.with_call_context(
+                ModelCallContext(
+                    task_id=request["task_id"],
+                    step_id=request["step_id"],
+                    tenant=request["tenant"],
+                    capability=capability,
+                    delegated_token=request.get("delegated_token"),
+                )
+            )
+
+        counting = _CountingModel(base)
         ctx = CapabilityContext(
             tenant=request["tenant"],
             task_id=request["task_id"],
@@ -239,6 +265,18 @@ class Agent:
 
         self.assert_complete()
         configure_tracing(self.agent_id)
+
+        # A served agent with no configured model completes through the LLM
+        # Gateway on its manifest's first allowed class (the NatsRetriever
+        # precedent). Unit-tested agents keep the FakeModel fallback.
+        if self.model is None:
+            from acp_agent_sdk.gateway_model import GatewayModel
+
+            allowed = (self.manifest.get("models") or {}).get("allowed") or []
+            self.model = GatewayModel(
+                url=os.environ.get("ACP_LLM_GATEWAY_URL", "http://localhost:7107"),
+                model_class=allowed[0] if allowed else "default-tier",
+            )
 
         if self.retriever is None:
             nc = NatsClient()

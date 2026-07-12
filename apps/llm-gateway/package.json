@@ -20,6 +20,8 @@
     "fastify": "^5.4.0"
   },
   "devDependencies": {
+    "@acp/agent-sdk": "workspace:*",
+    "@temporalio/common": "^1.13.0",
     "@types/node": "^22.15.0",
     "@vitest/coverage-v8": "^3.2.4",
     "jose": "^6.0.11",

@@ -28,9 +28,7 @@
     "model_class": "default-tier",
     "provider": "dev",
     "outcome": "ok",
-    "attempts": [
-      { "provider": "dev", "model": "dev-echo@1", "outcome": "ok", "duration_ms": 3 }
-    ],
+    "attempts": [{ "provider": "dev", "model": "dev-echo@1", "outcome": "ok", "duration_ms": 3 }],
     "usage": {
       "input_tokens": 42,
       "output_tokens": 17,

@@ -16,7 +16,7 @@ import type { StepResult, Usage } from '@acp/protocol';
 import { AnswerBuilder } from './answer.js';
 import { CapabilityContext } from './context.js';
 import { CapabilityError, ErrorClass } from './errors.js';
-import { FakeModel, type ModelClient, type ModelResponse } from './model.js';
+import { FakeModel, isContextualModel, type ModelClient, type ModelResponse } from './model.js';
 import type { Retriever } from './retriever.js';
 import { createAgentLogger } from './telemetry.js';
 
@@ -57,9 +57,12 @@ class CountingModel implements ModelClient {
 /** One agent = manifest + handlers + tool bindings + eval suite. */
 export class Agent {
   readonly manifest: AgentManifest;
-  readonly model: ModelClient;
+  /** Mutable: `serveAgent()` installs a GatewayModel when none was configured. */
+  model: ModelClient | undefined;
   /** Mutable: `run()` installs a NatsRetriever when none was configured. */
   retriever: Retriever | undefined;
+  /** Lazy unit-test fallback: an unconfigured, unserved agent still fakes. */
+  private fallbackFake: FakeModel | undefined;
   readonly handlers = new Map<string, Handler>();
   readonly log: Logger;
   // The SDK's own lenient instance for capability output_schemas — authored
@@ -76,7 +79,7 @@ export class Agent {
 
   constructor(options: AgentOptions) {
     this.manifest = options.manifest;
-    this.model = options.model ?? new FakeModel();
+    this.model = options.model;
     this.retriever = options.retriever;
     this.log = createAgentLogger(this.agentId);
     this.ajv = new Ajv2020({ allErrors: true, strict: false, validateFormats: false });
@@ -162,7 +165,20 @@ export class Agent {
       );
     }
 
-    const counting = new CountingModel(this.model);
+    // A contextual model (the GatewayModel) is bound to THIS step's
+    // delegated identity + correlation before it reaches the handler;
+    // FakeModel is not contextual, so unit tests see zero change.
+    const base = this.model ?? (this.fallbackFake ??= new FakeModel());
+    const bound = isContextualModel(base)
+      ? base.withCallContext({
+          delegatedToken: req.delegated_token,
+          taskId: req.task_id,
+          stepId: req.step_id,
+          tenant: req.tenant,
+          capability: req.capability,
+        })
+      : base;
+    const counting = new CountingModel(bound);
     const ctx = new CapabilityContext({
       tenant: req.tenant,
       taskId: req.task_id,
