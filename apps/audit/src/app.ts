@@ -28,15 +28,20 @@ export function buildAuditApp(deps: AuditDeps): FastifyInstance {
       tenant?: string;
       task_id?: string;
       event_type?: string;
+      since?: string;
       limit?: string;
     };
     if (q.tenant === undefined || q.tenant === '') {
       throw new AuthError('tenant query parameter is required', 400);
     }
+    if (q.since !== undefined && Number.isNaN(Date.parse(q.since))) {
+      throw new AuthError('since must be an ISO-8601 timestamp', 400);
+    }
     const events = await deps.store.query({
       tenant: q.tenant,
       taskId: q.task_id,
       eventType: q.event_type,
+      since: q.since,
       limit: q.limit === undefined ? undefined : Number.parseInt(q.limit, 10),
     });
     return { events };

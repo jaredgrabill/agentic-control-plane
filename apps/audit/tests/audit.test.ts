@@ -48,7 +48,8 @@ class MemoryStore implements AuditStore {
         (e) =>
           e.tenant === q.tenant &&
           (q.taskId === undefined || e.reason?.task_id === q.taskId) &&
-          (q.eventType === undefined || e.event_type === q.eventType),
+          (q.eventType === undefined || e.event_type === q.eventType) &&
+          (q.since === undefined || Date.parse(e.occurred_at) >= Date.parse(q.since)),
       ),
     );
   }
@@ -185,6 +186,28 @@ describe('provenance API', () => {
       headers: { authorization: `Bearer ${await makeToken()}` },
     });
     expect(noTenant.statusCode).toBe(400);
+  });
+
+  it('filters by since (occurred_at >=) and rejects a non-ISO since', async () => {
+    // The two seeded events are both at 2026-07-11T09:00:12Z. A since strictly
+    // after them returns none; a since at/before returns both.
+    const after = await app.inject({
+      url: '/v1/events?tenant=acme&since=2026-07-11T10:00:00Z',
+      headers: { authorization: `Bearer ${await makeToken()}` },
+    });
+    expect(after.json<{ events: AuditEvent[] }>().events).toHaveLength(0);
+
+    const atOrBefore = await app.inject({
+      url: '/v1/events?tenant=acme&since=2026-07-11T09:00:12Z',
+      headers: { authorization: `Bearer ${await makeToken()}` },
+    });
+    expect(atOrBefore.json<{ events: AuditEvent[] }>().events).toHaveLength(2);
+
+    const bad = await app.inject({
+      url: '/v1/events?tenant=acme&since=not-a-date',
+      headers: { authorization: `Bearer ${await makeToken()}` },
+    });
+    expect(bad.statusCode).toBe(400);
   });
 
   it('enforces authN and audit:read scope', async () => {
