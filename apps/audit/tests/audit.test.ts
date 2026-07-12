@@ -256,6 +256,34 @@ describe('provenance API', () => {
     expect(wrongScope.statusCode).toBe(403);
   });
 
+  it('binds a non-platform caller to its own tenant on every read route (403 cross-tenant)', async () => {
+    // A tenant-scoped token (no platform-family role, non-svc principal) may
+    // query its own tenant but not name another; platform-admin (makeToken)
+    // stays exempt — the cross-tenant 404 test below proves that.
+    const tenantToken = await new SignJWT({
+      sub: 'user:jane.doe',
+      tenant: 'acme',
+      roles: ['tenant-user'],
+      scope: 'audit:read',
+    })
+      .setProtectedHeader({ alg: 'EdDSA' })
+      .setIssuer(ISSUER)
+      .setAudience(AUDIT_AUDIENCE)
+      .setIssuedAt()
+      .setExpirationTime('5m')
+      .sign(key);
+    const get = (url: string) =>
+      app.inject({ url, headers: { authorization: `Bearer ${tenantToken}` } });
+
+    expect((await get('/v1/events?tenant=acme')).statusCode).toBe(200);
+    expect((await get('/v1/events?tenant=other-tenant')).statusCode).toBe(403);
+    expect((await get('/v1/verify?tenant=acme')).statusCode).toBe(200);
+    expect((await get('/v1/verify?tenant=other-tenant')).statusCode).toBe(403);
+    const recon = '/v1/tasks/0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40/reconstruction';
+    expect((await get(`${recon}?tenant=acme`)).statusCode).toBe(200);
+    expect((await get(`${recon}?tenant=other-tenant`)).statusCode).toBe(403);
+  });
+
   async function verify(query: string, scope = 'audit:read') {
     return app.inject({
       url: `/v1/verify?${query}`,

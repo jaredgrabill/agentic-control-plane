@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { taskRequest, type AuditEvent, type TaskRequest, type TaskResult } from '@acp/protocol';
 import {
+  assertTenantAccess,
   AuthError,
   createHttpServer,
   delegationChain,
@@ -438,10 +439,12 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
     if (typeof body.candidate_version !== 'string' || !SEMVER_RE.test(body.candidate_version)) {
       throw new AuthError('candidate_version is required and must be semver', 400);
     }
-    // The tenant whose shadow/canary traffic the gates evaluate. Defaults to the
-    // caller's tenant; an operator may target another tenant explicitly.
+    // The tenant whose shadow/canary traffic the gates evaluate. Defaults to
+    // the caller's tenant; only a platform-role operator may target another
+    // tenant explicitly — a tenant caller naming a foreign tenant is a 403.
     const tenant =
       typeof body.tenant === 'string' && body.tenant !== '' ? body.tenant : claims.tenant;
+    assertTenantAccess(claims, tenant);
     const config: DeploymentConfig = {
       ...DEFAULT_DEPLOYMENT_CONFIG,
       ...body.config,

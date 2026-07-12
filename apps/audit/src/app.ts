@@ -1,4 +1,5 @@
 import {
+  assertTenantAccess,
   AuthError,
   createHttpServer,
   scopesOf,
@@ -76,6 +77,7 @@ export function buildAuditApp(deps: AuditDeps): FastifyInstance {
     if (q.tenant === undefined || q.tenant === '') {
       throw new AuthError('tenant query parameter is required', 400);
     }
+    assertTenantAccess(claims, q.tenant);
     if (q.since !== undefined && Number.isNaN(Date.parse(q.since))) {
       throw new AuthError('since must be an ISO-8601 timestamp', 400);
     }
@@ -109,6 +111,7 @@ export function buildAuditApp(deps: AuditDeps): FastifyInstance {
     if (q.tenant === undefined || q.tenant === '') {
       throw new AuthError('tenant query parameter is required', 400);
     }
+    assertTenantAccess(claims, q.tenant);
     const fromSeq = parsePositiveInt(q.from_seq, 'from_seq') ?? 1;
     const toSeq = parsePositiveInt(q.to_seq, 'to_seq');
     if (toSeq !== undefined && toSeq < fromSeq) {
@@ -177,6 +180,7 @@ export function buildAuditApp(deps: AuditDeps): FastifyInstance {
     if (q.tenant === undefined || q.tenant === '') {
       throw new AuthError('tenant query parameter is required', 400);
     }
+    assertTenantAccess(claims, q.tenant);
     // Fetch one past the cap to detect truncation.
     const rows = await deps.store.chainByTask(q.tenant, task_id, RECONSTRUCT_CAP + 1);
     if (rows.length === 0) {
