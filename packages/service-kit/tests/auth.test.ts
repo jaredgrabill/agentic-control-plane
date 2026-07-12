@@ -116,6 +116,7 @@ describe('assertPlatformClaims', () => {
     [{ sub: 'u', tenant: 't' }, /roles/],
     [{ sub: 'u', tenant: 't', roles: ['r'] }, /scope/],
     [{ sub: 'u', tenant: 't', roles: [1], scope: '' }, /roles/],
+    [{ sub: 'u', tenant: 't', roles: ['r'], scope: '', act: { sub: 42 } }, /malformed act/],
   ])('rejects %j', (claims, pattern) => {
     expect(() => assertPlatformClaims(claims as never)).toThrow(pattern);
   });
