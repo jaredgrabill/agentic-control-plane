@@ -70,6 +70,14 @@ The primitive, in three steps:
    Derive-and-bind from verified prior-step output — never from agent input.
    Gateway side: add `deriveChangeRecord(claims, corr)` to `core.ts`,
    returning `{linked: false}` unless the claim is present AND task-bound.
+   **Content binding (not just task binding).** Task-correlation alone proves
+   only that *some* approved change record exists in this task — a plan holding
+   an approved `CHG-` for change X plus a `rule_apply` for an unrelated rule Y
+   in the same task would satisfy a task-bound conjunction. The broker MUST
+   therefore also verify the `change.submit` payload references the same
+   service/rule being applied (e.g. `change_record.subject` covers the
+   `rule_apply` input's service + rule), so the approved record authorizes
+   *this specific* mutation, not merely *a* mutation somewhere in the task.
 3. **Consume (Cedar pair).** `permit-tool-netsec-rule-apply` requires BOTH
    grounds conjunctively:
    `context.approval.granted && context.approval.capability ==
