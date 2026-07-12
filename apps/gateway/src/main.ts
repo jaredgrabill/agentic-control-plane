@@ -32,6 +32,7 @@ const app = buildGatewayApp({
   ),
   starter: temporal.starter,
   approvals: temporal.approvals,
+  deployments: temporal.deployments,
   killSwitch: await KillSwitchWatcher.start(nc, logger),
   audit: new AuditPublisher(nc, logger),
   logger,

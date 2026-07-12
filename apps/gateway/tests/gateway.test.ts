@@ -10,6 +10,9 @@ import {
   GATEWAY_AUDIENCE,
   type ApprovalDecisionInput,
   type ApprovalView,
+  type DeploymentController,
+  type DeploymentStartInput,
+  type DeploymentStatusView,
 } from '../src/app.js';
 import { taskWorkflowId } from '../src/temporal.js';
 
@@ -30,6 +33,11 @@ const APPROVAL_ID = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f90';
 const SUBJECT_DIGEST = `sha256:${'a'.repeat(64)}`;
 let approvalView: ApprovalView | undefined;
 const decideCalls: { approvalId: string; signal: ApprovalDecisionInput }[] = [];
+
+const deployStarts: DeploymentStartInput[] = [];
+let deployStartResult: Awaited<ReturnType<DeploymentController['start']>>;
+let deployStatusResponse: DeploymentStatusView | undefined;
+let deployAbortResult: Awaited<ReturnType<DeploymentController['abort']>>;
 
 function makeApprovalView(over: Partial<ApprovalView> = {}): ApprovalView {
   return {
@@ -84,6 +92,14 @@ beforeAll(async () => {
         return Promise.resolve();
       },
     },
+    deployments: {
+      start: (input) => {
+        deployStarts.push(input);
+        return Promise.resolve(deployStartResult);
+      },
+      status: () => Promise.resolve(deployStatusResponse),
+      abort: () => Promise.resolve(deployAbortResult),
+    },
     killSwitch: { fleetHalt: () => fleetHalt },
     audit: {
       publish: (e) => {
@@ -102,6 +118,16 @@ beforeEach(() => {
   statusResponse = { status: 'running' };
   cancelResponse = { outcome: 'cancelling' };
   cancelCalls.length = 0;
+  deployStarts.length = 0;
+  deployStartResult = { outcome: 'started', workflowRunId: 'deploy-run-1' };
+  deployStatusResponse = {
+    deployment_id: 'd1',
+    phase: 'canary',
+    aborted: false,
+    gate_reports: [],
+    running: true,
+  };
+  deployAbortResult = { outcome: 'aborting' };
   approvalView = makeApprovalView();
   decideCalls.length = 0;
 });
@@ -265,6 +291,11 @@ describe('POST /v1/tasks', () => {
       approvals: {
         status: () => Promise.resolve(undefined),
         decide: () => Promise.resolve(),
+      },
+      deployments: {
+        start: () => Promise.resolve({ outcome: 'started', workflowRunId: 'r' }),
+        status: () => Promise.resolve(undefined),
+        abort: () => Promise.resolve({ outcome: 'not_found' }),
       },
       killSwitch: { fleetHalt: () => undefined },
       audit: { publish: () => Promise.reject(new Error('stream down')) },
@@ -543,6 +574,117 @@ describe('approval API', () => {
       );
       expect(res.statusCode).toBe(400);
       expect(decideCalls).toHaveLength(0);
+    });
+  });
+
+  describe('deployment API', () => {
+    const deployToken = () => makeToken({ sub: 'svc:ci', scope: 'deploy:write deploy:read' });
+
+    it('starts a deployment (202) with initiated_by from the token and merged config', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/deployments',
+        headers: { authorization: `Bearer ${await deployToken()}` },
+        payload: {
+          agent_id: 'knowledge-agent',
+          candidate_version: '0.2.0',
+          tenant: 'acme',
+          config: { shadow_soak_s: 4, ramp_steps: [5, 100] },
+        },
+      });
+      expect(res.statusCode).toBe(202);
+      const req = deployStarts.at(-1)!.request;
+      expect(req.initiated_by).toBe('svc:ci');
+      expect(req.tenant).toBe('acme');
+      expect(req.config.shadow_soak_s).toBe(4);
+      expect(req.config.ramp_steps).toEqual([5, 100]);
+      // Unspecified thresholds fall back to defaults.
+      expect(req.config.thresholds.max_p95_ratio).toBe(1.5);
+    });
+
+    it('409s a second concurrent deployment (singleton)', async () => {
+      deployStartResult = { outcome: 'already_running' };
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/deployments',
+        headers: { authorization: `Bearer ${await deployToken()}` },
+        payload: { agent_id: 'knowledge-agent', candidate_version: '0.2.0' },
+      });
+      expect(res.statusCode).toBe(409);
+    });
+
+    it('validates agent_id and candidate_version', async () => {
+      const badId = await app.inject({
+        method: 'POST',
+        url: '/v1/deployments',
+        headers: { authorization: `Bearer ${await deployToken()}` },
+        payload: { agent_id: 'Not_An_Id', candidate_version: '0.2.0' },
+      });
+      expect(badId.statusCode).toBe(400);
+      const badVer = await app.inject({
+        method: 'POST',
+        url: '/v1/deployments',
+        headers: { authorization: `Bearer ${await deployToken()}` },
+        payload: { agent_id: 'knowledge-agent', candidate_version: 'latest' },
+      });
+      expect(badVer.statusCode).toBe(400);
+    });
+
+    it('requires deploy:write to start and deploy:read to query', async () => {
+      const noScope = await app.inject({
+        method: 'POST',
+        url: '/v1/deployments',
+        headers: { authorization: `Bearer ${await makeToken()}` },
+        payload: { agent_id: 'knowledge-agent', candidate_version: '0.2.0' },
+      });
+      expect(noScope.statusCode).toBe(403);
+
+      const readNoScope = await app.inject({
+        url: '/v1/deployments/knowledge-agent',
+        headers: { authorization: `Bearer ${await makeToken()}` },
+      });
+      expect(readNoScope.statusCode).toBe(403);
+    });
+
+    it('reads status and 404s an unknown agent', async () => {
+      const ok = await app.inject({
+        url: '/v1/deployments/knowledge-agent',
+        headers: { authorization: `Bearer ${await deployToken()}` },
+      });
+      expect(ok.statusCode).toBe(200);
+      expect(ok.json<{ phase: string }>().phase).toBe('canary');
+
+      deployStatusResponse = undefined;
+      const missing = await app.inject({
+        url: '/v1/deployments/knowledge-agent',
+        headers: { authorization: `Bearer ${await deployToken()}` },
+      });
+      expect(missing.statusCode).toBe(404);
+    });
+
+    it('aborts a running deployment (202), 404 when none, 409 when terminal', async () => {
+      const abort = await app.inject({
+        method: 'POST',
+        url: '/v1/deployments/knowledge-agent/abort',
+        headers: { authorization: `Bearer ${await deployToken()}` },
+      });
+      expect(abort.statusCode).toBe(202);
+
+      deployAbortResult = { outcome: 'not_found' };
+      const none = await app.inject({
+        method: 'POST',
+        url: '/v1/deployments/knowledge-agent/abort',
+        headers: { authorization: `Bearer ${await deployToken()}` },
+      });
+      expect(none.statusCode).toBe(404);
+
+      deployAbortResult = { outcome: 'already_terminal' };
+      const terminal = await app.inject({
+        method: 'POST',
+        url: '/v1/deployments/knowledge-agent/abort',
+        headers: { authorization: `Bearer ${await deployToken()}` },
+      });
+      expect(terminal.statusCode).toBe(409);
     });
   });
 });

@@ -1,8 +1,21 @@
 import type { TaskRequest, TaskResult } from '@acp/protocol';
-import { Client, Connection, WorkflowNotFoundError } from '@temporalio/client';
+import {
+  Client,
+  Connection,
+  WorkflowExecutionAlreadyStartedError,
+  WorkflowNotFoundError,
+} from '@temporalio/client';
 import { OpenTelemetryWorkflowClientInterceptor } from '@temporalio/interceptors-opentelemetry';
 import { env } from '@acp/service-kit';
-import type { ApprovalDecisionInput, ApprovalGateway, ApprovalView, TaskStarter } from './app.js';
+import type {
+  ApprovalDecisionInput,
+  ApprovalGateway,
+  ApprovalView,
+  DeploymentController,
+  DeploymentStartInput,
+  DeploymentStatusView,
+  TaskStarter,
+} from './app.js';
 
 export const TASK_QUEUE = 'acp-tasks';
 
@@ -21,9 +34,19 @@ export function approvalWorkflowId(approvalId: string): string {
   return `approval-${approvalId}`;
 }
 
+/** The DeploymentWorkflow singleton id — one running deployment per agent. */
+export function deploymentWorkflowId(agentId: string): string {
+  return `deploy-${agentId}`;
+}
+
+const AGENT_ID_RE = /^[a-z][a-z0-9-]{0,62}$/;
+const DEPLOYMENT_ABORT_SIGNAL = 'abortDeployment';
+const DEPLOYMENT_STATUS_QUERY = 'deploymentStatus';
+
 export async function connectTemporal(): Promise<{
   starter: TemporalTaskStarter;
   approvals: TemporalApprovalGateway;
+  deployments: TemporalDeploymentController;
 }> {
   const connection = await Connection.connect({
     address: env('ACP_TEMPORAL_ADDRESS', 'localhost:7233'),
@@ -38,6 +61,7 @@ export async function connectTemporal(): Promise<{
   return {
     starter: new TemporalTaskStarter(client),
     approvals: new TemporalApprovalGateway(client),
+    deployments: new TemporalDeploymentController(client),
   };
 }
 
@@ -174,5 +198,79 @@ export class TemporalApprovalGateway implements ApprovalGateway {
     }
     const handle = this.client.workflow.getHandle(approvalWorkflowId(approvalId));
     await handle.signal(APPROVAL_DECISION_SIGNAL, signal);
+  }
+}
+
+/**
+ * Starts, queries, and aborts DeploymentWorkflows. The workflow id is a
+ * per-agent singleton (deploy-{agent_id}) — REJECT_DUPLICATE makes a second
+ * concurrent deployment a 409. status/abort address the running singleton.
+ */
+export class TemporalDeploymentController implements DeploymentController {
+  constructor(private readonly client: Client) {}
+
+  async start(
+    input: DeploymentStartInput,
+  ): Promise<{ outcome: 'started'; workflowRunId: string } | { outcome: 'already_running' }> {
+    if (!AGENT_ID_RE.test(input.request.agent_id)) {
+      throw new Error(`refusing to start a deployment for a non-id agent ${input.request.agent_id}`);
+    }
+    try {
+      const handle = await this.client.workflow.start('DeploymentWorkflow', {
+        taskQueue: TASK_QUEUE,
+        workflowId: deploymentWorkflowId(input.request.agent_id),
+        args: [input.request],
+        workflowIdReusePolicy: 'REJECT_DUPLICATE',
+      });
+      return { outcome: 'started', workflowRunId: handle.firstExecutionRunId };
+    } catch (err) {
+      if (err instanceof WorkflowExecutionAlreadyStartedError) {
+        return { outcome: 'already_running' };
+      }
+      throw err;
+    }
+  }
+
+  async status(agentId: string): Promise<DeploymentStatusView | undefined> {
+    if (!AGENT_ID_RE.test(agentId)) return undefined;
+    const handle = this.client.workflow.getHandle(deploymentWorkflowId(agentId));
+    try {
+      const description = await handle.describe();
+      const running =
+        description.status.name === 'RUNNING' || description.status.name === 'CONTINUED_AS_NEW';
+      if (running) {
+        const view = await handle.query<DeploymentStatusView>(DEPLOYMENT_STATUS_QUERY);
+        return { ...view, running: true };
+      }
+      // A terminal deployment returns its result (completed/failed/demoted).
+      const result = (await handle.result()) as { status: string } & Record<string, unknown>;
+      return {
+        deployment_id: String(result.deployment_id ?? ''),
+        phase: 'terminal',
+        aborted: false,
+        gate_reports: (result.gate_reports as unknown[]) ?? [],
+        running: false,
+        result,
+      };
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) return undefined;
+      throw err;
+    }
+  }
+
+  async abort(agentId: string): Promise<{ outcome: 'aborting' | 'not_found' | 'already_terminal' }> {
+    if (!AGENT_ID_RE.test(agentId)) return { outcome: 'not_found' };
+    const handle = this.client.workflow.getHandle(deploymentWorkflowId(agentId));
+    try {
+      const description = await handle.describe();
+      if (description.status.name !== 'RUNNING' && description.status.name !== 'CONTINUED_AS_NEW') {
+        return { outcome: 'already_terminal' };
+      }
+      await handle.signal(DEPLOYMENT_ABORT_SIGNAL);
+      return { outcome: 'aborting' };
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) return { outcome: 'not_found' };
+      throw err;
+    }
   }
 }
