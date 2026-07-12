@@ -653,6 +653,140 @@ describe('scoreWithJudge (item 6)', () => {
   });
 });
 
+describe('probe activities (item 6)', () => {
+  const probeAnswer = {
+    text: 'The policy grants 20 vacation days.',
+    citations: [
+      { doc_id: 'policy-4', version: '1', lineage_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40' },
+    ],
+    confidence: 0.9,
+  };
+
+  function probeFetch() {
+    const scores: unknown[] = [];
+    const fetchImpl = vi.fn((url: string | URL, init?: RequestInit) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token'))
+        return jsonResponse({ access_token: 't', principal: 'svc:prober' });
+      if (s.includes('/v1/agents/knowledge-agent')) return jsonResponse(card);
+      if (s.endsWith('/v1/scores')) {
+        scores.push(JSON.parse((init?.body as string | undefined) ?? '{}'));
+        return jsonResponse({ accepted: true }, 202);
+      }
+      if (s.includes('/v1/agents?state=active')) return jsonResponse({ agents: [card] });
+      return jsonResponse({}, 404);
+    }) as unknown as typeof fetch;
+    return { scores, fetchImpl };
+  }
+
+  it('mints a probe subject token (aud acp:gateway) and echoes the principal', async () => {
+    const { fetchImpl } = probeFetch();
+    const r = await makeActivities(fetchImpl).mintProbeSubject();
+    expect(r.token).toBe('t');
+    expect(r.principal).toBe('svc:prober');
+  });
+
+  it('defaults the principal to svc:prober when the token response omits it', async () => {
+    const fetchImpl = vi.fn(() => jsonResponse({ access_token: 'tok' })) as unknown as typeof fetch;
+    const r = await makeActivities(fetchImpl).mintProbeSubject();
+    expect(r.principal).toBe('svc:prober');
+  });
+
+  it('throws when the probe subject mint is refused', async () => {
+    const fetchImpl = vi.fn(() => jsonResponse({ error: 'nope' }, 403)) as unknown as typeof fetch;
+    await expect(makeActivities(fetchImpl).mintProbeSubject()).rejects.toThrow(
+      /probe subject mint failed/,
+    );
+  });
+
+  it('records a passing probe: POSTs source=probe and emits eval.probe_result', async () => {
+    const { scores, fetchImpl } = probeFetch();
+    const audit: AuditEvent[] = [];
+    const r = await makeActivities(fetchImpl, audit).recordProbeResult({
+      agent_id: 'knowledge-agent',
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      case_name: 'vacation',
+      expect: { must_contain: ['20 vacation'], must_cite_docs: ['policy-4'] },
+      weight: 5,
+      answer: probeAnswer,
+      task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      duration_ms: 120,
+    });
+    expect(r.passed).toBe(true);
+    expect(scores[0]).toMatchObject({
+      source: 'probe',
+      route: 'probe',
+      passed: true,
+      weight: 5,
+      agent_version: '0.1.0',
+    });
+    const ev = audit.find((e) => e.event_type === 'eval.probe_result');
+    expect((ev?.details as { passed: boolean; owner: string }).passed).toBe(true);
+    expect((ev?.details as { owner: string }).owner).toBe('team-platform');
+  });
+
+  it('records a failing probe (answer misses the expectation)', async () => {
+    const { scores, fetchImpl } = probeFetch();
+    const r = await makeActivities(fetchImpl).recordProbeResult({
+      agent_id: 'knowledge-agent',
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      case_name: 'poison',
+      expect: { must_contain: ['this text is absent'] },
+      weight: 5,
+      answer: probeAnswer,
+      task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f41',
+      duration_ms: 90,
+    });
+    expect(r.passed).toBe(false);
+    expect(scores[0]).toMatchObject({ passed: false, outcome: 'probe_fail' });
+  });
+
+  it('still records (attribution unknown) when the registry lookup and ingest fail', async () => {
+    const audit: AuditEvent[] = [];
+    const fetchImpl = vi.fn((url: string | URL) => {
+      const s = String(url);
+      if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
+      // Registry card lookup fails, and the score ingest fails too.
+      return jsonResponse({ error: 'down' }, 503);
+    }) as unknown as typeof fetch;
+    const r = await makeActivities(fetchImpl, audit).recordProbeResult({
+      agent_id: 'knowledge-agent',
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      case_name: 'vacation',
+      expect: { must_contain: ['20 vacation'] },
+      weight: 5,
+      answer: probeAnswer,
+      task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f42',
+      duration_ms: 50,
+    });
+    // The check still runs; the audit is still emitted with unknown attribution.
+    expect(r.passed).toBe(true);
+    const ev = audit.find((e) => e.event_type === 'eval.probe_result');
+    expect(ev?.artifacts?.agent_version).toBe('unknown');
+  });
+
+  it('listProbeTargets returns empty when the registry is unreachable', async () => {
+    const fetchImpl = vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token')
+        ? jsonResponse({ access_token: 't' })
+        : jsonResponse({}, 503),
+    ) as unknown as typeof fetch;
+    const r = await makeActivities(fetchImpl).listProbeTargets({ covered: [] });
+    expect(r.uncovered).toEqual([]);
+  });
+
+  it('warns about active agents without probe coverage', async () => {
+    const { fetchImpl } = probeFetch();
+    const uncovered = await makeActivities(fetchImpl).listProbeTargets({ covered: [] });
+    expect(uncovered.uncovered).toContain('knowledge-agent');
+    const none = await makeActivities(fetchImpl).listProbeTargets({ covered: ['knowledge-agent'] });
+    expect(none.uncovered).toHaveLength(0);
+  });
+});
+
 describe('digestValue', () => {
   it('is a stable sha256 over the canonical value (key-order independent)', async () => {
     const acts = makeActivities(vi.fn());

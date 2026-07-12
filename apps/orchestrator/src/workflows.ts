@@ -12,6 +12,7 @@ import {
   CancellationScope,
   ParentClosePolicy,
   condition,
+  continueAsNew,
   defineQuery,
   defineSignal,
   executeChild,
@@ -19,12 +20,14 @@ import {
   log,
   proxyActivities,
   setHandler,
+  sleep,
   startChild,
   uuid4,
   workflowInfo,
 } from '@temporalio/workflow';
 import type {
   AgentCard,
+  Answer,
   Budget,
   CapabilityError,
   PlanStep,
@@ -56,6 +59,7 @@ import {
   type PrincipalSnapshot,
   type ShadowStepInput,
   type JudgeScoreInput,
+  type ProbeWorkflowInput,
   type StepDispatch,
   type StepExecution,
 } from './types.js';
@@ -1296,6 +1300,76 @@ export async function JudgeScoreWorkflow(input: JudgeScoreInput): Promise<void> 
     retry: { maximumAttempts: 3 },
   });
   await scorer.scoreWithJudge(input);
+}
+
+/** Cycles per ProbeWorkflow run before continueAsNew keeps history bounded. */
+const PROBE_CYCLES_PER_RUN = 50;
+
+/**
+ * ProbeWorkflow (item 6) — the singleton synthetic prober (workflowId
+ * `synthetic-prober`). Each cycle runs every configured probe case through a
+ * REAL TaskWorkflow child (real trust path minus intake: a freshly-minted
+ * svc-prober subject token → planner → Cedar → broker → agent), then records a
+ * deterministic known-answer result (judge-INDEPENDENT, so probe signal
+ * survives an unhealthy judge). It sleeps interval_s between cycles and
+ * continueAsNews every 50 cycles to keep history bounded. Time-skip-testable.
+ */
+export async function ProbeWorkflow(input: ProbeWorkflowInput): Promise<void> {
+  const probeControl = proxyActivities<ControlActivities>({
+    startToCloseTimeout: '30 seconds',
+    retry: { maximumAttempts: 2 },
+  });
+  const startCycle = input.cycle ?? 0;
+
+  for (let cycle = startCycle; cycle < PROBE_CYCLES_PER_RUN; cycle++) {
+    // "Every active agent is probed" made visible: warn on uncovered agents.
+    await probeControl.listProbeTargets({ covered: input.targets.map((t) => t.agent_id) });
+
+    for (const target of input.targets) {
+      for (const testCase of target.cases) {
+        const taskId = uuid4();
+        const startedMs = Date.now();
+        let answer: Answer | null = null;
+        try {
+          const subject = await probeControl.mintProbeSubject();
+          const result = await executeChild(TaskWorkflow, {
+            workflowId: `probe-${taskId}`,
+            args: [
+              {
+                kind: 'task_request',
+                task_id: taskId,
+                tenant: target.tenant,
+                principal: subject.principal,
+                subject_token: subject.token,
+                input: { text: testCase.input, capability: target.capability },
+                budget: { max_steps: 2 },
+              },
+            ],
+          });
+          answer = result.answer ?? null;
+        } catch (err) {
+          // A probe TaskWorkflow that throws is itself a failed probe (recorded
+          // below as a null answer → known-answer checks fail).
+          log.warn('probe task failed', { task_id: taskId, err: rootMessage(err) });
+        }
+        await probeControl.recordProbeResult({
+          agent_id: target.agent_id,
+          capability: target.capability,
+          tenant: target.tenant,
+          case_name: testCase.name,
+          expect: testCase.expect,
+          weight: input.probe_failure_weight,
+          answer,
+          task_id: taskId,
+          duration_ms: Date.now() - startedMs,
+        });
+      }
+    }
+
+    await sleep(input.interval_s * 1000);
+  }
+
+  await continueAsNew<typeof ProbeWorkflow>({ ...input, cycle: 0 });
 }
 
 /** Signal the gateway sends a verified human decision on. */

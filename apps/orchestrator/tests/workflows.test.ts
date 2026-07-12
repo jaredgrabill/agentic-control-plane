@@ -165,6 +165,9 @@ const control: ControlActivities = {
   promoteVersion: vi.fn(),
   evaluateGate: vi.fn(),
   scoreWithJudge: vi.fn(() => Promise.resolve()),
+  mintProbeSubject: vi.fn(),
+  recordProbeResult: vi.fn(() => Promise.resolve({ passed: true })),
+  listProbeTargets: vi.fn(() => Promise.resolve({ uncovered: [] })),
   now: vi.fn(),
 };
 

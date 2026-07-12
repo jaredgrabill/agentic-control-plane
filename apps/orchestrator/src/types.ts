@@ -1,5 +1,6 @@
 import type {
   AgentCard,
+  Answer,
   Budget,
   Plan,
   PlanStep,
@@ -7,8 +8,22 @@ import type {
   StepResult,
   TaskRequest,
 } from '@acp/protocol';
+import type { ProbeExpect, ProbeTarget } from '@acp/online-eval';
 import type { ResolvedPriceBook } from '@acp/cost-meter/pricing';
 import type { GateReport, GateThresholds } from './deployment-gates.js';
+
+/**
+ * Input to the singleton ProbeWorkflow (item 6). The probe suite + cadence are
+ * passed in (the starter reads deploy config), so the isolate needs no fs and
+ * continueAsNew carries the config across cycle rollovers.
+ */
+export interface ProbeWorkflowInput {
+  interval_s: number;
+  probe_failure_weight: number;
+  targets: ProbeTarget[];
+  /** Cycle counter within one workflow run; continueAsNew resets at 50. */
+  cycle?: number;
+}
 
 export type { GateReport, GateThresholds } from './deployment-gates.js';
 
@@ -427,6 +442,36 @@ export interface ControlActivities {
    * quality observation (passed:false) with no LLM call.
    */
   scoreWithJudge(input: JudgeScoreInput): Promise<void>;
+  /**
+   * Online-eval probes (item 6): mint a fresh subject token for the synthetic
+   * prober (client_creds svc-prober, aud acp:gateway) so a probe runs the real
+   * trust path minus intake. Returns the token and its principal (for the probe
+   * TaskRequest attribution).
+   */
+  mintProbeSubject(): Promise<{ token: string; principal: string }>;
+  /**
+   * Online-eval probes (item 6): score one probe case against its golden
+   * expectations (judge-independent), POST the result to the eval service, and
+   * emit eval.probe_result. Resolves the active serving version + owner from the
+   * registry. Catches everything (a probe recording failure is not an incident).
+   */
+  recordProbeResult(input: {
+    agent_id: string;
+    capability: string;
+    tenant: string;
+    case_name: string;
+    expect: ProbeExpect;
+    weight: number;
+    answer: Answer | null;
+    task_id: string;
+    duration_ms: number;
+  }): Promise<{ passed: boolean }>;
+  /**
+   * Online-eval probes (item 6): logs a warning for every active agent lacking
+   * probe coverage, so "every active agent is probed" is visible not silently
+   * false. Returns the uncovered agent ids.
+   */
+  listProbeTargets(input: { covered: string[] }): Promise<{ uncovered: string[] }>;
   /**
    * Cedar decision for one delegation. The orchestrator is the PEP for
    * agent-to-agent and user-to-agent delegation. Presents the principal's

@@ -22,6 +22,7 @@ import { GatewayClient } from '@acp/llm-client';
 import { createJudge, loadDevCalibration, type Judge } from '@acp/judge';
 import { decideJudgeSample, type OnlineEvalConfig, type ScoreIngest } from '@acp/online-eval';
 import { RULE_PLANNER, buildPlanSteps } from './planner.js';
+import { checkProbe } from './probe-checks.js';
 import { GateEvaluator, type GateReport } from './deployment-gates.js';
 import type {
   ControlActivities,
@@ -63,6 +64,11 @@ export interface ControlDeps {
   llmGatewayUrl?: string;
   /** Evaluation service base URL — the scores store the judge POSTs to (item 6). */
   evaluationUrl?: string;
+  /** Synthetic-prober credentials (item 6): its own client_creds identity (svc-prober). */
+  proberClientId?: string;
+  proberClientSecret?: string;
+  /** Scope string the probe subject token requests (the probed agents' tool scopes). */
+  proberScope?: string;
   /**
    * Online-eval config (item 6): per-step sample rates + judge rubric/model
    * class. Absent in unit tests that do not exercise judged scoring.
@@ -387,6 +393,124 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
           { err, task_id: input.task_id, step_id: input.step_id },
           'scoreWithJudge failed — alarm-continue (no quality observation recorded)',
         );
+      }
+    },
+
+    async mintProbeSubject(): Promise<{ token: string; principal: string }> {
+      const res = await doFetch(`${deps.tokenUrl}/v1/token`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'client_credentials',
+          client_id: deps.proberClientId ?? 'svc-prober',
+          client_secret: deps.proberClientSecret ?? '',
+          audience: 'acp:gateway',
+          scope: deps.proberScope ?? 'task:submit knowledge:search:read',
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(`probe subject mint failed: ${res.status} ${await res.text()}`);
+      }
+      const body = (await res.json()) as { access_token: string; principal?: string };
+      // The token's sub is the prober principal; the token service echoes it.
+      return { token: body.access_token, principal: body.principal ?? 'svc:prober' };
+    },
+
+    async recordProbeResult(input): Promise<{ passed: boolean }> {
+      const check = checkProbe(input.answer, input.expect);
+
+      // Resolve the active serving version + owner so the score/audit attribute
+      // to the version actually probed (probes hit ACTIVE only).
+      let agentVersion = 'unknown';
+      let owner = 'unknown';
+      try {
+        const token = await serviceToken('acp:registry', 'registry:read');
+        const cardRes = await doFetch(
+          `${deps.registryUrl}/v1/agents/${encodeURIComponent(input.agent_id)}`,
+          { headers: { authorization: `Bearer ${token}` } },
+        );
+        if (cardRes.ok) {
+          const card = (await cardRes.json()) as AgentCard;
+          agentVersion = card.version;
+          owner = card.manifest.owner;
+        }
+      } catch {
+        // best-effort attribution; a registry blip still records the result
+      }
+
+      try {
+        const token = await serviceToken('acp:eval', 'eval:write');
+        const scoreRes = await doFetch(`${deps.evaluationUrl ?? ''}/v1/scores`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+          body: JSON.stringify({
+            id: deterministicUuid(`${input.task_id}:${input.case_name}:probe`),
+            agent_id: input.agent_id,
+            agent_version: agentVersion,
+            capability: input.capability,
+            tenant: input.tenant,
+            task_id: input.task_id,
+            source: 'probe',
+            route: 'probe',
+            score: null,
+            passed: check.passed,
+            weight: input.weight,
+            outcome: check.passed ? 'probe_pass' : 'probe_fail',
+          } satisfies ScoreIngest),
+        });
+        if (!scoreRes.ok) {
+          throw new Error(`probe score ingest failed: ${scoreRes.status} ${await scoreRes.text()}`);
+        }
+      } catch (err) {
+        deps.logger.warn(
+          { err, agent_id: input.agent_id },
+          'probe score ingest failed (alarm-continue)',
+        );
+      }
+
+      await deps.audit.publish({
+        event_id: randomUUID(),
+        occurred_at: new Date().toISOString(),
+        tenant: input.tenant,
+        event_type: 'eval.probe_result',
+        actor: { principal: 'svc:prober', delegation_chain: [{ sub: 'svc:prober' }] },
+        action: { name: 'probe:known-answer' },
+        reason: { task_id: input.task_id },
+        artifacts: { agent_id: input.agent_id, agent_version: agentVersion },
+        details: {
+          case: input.case_name,
+          capability: input.capability,
+          passed: check.passed,
+          duration_ms: input.duration_ms,
+          owner,
+          checks: check.checks,
+        },
+      });
+      return { passed: check.passed };
+    },
+
+    async listProbeTargets(input): Promise<{ uncovered: string[] }> {
+      try {
+        const token = await serviceToken('acp:registry', 'registry:read');
+        const res = await doFetch(`${deps.registryUrl}/v1/agents?state=active`, {
+          headers: { authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return { uncovered: [] };
+        const { agents } = (await res.json()) as { agents: AgentCard[] };
+        const covered = new Set(input.covered);
+        const uncovered = [...new Set(agents.map((a) => a.manifest.id))].filter(
+          (id) => !covered.has(id),
+        );
+        if (uncovered.length > 0) {
+          deps.logger.warn(
+            { uncovered },
+            'active agents without synthetic probe coverage — quality visibility is incomplete',
+          );
+        }
+        return { uncovered };
+      } catch (err) {
+        deps.logger.warn({ err }, 'listProbeTargets failed');
+        return { uncovered: [] };
       }
     },
 
