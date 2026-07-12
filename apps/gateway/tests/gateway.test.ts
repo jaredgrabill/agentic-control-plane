@@ -10,6 +10,7 @@ import {
   GATEWAY_AUDIENCE,
   type ApprovalDecisionInput,
   type ApprovalView,
+  type BudgetReserveOutcome,
   type DeploymentController,
   type DeploymentStartInput,
   type DeploymentStatusView,
@@ -27,6 +28,12 @@ const auditEvents: AuditEvent[] = [];
 let fleetHalt: KillSwitchState | undefined;
 /** Tenants with an active per-tenant halt (the stubbed kill-switch read side). */
 const haltedTenants = new Map<string, KillSwitchState>();
+/** Scripted budget admission (the stubbed Postgres reserve/release seam). */
+let reserveOutcome: BudgetReserveOutcome;
+const reserveCalls: { tenant: string; taskId: string; estMicros: number }[] = [];
+const releaseCalls: { tenant: string; taskId: string }[] = [];
+/** When set, starter.start throws once (reserve-then-start-fail compensation). */
+let startError: Error | undefined;
 let statusResponse: Awaited<ReturnType<Parameters<typeof buildGatewayApp>[0]['starter']['status']>>;
 let cancelResponse: Awaited<ReturnType<Parameters<typeof buildGatewayApp>[0]['starter']['cancel']>>;
 const cancelCalls: { tenant: string; taskId: string }[] = [];
@@ -76,6 +83,11 @@ beforeAll(async () => {
     verifier: new JwtVerifier({ jwks: { keys: [{ ...publicJwk, alg: 'EdDSA' }] } }, ISSUER),
     starter: {
       start: (req) => {
+        if (startError !== undefined) {
+          const err = startError;
+          startError = undefined;
+          return Promise.reject(err);
+        }
         started.push(req);
         return Promise.resolve({ workflowRunId: `run-${req.task_id}` });
       },
@@ -103,6 +115,16 @@ beforeAll(async () => {
       abort: () => Promise.resolve(deployAbortResult),
     },
     killSwitch: { fleetHalt: () => fleetHalt, tenantHalt: (t) => haltedTenants.get(t) },
+    budget: {
+      reserve: (tenant, taskId, estMicros) => {
+        reserveCalls.push({ tenant, taskId, estMicros });
+        return Promise.resolve(reserveOutcome);
+      },
+      release: (tenant, taskId) => {
+        releaseCalls.push({ tenant, taskId });
+        return Promise.resolve();
+      },
+    },
     audit: {
       publish: (e) => {
         auditEvents.push(e);
@@ -118,6 +140,10 @@ beforeEach(() => {
   auditEvents.length = 0;
   fleetHalt = undefined;
   haltedTenants.clear();
+  reserveOutcome = 'no_cap';
+  reserveCalls.length = 0;
+  releaseCalls.length = 0;
+  startError = undefined;
   statusResponse = { status: 'running' };
   cancelResponse = { outcome: 'cancelling' };
   cancelCalls.length = 0;
@@ -250,10 +276,14 @@ describe('POST /v1/tasks', () => {
     // verified token; a body-supplied tenant cannot dodge the halt.
     const halted = await submit(await makeToken(), { text: QUESTION, tenant: 'globex' });
     expect(halted.statusCode).toBe(503);
-    expect(halted.json<{ error: { message: string } }>().error.message).toContain(
-      'tenant acme',
-    );
+    expect(halted.json<{ error: { message: string } }>().error.message).toContain('tenant acme');
     expect(started).toHaveLength(0);
+    // The refusal is attested with the VERIFIED caller as the actor.
+    const rejected = auditEvents.find((e) => e.event_type === 'task.rejected');
+    expect(rejected).toBeDefined();
+    expect(rejected!.tenant).toBe('acme');
+    expect(rejected!.actor.principal).toBe('user:jane.doe');
+    expect((rejected!.details as { reason: string }).reason).toBe('tenant_halt');
 
     // Another tenant's caller is untouched by acme's halt.
     const other = await submit(await makeToken({ tenant: 'globex' }), { text: QUESTION });
@@ -264,6 +294,69 @@ describe('POST /v1/tasks', () => {
     haltedTenants.clear();
     const recovered = await submit(await makeToken(), { text: QUESTION });
     expect(recovered.statusCode).toBe(202);
+  });
+
+  describe('per-tenant budget admission (phase 4 item 1)', () => {
+    it('reserves against the VERIFIED tenant with the body estimate, then starts', async () => {
+      reserveOutcome = 'ok';
+      const res = await submit(await makeToken(), {
+        text: QUESTION,
+        budget: { max_cost_usd: 0.3 },
+        tenant: 'globex', // body tenant must be ignored for the budget too
+      });
+      expect(res.statusCode).toBe(202);
+      expect(reserveCalls).toHaveLength(1);
+      expect(reserveCalls[0]).toEqual({
+        tenant: 'acme',
+        taskId: started[0]!.task_id,
+        estMicros: 300_000,
+      });
+      expect(releaseCalls).toHaveLength(0);
+    });
+
+    it('uses the default estimate when the submission sets no max_cost_usd', async () => {
+      reserveOutcome = 'ok';
+      await submit(await makeToken(), { text: QUESTION });
+      expect(reserveCalls[0]!.estMicros).toBe(10_000); // DEFAULT_BUDGET_EST_USD
+    });
+
+    it('402s an over-budget tenant, never starts the task, and attests it', async () => {
+      reserveOutcome = 'over_budget';
+      const res = await submit(await makeToken(), { text: QUESTION });
+      expect(res.statusCode).toBe(402);
+      expect(res.json<{ error: { message: string } }>().error.message).toContain(
+        'tenant acme over budget',
+      );
+      expect(started).toHaveLength(0);
+      const rejected = auditEvents.find((e) => e.event_type === 'task.rejected');
+      expect(rejected).toBeDefined();
+      expect(rejected!.actor.principal).toBe('user:jane.doe');
+      expect((rejected!.details as { reason: string }).reason).toBe('budget_exhausted');
+      expect(rejected!.reason?.task_id).toBe(reserveCalls[0]!.taskId);
+    });
+
+    it('proceeds without a reservation for an uncapped tenant (no_cap)', async () => {
+      reserveOutcome = 'no_cap';
+      const res = await submit(await makeToken(), { text: QUESTION });
+      expect(res.statusCode).toBe(202);
+      expect(releaseCalls).toHaveLength(0);
+    });
+
+    it('releases the reservation when the workflow start fails after reserve', async () => {
+      reserveOutcome = 'ok';
+      startError = new Error('temporal down');
+      const res = await submit(await makeToken(), { text: QUESTION });
+      expect(res.statusCode).toBe(500);
+      expect(releaseCalls).toEqual([{ tenant: 'acme', taskId: reserveCalls[0]!.taskId }]);
+    });
+
+    it('does NOT release when no reservation was taken (no_cap) and start fails', async () => {
+      reserveOutcome = 'no_cap';
+      startError = new Error('temporal down');
+      const res = await submit(await makeToken(), { text: QUESTION });
+      expect(res.statusCode).toBe(500);
+      expect(releaseCalls).toHaveLength(0);
+    });
   });
 
   it('emits task.submitted audit with the delegation chain and input digest', async () => {
@@ -324,6 +417,10 @@ describe('POST /v1/tasks', () => {
         abort: () => Promise.resolve({ outcome: 'not_found' }),
       },
       killSwitch: { fleetHalt: () => undefined, tenantHalt: () => undefined },
+      budget: {
+        reserve: () => Promise.resolve('no_cap' as const),
+        release: () => Promise.resolve(),
+      },
       audit: { publish: () => Promise.reject(new Error('stream down')) },
       logger: createLogger('gateway-test'),
     });

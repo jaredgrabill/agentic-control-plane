@@ -56,6 +56,7 @@ class EventType(StrEnum):
     eval_budget_state_changed = "eval.budget_state_changed"
     killswitch_activated = "killswitch.activated"
     killswitch_cleared = "killswitch.cleared"
+    task_rejected = "task.rejected"
 
 
 class DelegationLink(BaseModel):

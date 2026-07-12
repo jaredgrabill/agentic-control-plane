@@ -162,6 +162,23 @@ export interface KillSwitchReader {
   tenantHalt(tenant: string): KillSwitchState | undefined;
 }
 
+export type BudgetReserveOutcome = 'ok' | 'over_budget' | 'no_cap';
+
+/**
+ * Per-tenant budget admission (Phase 4 item 1). reserve() is ONE atomic
+ * conditional statement in Postgres (committed + reserved + est ≤ cap under
+ * the row lock — the anti-TOCTOU primitive; see apps/gateway/src/budget.ts);
+ * release() compensates a reservation whose task never started. Behind a seam
+ * so unit tests exercise the route without Postgres.
+ */
+export interface BudgetAdmission {
+  reserve(tenant: string, taskId: string, estMicros: number): Promise<BudgetReserveOutcome>;
+  release(tenant: string, taskId: string): Promise<void>;
+}
+
+/** Reservation estimate when the submission sets no budget.max_cost_usd. */
+export const DEFAULT_BUDGET_EST_USD = 0.01;
+
 export interface AuditSink {
   publish(event: AuditEvent): Promise<void>;
 }
@@ -172,6 +189,9 @@ export interface GatewayDeps {
   approvals: ApprovalGateway;
   deployments: DeploymentController;
   killSwitch: KillSwitchReader;
+  budget: BudgetAdmission;
+  /** Reservation estimate (USD) when a submission sets no max_cost_usd; default DEFAULT_BUDGET_EST_USD. */
+  budgetDefaultEstUsd?: number;
   audit: AuditSink;
   logger: Logger;
   now?: () => Date;
@@ -206,6 +226,7 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
     // cannot dodge (or probe) it by naming another tenant.
     const tenantHalt = deps.killSwitch.tenantHalt(claims.tenant);
     if (tenantHalt !== undefined) {
+      await auditTaskRejected(deps, claims, 'tenant_halt');
       return reply.status(503).send({
         error: {
           message:
@@ -241,6 +262,28 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
       submitted_at: (deps.now?.() ?? new Date()).toISOString(),
     });
 
+    // Per-tenant budget admission (Phase 4 item 1): reserve the ESTIMATE
+    // against the tenant's monthly cap before anything starts. The tenant is
+    // task.tenant = verified claims.tenant — a caller can neither name
+    // another tenant's budget nor raise its own cap (caps are platform
+    // config). One atomic conditional UPDATE = no TOCTOU. An uncapped tenant
+    // (no cap row) proceeds without a reservation. Fail-closed: pg
+    // unreachable → this throws → 500-class refusal, never a free pass.
+    const estMicros = Math.ceil(
+      (body.budget?.max_cost_usd ?? deps.budgetDefaultEstUsd ?? DEFAULT_BUDGET_EST_USD) * 1_000_000,
+    );
+    const admission = await deps.budget.reserve(task.tenant, task.task_id, estMicros);
+    if (admission === 'over_budget') {
+      const period = (deps.now?.() ?? new Date()).toISOString().slice(0, 7);
+      await auditTaskRejected(deps, claims, 'budget_exhausted', task.task_id);
+      return reply.status(402).send({
+        error: {
+          message: `tenant ${task.tenant} over budget for ${period}`,
+          status: 402,
+        },
+      });
+    }
+
     const span = trace.getActiveSpan();
     span?.setAttributes({
       'acp.tenant': task.tenant,
@@ -248,7 +291,22 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
       'acp.principal': task.principal,
     });
 
-    const { workflowRunId } = await deps.starter.start(task);
+    let workflowRunId: string;
+    try {
+      ({ workflowRunId } = await deps.starter.start(task));
+    } catch (err) {
+      // Compensate the reservation — a task that never started must not
+      // consume budget (the reaper is only the backstop for THIS failing too).
+      if (admission === 'ok') {
+        await deps.budget.release(task.tenant, task.task_id).catch((releaseErr: unknown) => {
+          deps.logger.error(
+            { err: releaseErr, task_id: task.task_id },
+            'budget release after failed start failed — the reaper will reclaim it',
+          );
+        });
+      }
+      throw err;
+    }
 
     // Audit before responding: if this publish fails the task still ran,
     // which is exactly the R1+ fail-closed debate — task submission is R0
@@ -529,6 +587,33 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
   });
 
   return app;
+}
+
+/**
+ * Attests a refused intake (tenant halt / budget exhaustion) with the VERIFIED
+ * caller as the actor. Alarm-and-continue: the rejection is the safe outcome
+ * either way, so an audit-stream hiccup must not turn a refusal into a 500.
+ */
+async function auditTaskRejected(
+  deps: GatewayDeps,
+  claims: PlatformClaims,
+  reason: 'tenant_halt' | 'budget_exhausted',
+  taskId?: string,
+): Promise<void> {
+  try {
+    await deps.audit.publish({
+      event_id: randomUUID(),
+      occurred_at: (deps.now?.() ?? new Date()).toISOString(),
+      tenant: claims.tenant,
+      event_type: 'task.rejected',
+      actor: { principal: claims.sub, delegation_chain: delegationChain(claims) },
+      action: { name: 'task.rejected' },
+      ...(taskId === undefined ? {} : { reason: { task_id: taskId } }),
+      details: { reason },
+    });
+  } catch (err) {
+    deps.logger.error({ err, reason }, 'task.rejected audit publish failed (rejection stands)');
+  }
 }
 
 /** Validates the approval id: it is interpolated into a workflow id, so a non-uuid is a 400. */

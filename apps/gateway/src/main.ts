@@ -11,6 +11,7 @@ import {
   initTelemetry,
 } from '@acp/service-kit';
 import { buildGatewayApp } from './app.js';
+import { PgBudgetAdmission } from './budget.js';
 import { FleetCanceller } from './fleet-canceller.js';
 import { connectTemporal } from './temporal.js';
 
@@ -28,6 +29,12 @@ const temporal = await connectTemporal();
 const killSwitch = await KillSwitchWatcher.start(nc, logger);
 const audit = new AuditPublisher(nc, logger);
 
+// Phase 4 item 1: per-tenant budget admission — Postgres-authoritative atomic
+// reserve at intake. The idempotent DDL runs here too so the gateway does not
+// depend on the evaluation service's boot order.
+const budget = new PgBudgetAdmission();
+await budget.migrate();
+
 const app = buildGatewayApp({
   verifier: new JwtVerifier(
     { jwksUrl: env('ACP_JWKS_URL', 'http://localhost:7101/.well-known/jwks.json') },
@@ -37,6 +44,8 @@ const app = buildGatewayApp({
   approvals: temporal.approvals,
   deployments: temporal.deployments,
   killSwitch,
+  budget,
+  budgetDefaultEstUsd: Number(env('ACP_BUDGET_DEFAULT_EST_USD', '0.01')),
   audit,
   logger,
 });
@@ -54,6 +63,7 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   process.on(signal, () => {
     void (async () => {
       await app.close();
+      await budget.close();
       await nc.drain();
       await telemetry.shutdown();
       process.exit(0);

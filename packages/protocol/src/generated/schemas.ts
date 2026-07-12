@@ -461,7 +461,8 @@ export const auditEventSchema = {
         "eval.drift_detected",
         "eval.budget_state_changed",
         "killswitch.activated",
-        "killswitch.cleared"
+        "killswitch.cleared",
+        "task.rejected"
       ]
     },
     "delegation_link": {
