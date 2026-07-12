@@ -14,6 +14,8 @@ import {
 import pg from 'pg';
 import { createActionClients } from './actions.js';
 import { buildEvalService } from './app.js';
+import type { TenantBudgetCaps } from './budget.js';
+import { PgBudgetLedger, startBudgetLedgerConsumer, startBudgetReaper } from './budget-ledger.js';
 import { PgScoresStore } from './store.js';
 
 /** Boots the evaluation service (serve mode): scores store + enforcement brain on port 7108. */
@@ -40,6 +42,26 @@ export async function startEvalService(): Promise<void> {
   });
   await ensureAuditStream(nc);
 
+  // Phase 4 item 1: the per-tenant budget ledger. Caps come from platform
+  // config (deploy/dev/tenant-budgets.json) — NEVER from a request — and are
+  // upserted for the current period at boot; a tenant absent from the file is
+  // uncapped. The durable task.completed consumer books actual spend and the
+  // reaper releases reservations of tasks that never completed.
+  const ledger = new PgBudgetLedger(pool);
+  const capsPath = env('ACP_TENANT_BUDGETS', '');
+  if (capsPath !== '') {
+    const caps = JSON.parse(readFileSync(capsPath, 'utf8')) as TenantBudgetCaps;
+    await ledger.upsertCaps(caps);
+    logger.info({ tenants: Object.keys(caps) }, 'tenant budget caps applied for current period');
+  } else {
+    logger.warn('ACP_TENANT_BUDGETS not set — no tenant budget caps (all tenants uncapped)');
+  }
+  const ledgerConsumer = await startBudgetLedgerConsumer(nc, ledger, logger);
+  const reaper = startBudgetReaper(ledger, logger, {
+    maxAgeSeconds: envInt('ACP_TASK_RESERVATION_MAX_AGE_SECONDS', 86_400),
+    intervalMs: envInt('ACP_BUDGET_REAPER_INTERVAL_SECONDS', 300) * 1000,
+  });
+
   const { actions, agentMeta } = createActionClients({
     tokenUrl: env('ACP_TOKEN_URL', 'http://localhost:7101'),
     registryUrl: env('ACP_REGISTRY_URL', 'http://localhost:7102'),
@@ -60,6 +82,7 @@ export async function startEvalService(): Promise<void> {
     audit: new AuditPublisher(nc, logger),
     actions,
     agentMeta,
+    budget: ledger,
     logger,
   });
 
@@ -70,6 +93,8 @@ export async function startEvalService(): Promise<void> {
   for (const signal of ['SIGINT', 'SIGTERM'] as const) {
     process.on(signal, () => {
       void (async () => {
+        reaper.stop();
+        ledgerConsumer.stop();
         await app.close();
         await pool.end();
         await nc.drain();

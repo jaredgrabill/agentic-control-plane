@@ -108,6 +108,37 @@ export class PgScoresStore {
         END IF;
       END $$;
     `);
+    // Per-tenant budget ledger (Phase 4 item 1). Postgres is AUTHORITATIVE for
+    // the running total: admission is a single atomic conditional UPDATE on
+    // tenant_budget (row-lock serialized — the anti-TOCTOU primitive), the
+    // task.completed consumer moves reserved → committed keyed by task_id, and
+    // tenant_budget_charge dedups redeliveries. The gateway creates the same
+    // tables idempotently at boot (apps/gateway/src/budget.ts) so neither
+    // service depends on the other's start order — keep the DDL in lockstep.
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS tenant_budget (
+        tenant           text NOT NULL,
+        period_start     date NOT NULL,
+        cap_micros       bigint NOT NULL,
+        committed_micros bigint NOT NULL DEFAULT 0,
+        reserved_micros  bigint NOT NULL DEFAULT 0,
+        PRIMARY KEY (tenant, period_start)
+      )
+    `);
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS tenant_budget_reservation (
+        task_id      uuid PRIMARY KEY,
+        tenant       text NOT NULL,
+        period_start date NOT NULL,
+        est_micros   bigint NOT NULL,
+        created_at   timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await this.pool.query(`
+      CREATE TABLE IF NOT EXISTS tenant_budget_charge (
+        task_id uuid PRIMARY KEY
+      )
+    `);
   }
 
   /** Idempotent insert (ON CONFLICT DO NOTHING). Returns true iff a row was written. */

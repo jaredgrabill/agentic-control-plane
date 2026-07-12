@@ -100,6 +100,9 @@ const services = [
       ACP_EVALUATION_CLIENT_SECRET: 'evaluation-dev-secret',
       ACP_NATS_SERVICE_USER: 'evaluation',
       ACP_NATS_SERVICE_PASSWORD: 'evaluation-dev-password',
+      // Phase 4 item 1: per-tenant budget caps (platform config, never a
+      // request field). Applied for the current period at boot.
+      ACP_TENANT_BUDGETS: join(repoRoot, 'deploy', 'dev', 'tenant-budgets.json'),
     },
   ],
   [

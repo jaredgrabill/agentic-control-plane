@@ -48,6 +48,22 @@ export interface EvalServiceDeps {
   actions: LadderActions;
   /** Resolves an agent's SLO + owner (registry-backed; falls back to config default). */
   agentMeta(agentId: string): Promise<AgentMeta>;
+  /**
+   * Phase 4 item 1: the per-tenant budget ledger read side (showback's
+   * budget_status). Absent in unit harnesses → the route answers 404.
+   */
+  budget?: {
+    budgetStatus(tenant: string): Promise<
+      | {
+          tenant: string;
+          period_start: string;
+          cap_micros: number;
+          committed_micros: number;
+          reserved_micros: number;
+        }
+      | undefined
+    >;
+  };
   logger: Logger;
   now?: () => Date;
 }
@@ -144,6 +160,39 @@ export function buildEvalService(deps: EvalServiceDeps): FastifyInstance {
       since,
     );
     return reply.send(agg);
+  });
+
+  // GET /v1/tenants/:tenant/budget — the live per-tenant budget row (cap /
+  // committed / reserved for the current period). Showback reads this for
+  // budget_status. Tenant-bound like every read surface: non-platform callers
+  // may only name their own tenant.
+  app.get('/v1/tenants/:tenant/budget', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'eval:read');
+    const { tenant } = request.params as { tenant: string };
+    if (typeof tenant !== 'string' || tenant === '') {
+      throw new AuthError('tenant is required', 400);
+    }
+    assertTenantAccess(claims, tenant);
+    if (deps.budget === undefined) {
+      return reply
+        .status(404)
+        .send({ error: { message: 'budget ledger not configured', status: 404 } });
+    }
+    const row = await deps.budget.budgetStatus(tenant);
+    if (row === undefined) {
+      // No cap row = uncapped: an honest answer, not an error.
+      return reply.send({ tenant, capped: false });
+    }
+    return reply.send({
+      tenant: row.tenant,
+      capped: true,
+      period_start: row.period_start,
+      cap_usd: row.cap_micros / 1_000_000,
+      committed_usd: row.committed_micros / 1_000_000,
+      reserved_usd: row.reserved_micros / 1_000_000,
+      remaining_usd: (row.cap_micros - row.committed_micros - row.reserved_micros) / 1_000_000,
+    });
   });
 
   return app;
