@@ -11,6 +11,7 @@
     "test:e2e": "vitest run"
   },
   "devDependencies": {
+    "@acp/cost-meter": "workspace:*",
     "@acp/protocol": "workspace:*",
     "@acp/service-kit": "workspace:*",
     "@acp/tool-client": "workspace:*",

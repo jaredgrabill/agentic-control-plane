@@ -14,6 +14,7 @@ import { execFile, type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { AuditEvent, TaskResult } from '@acp/protocol';
+import { CURRENT_PRICE_BOOK_VERSION } from '@acp/cost-meter';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AUDIT_URL,
@@ -194,6 +195,19 @@ describe('phase 2 orchestrator v1 scenario', () => {
     expect(count('step.dispatched')).toBe(2);
     expect(count('step.completed')).toBe(2);
     expect(count('task.completed')).toBe(1);
+
+    // Cost Meter v0: task.completed carries a priced ledger against the
+    // packaged price book. Tool agents are zero-LLM so the total is 0, but
+    // the field is present and numeric, and the pinned book version is
+    // recorded for reproducibility.
+    const taskCompleted = events.find((e) => e.event_type === 'task.completed')!;
+    const details = taskCompleted.details as {
+      usage_totals?: { cost_usd?: number | null };
+      price_book_version?: string | null;
+    };
+    expect(typeof details.usage_totals?.cost_usd).toBe('number');
+    expect(details.usage_totals!.cost_usd!).toBeGreaterThanOrEqual(0);
+    expect(details.price_book_version).toBe(CURRENT_PRICE_BOOK_VERSION);
 
     // ADR-0007: one token.brokered per step, joined to the task and carrying
     // the full user → orchestrator → agent chain.

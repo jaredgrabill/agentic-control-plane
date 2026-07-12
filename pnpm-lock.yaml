@@ -696,6 +696,9 @@ importers:
 
   tests/e2e:
     devDependencies:
+      '@acp/cost-meter':
+        specifier: workspace:*
+        version: link:../../packages/cost-meter
       '@acp/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
