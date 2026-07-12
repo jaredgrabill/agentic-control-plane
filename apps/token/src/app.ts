@@ -456,6 +456,10 @@ async function emitDenied(
       grant,
       audience,
       reason: denial.reason,
+      // Tier/target make a tier-2/3 kill-switch denial reconstructable from the
+      // ledger (item 5): which flag family tripped and its exact target.
+      tier: denial.tier,
+      target: denial.target,
       key: denial.key,
       principal: denial.principal,
     },

@@ -1410,11 +1410,20 @@ describe('JWKS', () => {
 
 describe('ADR-0007 broker-time denylist', () => {
   // A toggleable stub of the KillSwitchWatcher read side.
-  const state = { fleet: false, agents: new Set<string>(), principals: new Set<string>() };
+  const state = {
+    fleet: false,
+    agents: new Set<string>(),
+    principals: new Set<string>(),
+    capabilities: new Set<string>(),
+    // Executing risk classes a covering flag blocks (the test names them directly).
+    risks: new Set<string>(),
+  };
   const killSwitch = {
     fleetHalt: () => (state.fleet ? { active: true } : undefined),
     agentSuspension: (id: string) => (state.agents.has(id) ? { active: true } : undefined),
     principalDenied: (sub: string) => (state.principals.has(sub) ? { active: true } : undefined),
+    capabilitySuspension: (n: string) => (state.capabilities.has(n) ? { active: true } : undefined),
+    riskClassSuspension: (r: string) => (state.risks.has(r) ? { active: true } : undefined),
   };
   const denied: AuditEvent[] = [];
   let killApp: FastifyInstance;
@@ -1439,6 +1448,8 @@ describe('ADR-0007 broker-time denylist', () => {
     state.fleet = false;
     state.agents.clear();
     state.principals.clear();
+    state.capabilities.clear();
+    state.risks.clear();
     denied.length = 0;
   }
 
@@ -1576,6 +1587,114 @@ describe('ADR-0007 broker-time denylist', () => {
       reason: 'principal_denylist',
       key: 'killswitch.principal.user:jane.doe',
     });
+  });
+
+  it('delegate(): refuses a kill-switched named capability, even for a compensator (item 5)', async () => {
+    reset();
+    state.capabilities.add('change.submit');
+    const normal = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:change-agent',
+      scope: 'cloud:cost:read',
+      actor: 'agent:change-agent@0.1.0',
+      grounds: grounds(),
+      capability: { name: 'change.submit', risk: 'R2' },
+    });
+    expect(normal.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({
+      reason: 'capability_killswitch',
+      tier: 'capability',
+      target: 'change.submit',
+      key: 'killswitch.capability.change.submit',
+    });
+
+    // A named-capability flag blocks EVEN a compensator (surgical intent wins).
+    reset();
+    state.capabilities.add('change.withdraw');
+    const comp = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:change-agent',
+      scope: 'cloud:cost:read',
+      actor: 'agent:change-agent@0.1.0',
+      grounds: grounds(),
+      capability: { name: 'change.withdraw', risk: 'R2' },
+      compensation: {
+        original_step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f60',
+        original_capability: 'change.submit',
+      },
+    });
+    expect(comp.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({ reason: 'capability_killswitch' });
+  });
+
+  it('delegate(): refuses a kill-switched risk class but EXEMPTs a compensator (item 5)', async () => {
+    reset();
+    state.risks.add('R2');
+    const normal = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:change-agent',
+      scope: 'cloud:cost:read',
+      actor: 'agent:change-agent@0.1.0',
+      grounds: grounds(),
+      capability: { name: 'change.submit', risk: 'R2' },
+    });
+    expect(normal.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({
+      reason: 'risk_killswitch',
+      tier: 'risk',
+      target: 'R2',
+      key: 'killswitch.risk.R2',
+    });
+
+    // The compensator's mint is EXEMPT from the risk-class halt (else the write
+    // would be un-compensable). It carries compensation grounds → allowed.
+    reset();
+    state.risks.add('R2');
+    const comp = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:change-agent',
+      scope: 'cloud:cost:read',
+      actor: 'agent:change-agent@0.1.0',
+      grounds: grounds(),
+      capability: { name: 'change.withdraw', risk: 'R2' },
+      compensation: {
+        original_step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f60',
+        original_capability: 'change.submit',
+      },
+    });
+    expect(comp.statusCode).toBe(200);
+  });
+
+  it('delegate(): a compensator mint is EXEMPT from a fleet halt (item 5)', async () => {
+    reset();
+    state.fleet = true;
+    const comp = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:change-agent',
+      scope: 'cloud:cost:read',
+      actor: 'agent:change-agent@0.1.0',
+      grounds: grounds(),
+      capability: { name: 'change.withdraw', risk: 'R2' },
+      compensation: {
+        original_step_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f60',
+        original_capability: 'change.submit',
+      },
+    });
+    expect(comp.statusCode).toBe(200);
+
+    // A NORMAL mint under the same fleet halt is still refused.
+    reset();
+    state.fleet = true;
+    const normal = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:change-agent',
+      scope: 'cloud:cost:read',
+      actor: 'agent:change-agent@0.1.0',
+      grounds: grounds(),
+      capability: { name: 'change.submit', risk: 'R2' },
+    });
+    expect(normal.statusCode).toBe(403);
+    expect(deniedEvent()!.details).toMatchObject({ reason: 'fleet_halt', tier: 'fleet' });
   });
 
   it('exchange(): a suspended effective actor cannot convert a token it holds', async () => {
