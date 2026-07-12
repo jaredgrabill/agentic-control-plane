@@ -36,6 +36,10 @@ org → tenant → team/feature → agent → task
 - **Task-level:** every task carries a token/step budget in workflow state —
   the runaway-loop backstop. Exhaustion is a clean, reportable outcome
   ("budget exhausted after step 7"), not an OOM-style surprise.
+  *Status:* Orchestrator v1 enforces `max_steps` and `max_tokens` at
+  dispatch-gating (in-flight steps of a parallel wave complete and are
+  kept); `max_cost_usd` is accepted and recorded in the task audit but not
+  enforced until the Cost Meter's price book exists.
 - **Agent/tenant/org-level:** enforced at the Gateway and LLM gateway.
   Soft threshold (80%) → alerts; hard cap → structured rejection clients can
   degrade on gracefully. Caps auto-reset per window (monthly by default).

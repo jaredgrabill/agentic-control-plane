@@ -14,6 +14,7 @@ the old one — the history of *why* stays intact.
 | [0004](0004-stateless-jwt-rbac.md) | Stateless JWT auth with RBAC and delegation | Proposed |
 | [0005](0005-language-split-typescript-python.md) | TypeScript control plane, polyglot agent SDKs | Proposed |
 | [0006](0006-mcp-tools-a2a-agent-cards.md) | MCP for tools; A2A-compatible agent cards for discovery | Proposed |
+| [0007](0007-orchestrator-identity-broker.md) | The orchestrator as identity broker for long-running tasks | Proposed |
 
 ## Statuses
 

@@ -421,12 +421,15 @@ export const auditEventSchema = {
       "description": "Closed vocabulary; extending it is a protocol change.",
       "enum": [
         "task.submitted",
+        "task.planned",
         "task.completed",
         "step.dispatched",
         "step.completed",
+        "step.skipped",
         "policy.decision",
         "token.issued",
         "token.exchanged",
+        "token.brokered",
         "agent.registered",
         "agent.lifecycle_changed",
         "agent.baseline_recorded",
@@ -765,7 +768,7 @@ export const taskContractSchema = {
         },
         "subject_token": {
           "type": "string",
-          "description": "The caller's platform JWT, forwarded so the orchestrator can perform RFC 8693 exchange per delegation (scopes intersect, act chain grows). TTL ≤ 15 min bounds its life in workflow state; v0 supports single-step tasks that complete within it — durable re-delegation is a Phase 2 concern."
+          "description": "The caller's platform JWT, consumed exactly once at intake by the orchestrator's snapshot activity (ADR-0007): verified claims are recorded into durable workflow state and per-step tokens are minted via the broker grant. Its ≤ 15-min TTL no longer bounds task duration."
         },
         "submitted_at": {
           "$ref": "#/$defs/timestamp"
@@ -815,6 +818,9 @@ export const taskContractSchema = {
         "error": {
           "$ref": "#/$defs/capability_error"
         },
+        "plan": {
+          "$ref": "#/$defs/plan"
+        },
         "workflow_run_id": {
           "type": "string"
         },
@@ -862,6 +868,11 @@ export const taskContractSchema = {
         },
         "input": {
           "type": "object"
+        },
+        "delegation_depth": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1 = delegated directly from the user task; +1 per re-delegation. Platform cap is 3 (agent-patterns.md); exceeding is a planning failure, never a retry."
         },
         "delegated_token": {
           "type": "string",
@@ -1029,6 +1040,86 @@ export const taskContractSchema = {
         "max_cost_usd": {
           "type": "number",
           "exclusiveMinimum": 0
+        }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "title": "Plan",
+      "description": "Typed plan artifact materialized before execution and recorded to the audit stream (task.planned) — auditors see intent, not just outcomes. v1 plans are flat: no nesting, no mid-course replanning.",
+      "required": [
+        "plan_id",
+        "task_id",
+        "tenant",
+        "planner",
+        "steps",
+        "created_at"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "plan_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "task_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "tenant": {
+          "$ref": "#/$defs/tenant_id"
+        },
+        "planner": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Planner implementation and version, e.g. rule-planner@1."
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 20,
+          "items": {
+            "$ref": "#/$defs/plan_step"
+          }
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "created_at": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "plan_step": {
+      "type": "object",
+      "title": "PlanStep",
+      "required": [
+        "step_id",
+        "capability",
+        "input"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "step_id": {
+          "$ref": "#/$defs/uuid"
+        },
+        "capability": {
+          "$ref": "#/$defs/capability_name"
+        },
+        "agent_id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{1,62}[a-z0-9]$",
+          "description": "Optional pin; absent means registry discovery at dispatch time (kill-switch keeps stopping traffic per step)."
+        },
+        "input": {
+          "type": "object"
+        },
+        "depends_on": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/uuid"
+          },
+          "description": "step_ids that must complete successfully first. A failed dependency skips this step (recorded as a gap), never retries the plan."
+        },
+        "rationale": {
+          "type": "string"
         }
       }
     },

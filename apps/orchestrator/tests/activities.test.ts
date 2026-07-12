@@ -1,7 +1,9 @@
-import type { AgentCard, AuditEvent } from '@acp/protocol';
-import { createLogger } from '@acp/service-kit';
+import type { AgentCard, AuditEvent, TaskRequest } from '@acp/protocol';
+import { plan as planParser } from '@acp/protocol';
+import { createLogger, sha256Digest } from '@acp/service-kit';
 import { describe, expect, it, vi } from 'vitest';
 import { createControlActivities } from '../src/activities.js';
+import type { PrincipalSnapshot } from '../src/types.js';
 
 const card: AgentCard = {
   manifest: {
@@ -28,12 +30,33 @@ const card: AgentCard = {
   card_signature: 'sig',
 };
 
+const snapshot: PrincipalSnapshot = {
+  sub: 'user:jane.doe',
+  tenant: 'acme',
+  roles: ['tenant-user'],
+  scopes: ['task:submit', 'knowledge:search:read'],
+  jti: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f41',
+  verified_at: '2026-07-11T09:00:00Z',
+};
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
     headers: { 'content-type': 'application/json' },
   });
 }
+
+const verify = vi.fn((token: string) =>
+  token === 'subject.jwt'
+    ? Promise.resolve({
+        sub: 'user:jane.doe',
+        tenant: 'acme',
+        roles: ['tenant-user'],
+        scope: 'task:submit knowledge:search:read',
+        jti: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f41',
+      })
+    : Promise.reject(new Error('token verification failed')),
+);
 
 function makeActivities(fetchImpl: typeof fetch, audit: AuditEvent[] = []) {
   return createControlActivities({
@@ -42,17 +65,7 @@ function makeActivities(fetchImpl: typeof fetch, audit: AuditEvent[] = []) {
     tokenUrl: 'http://token.test',
     clientId: 'svc-orchestrator',
     clientSecret: 'secret',
-    verifier: {
-      verify: (token: string) =>
-        token === 'subject.jwt'
-          ? Promise.resolve({
-              sub: 'user:jane.doe',
-              tenant: 'acme',
-              roles: ['tenant-user'],
-              scope: 'task:submit knowledge:search:read',
-            })
-          : Promise.reject(new Error('token verification failed')),
-    },
+    verifier: { verify },
     audit: {
       publish: (e) => {
         audit.push(e);
@@ -63,6 +76,127 @@ function makeActivities(fetchImpl: typeof fetch, audit: AuditEvent[] = []) {
     fetchImpl,
   });
 }
+
+describe('snapshotPrincipal', () => {
+  it('verifies against the gateway audience and snapshots sub, tenant, roles, scopes, jti', async () => {
+    verify.mockClear();
+    const before = Date.now();
+    const snap = await makeActivities(vi.fn()).snapshotPrincipal({
+      subjectToken: 'subject.jwt',
+      expectedPrincipal: 'user:jane.doe',
+      expectedTenant: 'acme',
+    });
+    expect(verify).toHaveBeenCalledWith('subject.jwt', 'acp:gateway');
+    expect(snap.sub).toBe('user:jane.doe');
+    expect(snap.tenant).toBe('acme');
+    expect(snap.roles).toEqual(['tenant-user']);
+    // scopesOf: the space-delimited scope claim becomes the scopes array.
+    expect(snap.scopes).toEqual(['task:submit', 'knowledge:search:read']);
+    expect(snap.jti).toBe('0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f41');
+    expect(Date.parse(snap.verified_at)).toBeGreaterThanOrEqual(before - 1000);
+  });
+
+  it('refuses an unverifiable token (nonRetryable)', async () => {
+    await expect(
+      makeActivities(vi.fn() as unknown as typeof fetch).snapshotPrincipal({
+        subjectToken: 'forged.jwt',
+        expectedPrincipal: 'user:jane.doe',
+        expectedTenant: 'acme',
+      }),
+    ).rejects.toThrow(/intake verification.*verification failed/);
+  });
+
+  it('refuses a token that does not match the task attribution', async () => {
+    for (const [principal, tenant] of [
+      ['user:someone.else', 'acme'],
+      ['user:jane.doe', 'globex'],
+    ]) {
+      await expect(
+        makeActivities(vi.fn() as unknown as typeof fetch).snapshotPrincipal({
+          subjectToken: 'subject.jwt',
+          expectedPrincipal: principal!,
+          expectedTenant: tenant!,
+        }),
+      ).rejects.toThrow(/does not match the task attribution/);
+    }
+  });
+});
+
+describe('planTask', () => {
+  const task: TaskRequest = {
+    kind: 'task_request',
+    task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    tenant: 'acme',
+    principal: 'user:jane.doe',
+    input: { text: 'Why did cloud spend jump last week?', context: { repo: 'acme/payments' } },
+  };
+
+  const cloudCard: AgentCard = {
+    ...card,
+    manifest: {
+      ...card.manifest,
+      id: 'cloud-agent',
+      capabilities: [{ ...card.manifest.capabilities[0], name: 'cloud.cost_analysis' }],
+    },
+  };
+  const codeCard: AgentCard = {
+    ...card,
+    manifest: {
+      ...card.manifest,
+      id: 'code-agent',
+      capabilities: [{ ...card.manifest.capabilities[0], name: 'code.ci_health' }],
+    },
+  };
+
+  function planningFetch(agents: AgentCard[]): { impl: typeof fetch; urls: string[] } {
+    const urls: string[] = [];
+    const impl = vi.fn((url: string | URL, init?: RequestInit) => {
+      urls.push(String(url));
+      void init;
+      if (String(url).endsWith('/v1/token')) return jsonResponse({ access_token: 'svc-token' });
+      return jsonResponse({ agents });
+    }) as unknown as typeof fetch;
+    return { impl, urls };
+  }
+
+  it('plans against the active fleet, validates the plan, and digests the exact artifact', async () => {
+    const { impl, urls } = planningFetch([cloudCard, codeCard]);
+    const { plan, planDigest } = await makeActivities(impl).planTask(task);
+
+    expect(urls[1]).toContain('/v1/agents?state=active');
+    expect(plan.planner).toBe('rule-planner@1');
+    expect(plan.task_id).toBe(task.task_id);
+    expect(plan.tenant).toBe('acme');
+    expect(plan.steps).toHaveLength(2);
+    expect(plan.steps[0].capability).toBe('cloud.cost_analysis');
+    expect(plan.steps[1]!.capability).toBe('code.ci_health');
+    expect(plan.steps[1]!.input).toEqual({ repo: 'acme/payments' });
+    // Independent fan-out: no depends_on between the forensics steps.
+    expect(plan.steps[1]!.depends_on).toBeUndefined();
+
+    // Round-trips through the same schema gate an LLM planner must clear.
+    expect(planParser.validate(plan)).toBe(true);
+    expect(planDigest).toBe(sha256Digest(JSON.stringify(plan)));
+  });
+
+  it('honors servability: without the cloud agent the composite never fires', async () => {
+    const { impl } = planningFetch([codeCard]);
+    const { plan } = await makeActivities(impl).planTask(task);
+    expect(plan.steps).toHaveLength(1);
+    expect(plan.steps[0].capability).toBe('knowledge.answer_with_citations');
+  });
+
+  it('throws with the upstream status when the registry listing fails', async () => {
+    const impl = vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token')
+        ? jsonResponse({ access_token: 't' })
+        : jsonResponse({ boom: true }, 503),
+    ) as unknown as typeof fetch;
+    await expect(makeActivities(impl).planTask(task)).rejects.toThrow(
+      /registry listing for planning failed: 503/,
+    );
+  });
+});
 
 describe('discoverAgent', () => {
   it('acquires a service token, queries active agents, returns the first match', async () => {
@@ -105,7 +239,8 @@ describe('discoverAgent', () => {
 });
 
 describe('authorizeDelegation', () => {
-  it('sends the Cedar request with risk, scopes, and task attribution', async () => {
+  it('sends the Cedar request with risk and the SNAPSHOT scopes — no verifier call', async () => {
+    verify.mockClear();
     let authorizeBody: Record<string, unknown> | undefined;
     const fetchImpl = vi.fn((url: string | URL, init?: RequestInit) => {
       if (String(url).endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
@@ -122,20 +257,21 @@ describe('authorizeDelegation', () => {
       tenant: 'acme',
       agent: card,
       capability: 'knowledge.answer_with_citations',
-      subjectToken: 'subject.jwt',
+      snapshot,
       requestedScopes: ['knowledge:search:read'],
       taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
       stepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44',
     });
     expect(decision.decision).toBe('allow');
+    // ADR-0007: the intake snapshot IS the principal context; the raw
+    // subject token is never re-verified here.
+    expect(verify).not.toHaveBeenCalled();
     expect(authorizeBody).toMatchObject({
       principal: { type: 'User', id: 'user:jane.doe' },
       action: 'delegate',
       resource: { type: 'Agent', id: 'knowledge-agent' },
       context: {
         risk: 'R0',
-        // Cedar rules over the principal's verified scopes; the manifest's
-        // requested bindings ride separately for future policies.
         scopes: ['task:submit', 'knowledge:search:read'],
         requested_scopes: ['knowledge:search:read'],
       },
@@ -143,22 +279,32 @@ describe('authorizeDelegation', () => {
     });
   });
 
-  it('refuses to authorize on an unverifiable subject token', async () => {
-    const fetchImpl = vi.fn(() =>
-      Promise.resolve(jsonResponse({ access_token: 't' })),
+  it('throws when the policy service fails or the token service refuses credentials', async () => {
+    const input = {
+      principal: 'user:jane.doe',
+      tenant: 'acme',
+      agent: card,
+      capability: 'knowledge.answer_with_citations',
+      snapshot,
+      requestedScopes: [],
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+      stepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44',
+    };
+    const policyDown = vi.fn((url: string | URL) =>
+      String(url).endsWith('/v1/token')
+        ? jsonResponse({ access_token: 't' })
+        : jsonResponse({ boom: true }, 502),
     ) as unknown as typeof fetch;
-    await expect(
-      makeActivities(fetchImpl).authorizeDelegation({
-        principal: 'user:jane.doe',
-        tenant: 'acme',
-        agent: card,
-        capability: 'knowledge.answer_with_citations',
-        subjectToken: 'forged.jwt',
-        requestedScopes: [],
-        taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
-        stepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44',
-      }),
-    ).rejects.toThrow(/verification failed/);
+    await expect(makeActivities(policyDown).authorizeDelegation(input)).rejects.toThrow(
+      /policy service failed: 502/,
+    );
+
+    const tokenDown = vi.fn(() =>
+      Promise.resolve(jsonResponse({ error: 'nope' }, 401)),
+    ) as unknown as typeof fetch;
+    await expect(makeActivities(tokenDown).authorizeDelegation(input)).rejects.toThrow(
+      /token service refused client_credentials for acp:policy: 401/,
+    );
   });
 
   it('classifies agent principals as Agent and unknown capabilities as R3', async () => {
@@ -174,7 +320,7 @@ describe('authorizeDelegation', () => {
       tenant: 'acme',
       agent: card,
       capability: 'not.declared',
-      subjectToken: 'subject.jwt',
+      snapshot,
       requestedScopes: [],
       taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
       stepId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f44',
@@ -188,53 +334,87 @@ describe('authorizeDelegation', () => {
   });
 });
 
-describe('exchangeToken', () => {
-  it('performs RFC 8693 exchange bound to the agent audience and actor', async () => {
-    let exchangeBody: Record<string, unknown> | undefined;
-    const exchanges: Record<string, unknown>[] = [];
-    const fetchImpl = vi.fn((_url: string | URL, init?: RequestInit) => {
-      const body = JSON.parse(init?.body as string) as Record<string, unknown>;
-      exchanges.push(body);
-      exchangeBody = body;
-      return jsonResponse({
-        access_token: body.audience === 'acp:orchestrator' ? 'orch.jwt' : 'delegated',
-      });
+describe('brokerToken', () => {
+  it('requests the broker grant with the snapshot subject, actor, and grounds', async () => {
+    let url: string | undefined;
+    let body: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn((u: string | URL, init?: RequestInit) => {
+      url = String(u);
+      body = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return jsonResponse({ access_token: 'brokered.jwt' });
     }) as unknown as typeof fetch;
 
-    const { token } = await makeActivities(fetchImpl).exchangeToken({
-      subjectToken: 'subject.jwt.here',
+    const { token } = await makeActivities(fetchImpl).brokerToken({
+      snapshot,
       agent: card,
       scopes: ['knowledge:search:read'],
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
     });
-    expect(token).toBe('delegated');
-    // Two hops: the orchestrator takes custody, then delegates to the agent
-    // — the act chain records user → orchestrator → agent.
-    expect(exchanges).toHaveLength(2);
-    expect(exchanges[0]).toMatchObject({
-      audience: 'acp:orchestrator',
-      subject_token: 'subject.jwt.here',
-    });
-    expect(exchanges[0]).not.toHaveProperty('actor');
-    expect(exchangeBody).toMatchObject({
-      grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
-      subject_token: 'orch.jwt',
+    expect(token).toBe('brokered.jwt');
+    expect(url).toBe('http://token.test/v1/token/delegate');
+    expect(body).toMatchObject({
+      grant_type: 'urn:acp:oauth:grant-type:broker-delegation',
+      client_id: 'svc-orchestrator',
+      subject: {
+        sub: 'user:jane.doe',
+        tenant: 'acme',
+        roles: ['tenant-user'],
+        scopes: ['task:submit', 'knowledge:search:read'],
+      },
       audience: 'acp:agent:knowledge-agent',
-      actor: 'agent:knowledge-agent@0.1.0',
       scope: 'knowledge:search:read',
+      actor: 'agent:knowledge-agent@0.1.0',
+      grounds: {
+        task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+        subject_jti: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f41',
+        verified_at: '2026-07-11T09:00:00Z',
+      },
     });
   });
 
-  it('surfaces exchange refusals with the upstream status', async () => {
+  it('sends scope: "" (present, never omitted) for a toolless agent — empty means empty, not the snapshot', async () => {
+    // A manifest with no `tools` is schema-valid; the workflow computes
+    // requestedScopes = [] for it. The broker request must carry an explicit
+    // empty scope so the token service grants NOTHING — omitting the field
+    // would be rejected (and must never default to the whole snapshot).
+    const toollessCard: AgentCard = {
+      ...card,
+      manifest: { ...card.manifest, id: 'toolless-agent' },
+    };
+    delete (toollessCard.manifest as { tools?: unknown }).tools;
+    // Mirrors workflows.ts: requestedScopes from the manifest tool bindings.
+    const requestedScopes = (toollessCard.manifest.tools ?? []).flatMap((t) => t.scopes);
+    expect(requestedScopes).toEqual([]);
+
+    let body: Record<string, unknown> | undefined;
+    const fetchImpl = vi.fn((_u: string | URL, init?: RequestInit) => {
+      body = JSON.parse(init?.body as string) as Record<string, unknown>;
+      return jsonResponse({ access_token: 'brokered.jwt' });
+    }) as unknown as typeof fetch;
+
+    await makeActivities(fetchImpl).brokerToken({
+      snapshot,
+      agent: toollessCard,
+      scopes: requestedScopes,
+      taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    });
+    expect(body).toBeDefined();
+    expect(Object.hasOwn(body!, 'scope')).toBe(true);
+    expect(body!.scope).toBe('');
+  });
+
+  it('surfaces broker refusals with the upstream status', async () => {
     const fetchImpl = vi.fn(() =>
-      Promise.resolve(jsonResponse({ error: 'nope' }, 401)),
+      Promise.resolve(jsonResponse({ error: 'stale grounds' }, 403)),
     ) as unknown as typeof fetch;
     await expect(
-      makeActivities(fetchImpl).exchangeToken({
-        subjectToken: 'expired',
+      makeActivities(fetchImpl).brokerToken({
+        snapshot,
         agent: card,
         scopes: [],
+        taskId: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
       }),
-    ).rejects.toThrow(/token exchange for acp:orchestrator failed: 401/);
+    ).rejects.toThrow(/broker delegation for acp:agent:knowledge-agent failed: 403/);
   });
 });
 

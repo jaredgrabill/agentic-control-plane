@@ -3,7 +3,7 @@ import { JwtVerifier, createLogger, delegationChain } from '@acp/service-kit';
 import type { FastifyInstance } from 'fastify';
 import { decodeJwt } from 'jose';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { buildTokenApp, TOKEN_EXCHANGE_GRANT } from '../src/app.js';
+import { buildTokenApp, BROKER_DELEGATION_GRANT, TOKEN_EXCHANGE_GRANT } from '../src/app.js';
 import { ClientRegistry } from '../src/clients.js';
 import { loadKeyStore, type KeyStore } from '../src/keys.js';
 import { MAX_TTL_SECONDS } from '../src/tokens.js';
@@ -24,7 +24,7 @@ const CLIENTS = [
     client_secret: 'orch-secret',
     principal: 'svc:orchestrator',
     tenant: 'acme',
-    roles: ['platform'],
+    roles: ['platform', 'broker'],
     scopes: ['token:exchange'],
   },
   {
@@ -33,6 +33,22 @@ const CLIENTS = [
     principal: 'svc:lowly',
     tenant: 'acme',
     roles: ['tool-server'],
+    scopes: [],
+  },
+  {
+    client_id: 'svc-platform-only',
+    client_secret: 'platform-secret',
+    principal: 'svc:platform-only',
+    tenant: 'acme',
+    roles: ['platform'],
+    scopes: [],
+  },
+  {
+    client_id: 'agent-something',
+    client_secret: 'agent-secret',
+    principal: 'agent:something@0.1.0',
+    tenant: 'acme',
+    roles: ['agent'],
     scopes: [],
   },
 ];
@@ -266,6 +282,229 @@ describe('RFC 8693 exchange', () => {
       'user:jane.doe',
       'svc:orchestrator',
     ]);
+  });
+});
+
+describe('ADR-0007 broker delegation', () => {
+  const SNAPSHOT = {
+    sub: 'user:jane.doe',
+    tenant: 'acme',
+    roles: ['tenant-user'],
+    scopes: ['task:submit', 'knowledge:search:read', 'cloud:cost:read'],
+  };
+  const grounds = (verifiedAt: string = new Date().toISOString()) => ({
+    task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+    subject_jti: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f41',
+    verified_at: verifiedAt,
+  });
+
+  async function delegate(
+    payload: Record<string, unknown>,
+    auth = basic('svc-orchestrator', 'orch-secret'),
+  ) {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/delegate',
+      headers: { authorization: auth },
+      payload: { grant_type: BROKER_DELEGATION_GRANT, ...payload },
+    });
+    return { statusCode: res.statusCode, body: res.json<{ access_token: string }>() };
+  }
+
+  it('mints from an asserted snapshot: sub preserved, scopes intersected, act chain grown, grounds recorded', async () => {
+    const res = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read cloud:write',
+      actor: 'agent:cloud-agent@0.1.0',
+      grounds: grounds(),
+    });
+    expect(res.statusCode).toBe(200);
+
+    const verifier = new JwtVerifier({ jwks: keys.jwks }, ISSUER);
+    const claims = await verifier.verify(res.body.access_token, 'acp:agent:cloud-agent');
+    expect(claims.sub).toBe('user:jane.doe');
+    expect(claims.tenant).toBe('acme');
+    expect(claims.roles).toEqual(['tenant-user']);
+    // Intersection, never union: cloud:write was requested but never held.
+    expect(claims.scope).toBe('cloud:cost:read');
+    // Same chain shape as the exchange path — audit assertions keep passing.
+    expect(delegationChain(claims).map((l) => l.sub)).toEqual([
+      'user:jane.doe',
+      'svc:orchestrator',
+      'agent:cloud-agent@0.1.0',
+    ]);
+    const brokered = claims.brokered as { task_id: string; verified_at: string };
+    expect(brokered.task_id).toBe('0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40');
+    expect(claims.exp! - claims.iat!).toBeLessThanOrEqual(MAX_TTL_SECONDS);
+  });
+
+  it('refuses a request without scope with 400 — the grant never defaults to the snapshot', async () => {
+    const res = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:orchestrator',
+      grounds: grounds(),
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.stringify(res.body)).toContain('scope is required');
+  });
+
+  it('empty scope means an empty grant: a toolless agent gets NOTHING, not the whole snapshot', async () => {
+    // Simulates a schema-valid manifest with no `tools`: the orchestrator
+    // requests [] (serialized as ''), while the snapshot holds many scopes.
+    const res = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:orchestrator',
+      scope: '',
+      grounds: grounds(),
+    });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token);
+    expect(claims.scope).toBe('');
+    // The actor still defaults to the broker itself.
+    expect((claims.act as { sub: string }).sub).toBe('svc:orchestrator');
+  });
+
+  it('clamps requested TTL to 15 minutes — no loopholes on the broker path', async () => {
+    const res = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
+      grounds: grounds(),
+      requested_ttl: '86400',
+    });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token);
+    expect(claims.exp! - claims.iat!).toBeLessThanOrEqual(MAX_TTL_SECONDS);
+  });
+
+  it('refuses clients without the broker role: agent-role and platform-only alike', async () => {
+    for (const auth of [
+      basic('agent-something', 'agent-secret'),
+      basic('svc-platform-only', 'platform-secret'),
+    ]) {
+      const res = await delegate(
+        {
+          subject: SNAPSHOT,
+          audience: 'acp:agent:cloud-agent',
+          scope: 'cloud:cost:read',
+          grounds: grounds(),
+        },
+        auth,
+      );
+      expect(res.statusCode).toBe(403);
+      expect(JSON.stringify(res.body)).toContain('broker role required');
+    }
+  });
+
+  it('refuses stale grounds (25h old) and unparseable verified_at', async () => {
+    const stale = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
+      grounds: grounds(new Date(Date.now() - 25 * 3600 * 1000).toISOString()),
+    });
+    expect(stale.statusCode).toBe(403);
+    expect(JSON.stringify(stale.body)).toContain('stale');
+
+    const garbled = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
+      grounds: grounds('not-a-timestamp'),
+    });
+    expect(garbled.statusCode).toBe(403);
+
+    const future = await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
+      grounds: grounds(new Date(Date.now() + 3600 * 1000).toISOString()),
+    });
+    expect(future.statusCode).toBe(403);
+  });
+
+  it('rejects missing audience, subject, grounds fields, and wrong grant_type with 400', async () => {
+    for (const payload of [
+      { subject: SNAPSHOT, scope: 'cloud:cost:read', grounds: grounds() },
+      { audience: 'acp:agent:cloud-agent', scope: 'cloud:cost:read', grounds: grounds() },
+      { subject: SNAPSHOT, audience: 'acp:agent:cloud-agent', scope: 'cloud:cost:read' },
+      {
+        subject: SNAPSHOT,
+        audience: 'acp:agent:cloud-agent',
+        scope: 'cloud:cost:read',
+        grounds: { task_id: grounds().task_id },
+      },
+      {
+        subject: { sub: 'user:jane.doe' },
+        audience: 'acp:agent:cloud-agent',
+        scope: 'cloud:cost:read',
+        grounds: grounds(),
+      },
+      {
+        grant_type: 'client_credentials',
+        subject: SNAPSHOT,
+        audience: 'acp:agent:cloud-agent',
+        scope: 'cloud:cost:read',
+        grounds: grounds(),
+      },
+    ]) {
+      const res = await delegate(payload);
+      expect(res.statusCode, JSON.stringify(payload)).toBe(400);
+    }
+  });
+
+  it('emits a token.brokered audit event joining the mint to its task, and stays available if the sink fails', async () => {
+    auditEvents.length = 0;
+    await delegate({
+      subject: SNAPSHOT,
+      audience: 'acp:agent:cloud-agent',
+      scope: 'cloud:cost:read',
+      actor: 'agent:cloud-agent@0.1.0',
+      grounds: grounds(),
+    });
+    expect(auditEvents).toHaveLength(1);
+    const event = auditEvents[0]!;
+    expect(event.event_type).toBe('token.brokered');
+    expect(event.tenant).toBe('acme');
+    expect(event.reason?.task_id).toBe('0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40');
+    expect(event.actor.delegation_chain?.map((l) => l.sub)).toEqual([
+      'user:jane.doe',
+      'svc:orchestrator',
+      'agent:cloud-agent@0.1.0',
+    ]);
+    const details = event.details as {
+      subject: string;
+      audience: string;
+      actor: string;
+      grounds: { task_id: string; verified_at: string };
+    };
+    expect(details.subject).toBe('user:jane.doe');
+    expect(details.audience).toBe('acp:agent:cloud-agent');
+    expect(details.actor).toBe('agent:cloud-agent@0.1.0');
+    expect(details.grounds.task_id).toBe('0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40');
+
+    // R0 fail-open-with-alarm: issuance survives a dead audit sink.
+    const failingApp = await buildTokenApp({
+      keys,
+      clients: new ClientRegistry(CLIENTS),
+      issuer: ISSUER,
+      audit: { publish: () => Promise.reject(new Error('stream down')) },
+      logger: createLogger('token-service-test'),
+    });
+    const res = await failingApp.inject({
+      method: 'POST',
+      url: '/v1/token/delegate',
+      headers: { authorization: basic('svc-orchestrator', 'orch-secret') },
+      payload: {
+        grant_type: BROKER_DELEGATION_GRANT,
+        subject: SNAPSHOT,
+        audience: 'acp:agent:cloud-agent',
+        scope: 'cloud:cost:read',
+        grounds: grounds(),
+      },
+    });
+    expect(res.statusCode).toBe(200);
   });
 });
 

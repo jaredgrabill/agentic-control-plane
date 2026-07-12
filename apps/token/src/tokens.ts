@@ -14,6 +14,8 @@ import { SIGNING_ALG, type KeyStore } from './keys.js';
 /** ADR-0004: TTL ≤ 15 minutes, no exceptions — a captured credential is worth minutes, not months. */
 export const MAX_TTL_SECONDS = 15 * 60;
 export const DEFAULT_TTL_SECONDS = 10 * 60;
+/** ADR-0007: broker grounds older than this are refused (defense-in-depth against snapshot replay). */
+export const DEFAULT_MAX_TASK_AGE_SECONDS = 86_400;
 
 export interface IssueRequest {
   client: RegisteredClient;
@@ -36,6 +38,28 @@ export interface ExchangeRequest {
   ttlSeconds?: number | undefined;
 }
 
+/**
+ * ADR-0007 broker grant: a broker-role client asserts a subject claim set
+ * (the orchestrator's intake snapshot) instead of presenting a live subject
+ * token. Grounds tie the mint back to the intake verification for audit.
+ */
+export interface DelegateRequest {
+  client: RegisteredClient;
+  /** Asserted principal snapshot, verified by the broker at task intake. */
+  subject: { sub: string; tenant: string; roles: string[]; scopes: string[] };
+  audience: string;
+  /**
+   * Required — the broker must say exactly what it wants (the target's
+   * manifest tool bindings). Result scopes = intersectScopes(requested,
+   * subject.scopes) — never widens, and an empty request grants nothing.
+   */
+  scopes: string[];
+  /** Acting party for the new token, e.g. agent:cloud-agent@0.1.0. */
+  actor?: string | undefined;
+  grounds: { task_id: string; subject_jti?: string | undefined; verified_at: string };
+  ttlSeconds?: number | undefined;
+}
+
 export interface IssuedToken {
   token: string;
   expiresIn: number;
@@ -43,10 +67,15 @@ export interface IssuedToken {
 }
 
 export class TokenIssuer {
+  private readonly maxTaskAgeSeconds: number;
+
   constructor(
     private readonly keys: KeyStore,
     private readonly issuer: string,
-  ) {}
+    options?: { maxTaskAgeSeconds?: number },
+  ) {
+    this.maxTaskAgeSeconds = options?.maxTaskAgeSeconds ?? DEFAULT_MAX_TASK_AGE_SECONDS;
+  }
 
   private async sign(
     claims: Omit<PlatformClaims, 'iss' | 'iat' | 'exp' | 'jti'>,
@@ -126,6 +155,97 @@ export class TokenIssuer {
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
+  }
+
+  /**
+   * ADR-0007 broker delegation. No live subject token changes hands: the
+   * broker asserts the claim set it verified at intake, and the service
+   * enforces the invariants the exchange path enforces — scopes intersect
+   * (never widen), the act chain records the true actors, and the minted
+   * token is clamped to ≤ 15 minutes like every other token.
+   */
+  async delegate(request: DelegateRequest): Promise<IssuedToken> {
+    if (!request.client.roles.includes('broker')) {
+      throw new AuthError(
+        `client ${request.client.client_id} may not broker delegations: broker role required (ADR-0007)`,
+        403,
+      );
+    }
+    const { subject } = request;
+    if (
+      typeof subject.sub !== 'string' ||
+      subject.sub === '' ||
+      typeof subject.tenant !== 'string' ||
+      subject.tenant === '' ||
+      !Array.isArray(subject.roles) ||
+      subject.roles.some((r) => typeof r !== 'string') ||
+      !Array.isArray(subject.scopes) ||
+      subject.scopes.some((s) => typeof s !== 'string')
+    ) {
+      throw new AuthError(
+        'subject must assert sub, tenant, roles[] and scopes[] — the snapshot the broker verified at intake',
+        400,
+      );
+    }
+    this.assertFreshGrounds(request.grounds);
+
+    // Explicit-or-nothing: no "default to the snapshot" branch. A toolless
+    // agent (requested = []) mints a token with zero scopes, keeping the
+    // ADR-0007 narrowing chain intact: brokered ⊆ requested ⊆ snapshot.
+    const scopes = intersectScopes(request.scopes, subject.scopes);
+
+    // Same two-hop chain the exchange path produced: user → broker when the
+    // broker takes custody, user → actor → broker when it delegates onward —
+    // delegationChain() keeps yielding user → svc:orchestrator → agent.
+    const actor = request.actor ?? request.client.principal;
+    const act: ActClaim =
+      actor === request.client.principal
+        ? { sub: request.client.principal }
+        : { sub: actor, act: { sub: request.client.principal } };
+
+    return this.sign(
+      {
+        sub: subject.sub,
+        aud: request.audience,
+        tenant: subject.tenant,
+        roles: subject.roles,
+        scope: scopes.join(' '),
+        act,
+        brokered: {
+          task_id: request.grounds.task_id,
+          ...(request.grounds.subject_jti === undefined
+            ? {}
+            : { subject_jti: request.grounds.subject_jti }),
+          verified_at: request.grounds.verified_at,
+        },
+      },
+      request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
+    );
+  }
+
+  /** Grounds must reference a recent intake verification: stale, unparseable, or future timestamps are refused. */
+  private assertFreshGrounds(grounds: DelegateRequest['grounds']): void {
+    const verifiedAt = Date.parse(grounds.verified_at);
+    if (Number.isNaN(verifiedAt)) {
+      throw new AuthError(
+        `broker grounds are stale: verified_at ${JSON.stringify(grounds.verified_at)} is not a parseable timestamp`,
+        403,
+      );
+    }
+    const ageSeconds = (Date.now() - verifiedAt) / 1000;
+    if (ageSeconds < 0) {
+      throw new AuthError(
+        `broker grounds are stale: verified_at ${grounds.verified_at} is in the future`,
+        403,
+      );
+    }
+    if (ageSeconds > this.maxTaskAgeSeconds) {
+      throw new AuthError(
+        `broker grounds are stale: verified_at ${grounds.verified_at} is older than ` +
+          `${this.maxTaskAgeSeconds}s (ACP_BROKER_MAX_TASK_AGE_SECONDS) — the task outlived the broker window`,
+        403,
+      );
+    }
   }
 
   /** Subject tokens must be our own, currently valid platform JWTs (any audience — exchange rebinds it). */

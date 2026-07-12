@@ -33,7 +33,7 @@ export interface TaskRequest {
   };
   budget?: Budget;
   /**
-   * The caller's platform JWT, forwarded so the orchestrator can perform RFC 8693 exchange per delegation (scopes intersect, act chain grows). TTL ≤ 15 min bounds its life in workflow state; v0 supports single-step tasks that complete within it — durable re-delegation is a Phase 2 concern.
+   * The caller's platform JWT, consumed exactly once at intake by the orchestrator's snapshot activity (ADR-0007): verified claims are recorded into durable workflow state and per-step tokens are minted via the broker grant. Its ≤ 15-min TTL no longer bounds task duration.
    */
   subject_token?: string;
   submitted_at?: Timestamp;
@@ -57,6 +57,7 @@ export interface TaskResult {
    */
   gaps?: string[];
   error?: CapabilityError;
+  plan?: Plan;
   workflow_run_id?: string;
   completed_at?: Timestamp;
 }
@@ -92,6 +93,235 @@ export interface CapabilityError {
   details?: {};
 }
 /**
+ * Typed plan artifact materialized before execution and recorded to the audit stream (task.planned) — auditors see intent, not just outcomes. v1 plans are flat: no nesting, no mid-course replanning.
+ */
+export interface Plan {
+  plan_id: Uuid;
+  task_id: Uuid;
+  tenant: TenantId;
+  /**
+   * Planner implementation and version, e.g. rule-planner@1.
+   */
+  planner: string;
+  /**
+   * @minItems 1
+   * @maxItems 20
+   */
+  steps:
+    | [PlanStep]
+    | [PlanStep, PlanStep]
+    | [PlanStep, PlanStep, PlanStep]
+    | [PlanStep, PlanStep, PlanStep, PlanStep]
+    | [PlanStep, PlanStep, PlanStep, PlanStep, PlanStep]
+    | [PlanStep, PlanStep, PlanStep, PlanStep, PlanStep, PlanStep]
+    | [PlanStep, PlanStep, PlanStep, PlanStep, PlanStep, PlanStep, PlanStep]
+    | [PlanStep, PlanStep, PlanStep, PlanStep, PlanStep, PlanStep, PlanStep, PlanStep]
+    | [PlanStep, PlanStep, PlanStep, PlanStep, PlanStep, PlanStep, PlanStep, PlanStep, PlanStep]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ]
+    | [
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep,
+        PlanStep
+      ];
+  rationale?: string;
+  created_at: Timestamp;
+}
+export interface PlanStep {
+  step_id: Uuid;
+  capability: CapabilityName;
+  /**
+   * Optional pin; absent means registry discovery at dispatch time (kill-switch keeps stopping traffic per step).
+   */
+  agent_id?: string;
+  input: {};
+  /**
+   * step_ids that must complete successfully first. A failed dependency skips this step (recorded as a gap), never retries the plan.
+   */
+  depends_on?: Uuid[];
+  rationale?: string;
+}
+/**
  * One delegated step from the Orchestrator to one agent capability, dispatched as a Temporal activity. All state the handler needs is here — handlers are stateless.
  */
 export interface StepRequest {
@@ -103,6 +333,10 @@ export interface StepRequest {
   agent_version?: string;
   capability: CapabilityName;
   input: {};
+  /**
+   * 1 = delegated directly from the user task; +1 per re-delegation. Platform cap is 3 (agent-patterns.md); exceeding is a planning failure, never a retry.
+   */
+  delegation_depth?: number;
   /**
    * RFC 8693-exchanged JWT: audience = this agent, scopes = intersection, act chain included.
    */

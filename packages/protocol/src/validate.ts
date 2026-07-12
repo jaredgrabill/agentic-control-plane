@@ -16,6 +16,7 @@ import type { AgentManifest } from './generated/agent-manifest.js';
 import type { AuditEvent } from './generated/audit-event.js';
 import type { EvalReport } from './generated/eval-report.js';
 import type {
+  Plan,
   StepRequest,
   StepResult,
   TaskMessage,
@@ -88,6 +89,7 @@ export const stepRequest = makeParser<StepRequest>(
 export const stepResult = makeParser<StepResult>(
   `${BASE}/task-contract.schema.json#/$defs/step_result`,
 );
+export const plan = makeParser<Plan>(`${BASE}/task-contract.schema.json#/$defs/plan`);
 export const evalReport = makeParser<EvalReport>(`${BASE}/eval-report.schema.json`);
 export const evalBaseline = makeParser<EvalBaseline>(
   `${BASE}/eval-report.schema.json#/$defs/eval_baseline`,

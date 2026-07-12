@@ -52,7 +52,10 @@ export async function startPlatform(): Promise<ChildProcess> {
   return platform;
 }
 
-export function stopPlatform(platform: ChildProcess): void {
+export function stopPlatform(platform: ChildProcess | undefined): void {
+  // A beforeAll boot failure leaves no process; a teardown throw here would
+  // mask the real error with "reading 'pid'".
+  if (platform === undefined) return;
   if (process.platform === 'win32' && platform.pid !== undefined) {
     // TerminateProcess does not cascade; take down the whole service tree.
     spawn('taskkill', ['/pid', String(platform.pid), '/T', '/F'], { stdio: 'ignore' });

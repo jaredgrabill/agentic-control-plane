@@ -1,6 +1,21 @@
-import { auditEvent as auditEventParser, type AgentCard, type AuditEvent } from '@acp/protocol';
-import { scopesOf, type AuditPublisher, type Logger, type PlatformClaims } from '@acp/service-kit';
-import type { ControlActivities } from './types.js';
+import { randomUUID } from 'node:crypto';
+import {
+  auditEvent as auditEventParser,
+  plan as planParser,
+  type AgentCard,
+  type AuditEvent,
+  type PlanStep,
+} from '@acp/protocol';
+import {
+  scopesOf,
+  sha256Digest,
+  type AuditPublisher,
+  type Logger,
+  type PlatformClaims,
+} from '@acp/service-kit';
+import { ApplicationFailure } from '@temporalio/common';
+import { RULE_PLANNER, buildPlanSteps } from './planner.js';
+import type { ControlActivities, PrincipalSnapshot } from './types.js';
 
 export interface ControlDeps {
   registryUrl: string;
@@ -9,7 +24,7 @@ export interface ControlDeps {
   /** client_credentials for the orchestrator's own platform identity. */
   clientId: string;
   clientSecret: string;
-  /** Verifies the forwarded subject token before its scopes reach Cedar. */
+  /** Verifies the forwarded subject token ONCE at intake (ADR-0007). */
   verifier: { verify(token: string, audience: string): Promise<PlatformClaims> };
   audit: AuditPublisher | { publish(event: AuditEvent): Promise<void> };
   logger: Logger;
@@ -46,6 +61,77 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
   }
 
   return {
+    async snapshotPrincipal(input): Promise<PrincipalSnapshot> {
+      // The ONE place the subject token is read (ADR-0007). Verification
+      // failures are nonRetryable: a bad token will not get better.
+      let claims: PlatformClaims;
+      try {
+        claims = await deps.verifier.verify(input.subjectToken, 'acp:gateway');
+      } catch (err) {
+        throw ApplicationFailure.nonRetryable(
+          `subject token failed intake verification: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      if (claims.sub !== input.expectedPrincipal || claims.tenant !== input.expectedTenant) {
+        throw ApplicationFailure.nonRetryable(
+          `subject token does not match the task attribution: token is for ` +
+            `${claims.sub}@${claims.tenant}, task claims ${input.expectedPrincipal}@${input.expectedTenant} — ` +
+            'the gateway stamps attribution from the same token, so this indicates tampering',
+        );
+      }
+      return {
+        sub: claims.sub,
+        tenant: claims.tenant,
+        roles: claims.roles,
+        scopes: scopesOf(claims),
+        ...(typeof claims.jti === 'string' ? { jti: claims.jti } : {}),
+        verified_at: new Date().toISOString(),
+      };
+    },
+
+    async planTask(task) {
+      // The rule planner routes against what the fleet can actually serve
+      // right now; suspension still gates each step at dispatch time.
+      const token = await serviceToken('acp:registry', 'registry:read');
+      const res = await doFetch(`${deps.registryUrl}/v1/agents?state=active`, {
+        headers: { authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) {
+        throw new Error(`registry listing for planning failed: ${res.status} ${await res.text()}`);
+      }
+      const { agents } = (await res.json()) as { agents: AgentCard[] };
+      const servable = new Set(agents.flatMap((a) => a.manifest.capabilities.map((c) => c.name)));
+
+      const specs = buildPlanSteps(task, servable);
+      const stepIds = specs.map(() => randomUUID());
+      const idAt = (index: number): string => {
+        const id = stepIds[index];
+        if (id === undefined) {
+          throw new Error(`plan step dependency index ${index} is out of range`);
+        }
+        return id;
+      };
+      const steps: PlanStep[] = specs.map((spec, i) => ({
+        step_id: idAt(i),
+        capability: spec.capability,
+        input: spec.input,
+        ...(spec.dependsOnIndex === undefined ? {} : { depends_on: spec.dependsOnIndex.map(idAt) }),
+        ...(spec.rationale === undefined ? {} : { rationale: spec.rationale }),
+      }));
+
+      // The same schema gate a future LLM planner must clear — validation
+      // is the seam, not the planner implementation.
+      const plan = planParser.parse({
+        plan_id: randomUUID(),
+        task_id: task.task_id,
+        tenant: task.tenant,
+        planner: RULE_PLANNER,
+        steps,
+        created_at: new Date().toISOString(),
+      });
+      return { plan, planDigest: sha256Digest(JSON.stringify(plan)) };
+    },
+
     async discoverAgent(capability, tenant): Promise<AgentCard | null> {
       const token = await serviceToken('acp:registry', 'registry:read');
       const res = await doFetch(
@@ -64,10 +150,8 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
     },
 
     async authorizeDelegation(input) {
-      // Real verification, not decode-and-hope: the subject token was
-      // issued for the gateway audience and its scopes are what the
-      // principal actually holds.
-      const subject = await deps.verifier.verify(input.subjectToken, 'acp:gateway');
+      // The principal's scopes come from the intake snapshot — verified
+      // once, while fresh (ADR-0007) — never the manifest's wishlist.
       const token = await serviceToken('acp:policy', 'policy:decide');
       const capability = input.agent.manifest.capabilities.find((c) => c.name === input.capability);
       const res = await doFetch(`${deps.policyUrl}/v1/authorize`, {
@@ -87,7 +171,7 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
           },
           context: {
             risk: capability?.risk ?? 'R3',
-            scopes: scopesOf(subject),
+            scopes: input.snapshot.scopes,
             requested_scopes: input.requestedScopes,
             tenant: input.tenant,
             capability: input.capability,
@@ -101,46 +185,40 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
       return (await res.json()) as Awaited<ReturnType<ControlActivities['authorizeDelegation']>>;
     },
 
-    async exchangeToken(input) {
-      // Two hops so the act chain records what actually happened:
-      // user → orchestrator (this service takes custody of the task),
-      // then user → orchestrator → agent (the agent acts on the step).
-      const exchange = async (
-        subjectToken: string,
-        audience: string,
-        actor?: string,
-        scope?: string,
-      ) => {
-        const res = await doFetch(`${deps.tokenUrl}/v1/token/exchange`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
-            client_id: deps.clientId,
-            client_secret: deps.clientSecret,
-            subject_token: subjectToken,
-            subject_token_type: 'urn:ietf:params:oauth:token-type:jwt',
-            audience,
-            ...(scope === undefined ? {} : { scope }),
-            ...(actor === undefined ? {} : { actor }),
-          }),
-        });
-        if (!res.ok) {
-          throw new Error(
-            `token exchange for ${audience} failed: ${res.status} ${await res.text()}`,
-          );
-        }
-        return ((await res.json()) as { access_token: string }).access_token;
-      };
-
-      const orchestratorToken = await exchange(input.subjectToken, 'acp:orchestrator');
-      const agentToken = await exchange(
-        orchestratorToken,
-        `acp:agent:${input.agent.manifest.id}`,
-        `agent:${input.agent.manifest.id}@${input.agent.version}`,
-        input.scopes.join(' '),
-      );
-      return { token: agentToken };
+    async brokerToken(input) {
+      // ADR-0007: mint the step's token at dispatch time from the intake
+      // snapshot. No subject token changes hands; the grounds join the mint
+      // to the intake verification for auditors.
+      const audience = `acp:agent:${input.agent.manifest.id}`;
+      const res = await doFetch(`${deps.tokenUrl}/v1/token/delegate`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          grant_type: 'urn:acp:oauth:grant-type:broker-delegation',
+          client_id: deps.clientId,
+          client_secret: deps.clientSecret,
+          subject: {
+            sub: input.snapshot.sub,
+            tenant: input.snapshot.tenant,
+            roles: input.snapshot.roles,
+            scopes: input.snapshot.scopes,
+          },
+          audience,
+          scope: input.scopes.join(' '),
+          actor: `agent:${input.agent.manifest.id}@${input.agent.version}`,
+          grounds: {
+            task_id: input.taskId,
+            ...(input.snapshot.jti === undefined ? {} : { subject_jti: input.snapshot.jti }),
+            verified_at: input.snapshot.verified_at,
+          },
+        }),
+      });
+      if (!res.ok) {
+        throw new Error(
+          `broker delegation for ${audience} failed: ${res.status} ${await res.text()}`,
+        );
+      }
+      return { token: ((await res.json()) as { access_token: string }).access_token };
     },
 
     async emitAudit(event) {
