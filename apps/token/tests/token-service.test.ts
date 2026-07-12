@@ -1043,9 +1043,7 @@ describe('deployment binding (item 4 — 5th propagated claim)', () => {
       },
     });
     expect(res.statusCode).toBe(200);
-    expect(
-      decodeJwt(res.json<{ access_token: string }>().access_token).deployment,
-    ).toBeUndefined();
+    expect(decodeJwt(res.json<{ access_token: string }>().access_token).deployment).toBeUndefined();
   });
 
   it('DROPS deployment on a chain-free rescope (actor === subject, no chain)', async () => {
@@ -1062,9 +1060,7 @@ describe('deployment binding (item 4 — 5th propagated claim)', () => {
       },
     });
     expect(res.statusCode).toBe(200);
-    expect(
-      decodeJwt(res.json<{ access_token: string }>().access_token).deployment,
-    ).toBeUndefined();
+    expect(decodeJwt(res.json<{ access_token: string }>().access_token).deployment).toBeUndefined();
   });
 
   it('emits token.brokered audit carrying the deployment grounds', async () => {

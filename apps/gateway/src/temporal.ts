@@ -213,7 +213,9 @@ export class TemporalDeploymentController implements DeploymentController {
     input: DeploymentStartInput,
   ): Promise<{ outcome: 'started'; workflowRunId: string } | { outcome: 'already_running' }> {
     if (!AGENT_ID_RE.test(input.request.agent_id)) {
-      throw new Error(`refusing to start a deployment for a non-id agent ${input.request.agent_id}`);
+      throw new Error(
+        `refusing to start a deployment for a non-id agent ${input.request.agent_id}`,
+      );
     }
     try {
       const handle = await this.client.workflow.start('DeploymentWorkflow', {
@@ -248,12 +250,16 @@ export class TemporalDeploymentController implements DeploymentController {
         return { ...view, running: true };
       }
       // A terminal deployment returns its result (completed/failed/demoted).
-      const result = (await handle.result()) as { status: string } & Record<string, unknown>;
+      const result = (await handle.result()) as {
+        status: string;
+        deployment_id?: string;
+        gate_reports?: unknown[];
+      } & Record<string, unknown>;
       return {
-        deployment_id: String(result.deployment_id ?? ''),
+        deployment_id: result.deployment_id ?? '',
         phase: 'terminal',
         aborted: false,
-        gate_reports: (result.gate_reports as unknown[]) ?? [],
+        gate_reports: result.gate_reports ?? [],
         running: false,
         result,
       };
@@ -263,7 +269,9 @@ export class TemporalDeploymentController implements DeploymentController {
     }
   }
 
-  async abort(agentId: string): Promise<{ outcome: 'aborting' | 'not_found' | 'already_terminal' }> {
+  async abort(
+    agentId: string,
+  ): Promise<{ outcome: 'aborting' | 'not_found' | 'already_terminal' }> {
     if (!AGENT_ID_RE.test(agentId)) return { outcome: 'not_found' };
     const handle = this.client.workflow.getHandle(deploymentWorkflowId(agentId));
     try {

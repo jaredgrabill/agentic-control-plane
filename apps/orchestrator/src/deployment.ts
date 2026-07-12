@@ -71,6 +71,9 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
   setHandler(abortDeploymentSignal, () => {
     aborted = true;
   });
+  // Read through a function so flow analysis does not narrow the signal-mutated
+  // flag to a constant (mirrors TaskWorkflow's isCancelled()).
+  const isAborted = (): boolean => aborted;
   setHandler(deploymentStatusQuery, (): DeploymentStatus => ({
     deployment_id,
     phase,
@@ -98,7 +101,10 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
   });
 
   // --- Preflight -------------------------------------------------------------
-  const pre = await control.beginDeployment({ agentId: agent_id, candidateVersion: candidate_version });
+  const pre = await control.beginDeployment({
+    agentId: agent_id,
+    candidateVersion: candidate_version,
+  });
   const incumbent = pre.incumbentVersion;
 
   // --- Shadow soak -----------------------------------------------------------
@@ -168,8 +174,9 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
   let i = 0;
   let rollbacks = 0;
   while (i < config.ramp_steps.length) {
-    if (aborted) return demoteToShadow('deployment aborted mid-canary');
-    const ramp = config.ramp_steps[i]!;
+    if (isAborted()) return demoteToShadow('deployment aborted mid-canary');
+    const ramp = config.ramp_steps[i];
+    if (ramp === undefined) break; // unreachable: i < length
     rampPercent = ramp;
     await control.deployTransition({
       agentId: agent_id,
@@ -182,7 +189,7 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
     await emit('deployment.ramped', { deployment_id, ramp_percent: ramp, step_index: i });
 
     await sleep(config.ramp_soak_s * 1000);
-    if (aborted) return demoteToShadow('deployment aborted mid-canary');
+    if (isAborted()) return demoteToShadow('deployment aborted mid-canary');
 
     const report = await control.evaluateGate({
       kind: 'canary',
@@ -210,7 +217,7 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
       );
     }
     // Roll back one ramp step and retry.
-    const prev = config.ramp_steps[i - 1]!;
+    const prev = config.ramp_steps[i - 1] ?? 0;
     rampPercent = prev;
     await control.deployTransition({
       agentId: agent_id,

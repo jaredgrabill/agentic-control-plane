@@ -48,7 +48,8 @@ async function getToken(clientId: string, secret: string, audience: string, scop
   expect(res.status, await res.clone().text()).toBe(200);
   return ((await res.json()) as { access_token: string }).access_token;
 }
-const ci = (audience: string, scope: string) => getToken('svc-ci', 'ci-dev-secret', audience, scope);
+const ci = (audience: string, scope: string) =>
+  getToken('svc-ci', 'ci-dev-secret', audience, scope);
 const jane = () => getToken('cli-jane', 'jane-dev-secret', 'acp:gateway');
 
 /** The version-routing bucket the orchestrator computes (must match resolveRoute). */
@@ -56,7 +57,10 @@ function bucketOf(taskId: string): number {
   return parseInt(createHash('sha256').update(taskId).digest('hex').slice(0, 7), 16) % 100;
 }
 
-async function registerVersion(version: string, writeToken: string): Promise<Record<string, unknown>> {
+async function registerVersion(
+  version: string,
+  writeToken: string,
+): Promise<Record<string, unknown>> {
   const { parse } = await import('yaml');
   const { readFileSync } = await import('node:fs');
   const manifest = parse(
@@ -107,7 +111,12 @@ async function recordBaseline(version: string, writeToken: string): Promise<void
 }
 
 /** Spawns a test-owned candidate worker on agent-knowledge-agent@{version}. */
-function spawnCandidate(version: string, clientId: string, secret: string, extraEnv: Record<string, string> = {}): ChildProcess {
+function spawnCandidate(
+  version: string,
+  clientId: string,
+  secret: string,
+  extraEnv: Record<string, string> = {},
+): ChildProcess {
   const child = spawn(
     join(repoRoot, 'python', '.venv', 'Scripts', 'python.exe'),
     ['-m', 'knowledge_agent.main'],
@@ -155,9 +164,9 @@ async function submitTask(): Promise<string> {
 /** Drives steady traffic until stopped, returning every submitted task id. */
 function startTraffic(): { stop: () => Promise<string[]> } {
   const ids: string[] = [];
-  let running = true;
+  const state = { running: true };
   const loop = (async () => {
-    while (running) {
+    while (state.running) {
       const id = await submitTask().catch(() => '');
       if (id !== '') ids.push(id);
       await new Promise((r) => setTimeout(r, 300));
@@ -165,7 +174,7 @@ function startTraffic(): { stop: () => Promise<string[]> } {
   })();
   return {
     stop: async () => {
-      running = false;
+      state.running = false;
       await loop;
       return ids;
     },
@@ -190,7 +199,8 @@ async function waitForDeployment(timeoutMs: number): Promise<{ status: string }>
   for (;;) {
     const view = await deployStatus();
     if (view.running === false && view.result !== undefined) return view.result;
-    if (Date.now() > deadline) throw new Error(`deployment still ${view.phase} after ${timeoutMs}ms`);
+    if (Date.now() > deadline)
+      throw new Error(`deployment still ${view.phase} after ${timeoutMs}ms`);
     await new Promise((r) => setTimeout(r, 1000));
   }
 }
@@ -214,7 +224,9 @@ async function acmeAudit(eventType: string): Promise<AuditEvent[]> {
   return ((await res.json()) as { events: AuditEvent[] }).events;
 }
 
-async function versionState(version: string): Promise<{ lifecycle_state: string; deployed_at?: string }> {
+async function versionState(
+  version: string,
+): Promise<{ lifecycle_state: string; deployed_at?: string }> {
   const token = await ci('acp:registry', 'registry:read');
   const res = await fetch(`${REGISTRY_URL}/v1/agents/knowledge-agent/versions/${version}`, {
     headers: { authorization: `Bearer ${token}` },
@@ -391,7 +403,12 @@ describe('deployment controller v0 (DoD)', () => {
     const start = await fetch(`${GATEWAY_URL}/v1/deployments`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${deployToken}` },
-      body: JSON.stringify({ agent_id: 'knowledge-agent', candidate_version: '0.3.0', tenant: 'acme', config: JSON.parse(config) }),
+      body: JSON.stringify({
+        agent_id: 'knowledge-agent',
+        candidate_version: '0.3.0',
+        tenant: 'acme',
+        config: JSON.parse(config) as Record<string, unknown>,
+      }),
     });
     expect(start.status).toBe(202);
 

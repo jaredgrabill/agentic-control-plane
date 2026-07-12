@@ -14,7 +14,11 @@
  */
 
 import type { AuditEvent } from '@acp/protocol';
-import { priceUsageMicros, type PricedUsage, type ResolvedPriceBook } from '@acp/cost-meter/pricing';
+import {
+  priceUsageMicros,
+  type PricedUsage,
+  type ResolvedPriceBook,
+} from '@acp/cost-meter/pricing';
 
 export interface GateThresholds {
   /** Candidate success ratio may not fall more than this below the incumbent's. */
@@ -71,7 +75,10 @@ function successRatio(stats: StepStat[]): number | undefined {
   return stats.filter((s) => s.status === 'completed').length / stats.length;
 }
 
-function costPerStepUsd(stats: StepStat[], book: ResolvedPriceBook | undefined): number | undefined {
+function costPerStepUsd(
+  stats: StepStat[],
+  book: ResolvedPriceBook | undefined,
+): number | undefined {
   if (book === undefined || stats.length === 0) return undefined;
   let micros = 0;
   for (const s of stats) micros += priceUsageMicros(s.usage, book).micros;
@@ -213,7 +220,8 @@ export class GateEvaluator {
       return report;
     }
 
-    const completion = shadows.filter((p) => p.shadow.status === 'completed').length / shadows.length;
+    const completion =
+      shadows.filter((p) => p.shadow.status === 'completed').length / shadows.length;
     report.metrics.success_ratio = completion;
     const shadowP95 = p95(
       shadows.map((p) => p.shadow.durationMs).filter((n): n is number => n !== undefined),

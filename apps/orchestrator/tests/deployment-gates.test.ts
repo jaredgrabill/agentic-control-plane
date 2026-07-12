@@ -128,10 +128,16 @@ describe('canary gate', () => {
     };
     const events = [
       ...Array.from({ length: 5 }, () =>
-        stepCompleted({ version: '0.2.0', usage: { input_tokens: 10000, output_tokens: 0, llm_calls: 1 } }),
+        stepCompleted({
+          version: '0.2.0',
+          usage: { input_tokens: 10000, output_tokens: 0, llm_calls: 1 },
+        }),
       ),
       ...Array.from({ length: 10 }, () =>
-        stepCompleted({ version: '0.1.0', usage: { input_tokens: 1000, output_tokens: 0, llm_calls: 1 } }),
+        stepCompleted({
+          version: '0.1.0',
+          usage: { input_tokens: 1000, output_tokens: 0, llm_calls: 1 },
+        }),
       ),
     ];
     const report = evaluator.evaluateCanary(events, {
@@ -145,10 +151,11 @@ describe('canary gate', () => {
   });
 
   it('is insufficient_data with no candidate samples (a gate that cannot measure does not pass)', () => {
-    const report = evaluator.evaluateCanary(
-      [stepCompleted({ version: '0.1.0' })],
-      { candidateVersion: '0.2.0', incumbentVersion: '0.1.0', thresholds: THRESHOLDS },
-    );
+    const report = evaluator.evaluateCanary([stepCompleted({ version: '0.1.0' })], {
+      candidateVersion: '0.2.0',
+      incumbentVersion: '0.1.0',
+      thresholds: THRESHOLDS,
+    });
     expect(report.verdict).toBe('insufficient_data');
     expect(report.samples.candidate).toBe(0);
   });
@@ -195,10 +202,9 @@ describe('shadow gate', () => {
 
   it('ignores unpaired shadow results (no matching primary)', () => {
     // A shadow result whose primary step is absent cannot be compared → dropped.
-    const report = evaluator.evaluateShadow(
-      [shadowResult({ taskId: uuid(), stepId: uuid() })],
-      { thresholds: THRESHOLDS },
-    );
+    const report = evaluator.evaluateShadow([shadowResult({ taskId: uuid(), stepId: uuid() })], {
+      thresholds: THRESHOLDS,
+    });
     expect(report.samples.candidate).toBe(0);
     expect(report.verdict).toBe('insufficient_data');
   });

@@ -27,9 +27,7 @@ class TestTaskQueue:
         monkeypatch.setenv("ACP_AGENT_VERSION", "0.4.0")
         assert agent.task_queue == "agent-test-agent@0.4.0"
 
-    def test_task_queue_requires_env(
-        self, agent: Agent, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_task_queue_requires_env(self, agent: Agent, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("ACP_AGENT_VERSION", raising=False)
         with pytest.raises(RuntimeError, match="ACP_AGENT_VERSION is required"):
             _ = agent.task_queue

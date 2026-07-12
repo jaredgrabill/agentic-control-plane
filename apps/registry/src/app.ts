@@ -181,7 +181,10 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
         },
       });
     }
-    const card = versions[0]!;
+    const card = versions[0];
+    if (card === undefined) {
+      throw new AuthError(`no versions for agent ${agent_id}`, 404);
+    }
     return applyStateTransition(deps, now, request, reply, claims, card, {
       target: body.state as LifecycleState | undefined,
       reason: body.reason,
@@ -237,7 +240,7 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
         error: {
           message:
             `only a canary version can be promoted; ${agent_id}@${body.version} is ` +
-            `${candidate.lifecycle_state}`,
+            candidate.lifecycle_state,
           status: 409,
         },
       });
@@ -397,8 +400,7 @@ async function applyStateTransition(
   if (!req.allowedClasses.includes(edge)) {
     return reply.status(409).send({
       error: {
-        message:
-          `the ${from}→${target} edge is a ${edge} transition — not available on this route`,
+        message: `the ${from}→${target} edge is a ${edge} transition — not available on this route`,
         status: 409,
       },
     });
@@ -457,7 +459,12 @@ async function applyStateTransition(
   // answers correctly. Suspension is coarse (whole agent id, all versions) —
   // acceptable emergency control (documented).
   if (target === 'suspended') {
-    await deps.announcer.setSuspended(agentId, true, req.reason ?? 'suspended via registry', claims.sub);
+    await deps.announcer.setSuspended(
+      agentId,
+      true,
+      req.reason ?? 'suspended via registry',
+      claims.sub,
+    );
   } else if (from === 'suspended') {
     await deps.announcer.setSuspended(agentId, false, req.reason ?? 'reinstated', claims.sub);
   }

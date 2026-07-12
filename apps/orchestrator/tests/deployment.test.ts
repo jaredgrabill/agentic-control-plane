@@ -156,7 +156,9 @@ describe('DeploymentWorkflow', () => {
     const result = await run();
     expect(result.status).toBe('failed');
     // Only the shadow transition ran — no ramp.
-    expect(vi.mocked(control.deployTransition).mock.calls.map((c) => c[0].state)).toEqual(['shadow']);
+    expect(vi.mocked(control.deployTransition).mock.calls.map((c) => c[0].state)).toEqual([
+      'shadow',
+    ]);
     expect(types()).toEqual(['deployment.started', 'deployment.failed']);
   });
 
@@ -215,7 +217,12 @@ describe('DeploymentWorkflow', () => {
   });
 
   it('a first-ever deployment (no incumbent) promotes without a retire', async () => {
-    vi.mocked(control.beginDeployment).mockResolvedValue(preflight({ incumbentVersion: undefined }));
+    // No incumbent: omit incumbentVersion entirely (exactOptionalPropertyTypes).
+    vi.mocked(control.beginDeployment).mockResolvedValue({
+      capabilities: ['knowledge.search'],
+      requiresApproval: false,
+      baselineNote: 'no incumbent baseline to compare',
+    });
     vi.mocked(control.evaluateGate).mockResolvedValue(pass());
     const result = await run();
     expect(result.status).toBe('completed');

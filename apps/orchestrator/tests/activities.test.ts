@@ -248,9 +248,7 @@ describe('discoverAgent', () => {
 describe('resolveRoute', () => {
   const routingFetch = (set: Record<string, unknown>) =>
     vi.fn((url: string | URL) =>
-      String(url).endsWith('/v1/token')
-        ? jsonResponse({ access_token: 't' })
-        : jsonResponse(set),
+      String(url).endsWith('/v1/token') ? jsonResponse({ access_token: 't' }) : jsonResponse(set),
     ) as unknown as typeof fetch;
 
   it('routes to the active incumbent and computes a deterministic bucket', async () => {
@@ -276,13 +274,21 @@ describe('resolveRoute', () => {
   it('routes to the canary when the bucket is under the ramp, else the incumbent', async () => {
     const alwaysCanary = await makeActivities(
       routingFetch({ active: card, canary: { card, ramp_percent: 100 } }),
-    ).resolveRoute({ capability: 'knowledge.answer_with_citations', tenant: 'acme', taskId: 't-1' });
+    ).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+    });
     expect(alwaysCanary?.route).toBe('canary');
     expect(alwaysCanary?.rampPercent).toBe(100);
 
     const neverCanary = await makeActivities(
       routingFetch({ active: card, canary: { card, ramp_percent: 0 } }),
-    ).resolveRoute({ capability: 'knowledge.answer_with_citations', tenant: 'acme', taskId: 't-1' });
+    ).resolveRoute({
+      capability: 'knowledge.answer_with_citations',
+      tenant: 'acme',
+      taskId: 't-1',
+    });
     expect(neverCanary?.route).toBe('active');
   });
 
@@ -334,7 +340,7 @@ describe('resolveRoute', () => {
 
 describe('digestValue', () => {
   it('is a stable sha256 over the canonical value (key-order independent)', async () => {
-    const acts = makeActivities(vi.fn() as unknown as typeof fetch);
+    const acts = makeActivities(vi.fn());
     const a = await acts.digestValue({ b: 1, a: 2 });
     const b = await acts.digestValue({ a: 2, b: 1 });
     expect(a.digest).toMatch(/^sha256:[0-9a-f]{64}$/);
@@ -378,7 +384,10 @@ describe('deployment activities', () => {
         : jsonResponse(candidate({ lifecycle_state: 'active' })),
     ) as unknown as typeof fetch;
     await expect(
-      makeActivities(active).beginDeployment({ agentId: 'knowledge-agent', candidateVersion: '0.2.0' }),
+      makeActivities(active).beginDeployment({
+        agentId: 'knowledge-agent',
+        candidateVersion: '0.2.0',
+      }),
     ).rejects.toThrow(/not registered/);
 
     const noBaseline = vi.fn((url: string | URL) => {
@@ -396,10 +405,11 @@ describe('deployment activities', () => {
   });
 
   it('beginDeployment flags requiresApproval for an R2-capable candidate', async () => {
+    const r0cap = card.manifest.capabilities[0];
     const r2 = candidate({
       manifest: {
         ...card.manifest,
-        capabilities: [{ ...card.manifest.capabilities[0]!, risk: 'R2' }],
+        capabilities: [{ ...r0cap, risk: 'R2' }],
       },
     });
     const fetchImpl = vi.fn((url: string | URL) => {
@@ -421,7 +431,8 @@ describe('deployment activities', () => {
     const fetchImpl = vi.fn((url: string | URL, init?: RequestInit) => {
       calls.push({ url: String(url), body: init?.body });
       if (String(url).endsWith('/v1/token')) {
-        const scope = JSON.parse(init!.body as string).scope as string;
+        const raw = typeof init?.body === 'string' ? init.body : '{}';
+        const scope = (JSON.parse(raw) as { scope?: string }).scope;
         expect(scope).toBe('registry:deploy');
         return jsonResponse({ access_token: 't' });
       }
@@ -447,7 +458,10 @@ describe('deployment activities', () => {
         ? jsonResponse({ access_token: 't' })
         : jsonResponse({});
     }) as unknown as typeof fetch;
-    await makeActivities(fetchImpl).promoteVersion({ agentId: 'knowledge-agent', version: '0.2.0' });
+    await makeActivities(fetchImpl).promoteVersion({
+      agentId: 'knowledge-agent',
+      version: '0.2.0',
+    });
     expect(calls.at(-1)).toContain('/v1/agents/knowledge-agent/promote');
   });
 
@@ -491,7 +505,7 @@ describe('deployment activities', () => {
   });
 
   it('now returns an ISO timestamp', async () => {
-    const { iso } = await makeActivities(vi.fn() as unknown as typeof fetch).now();
+    const { iso } = await makeActivities(vi.fn()).now();
     expect(Number.isNaN(Date.parse(iso))).toBe(false);
   });
 });

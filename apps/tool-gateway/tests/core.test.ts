@@ -1070,7 +1070,11 @@ describe('shadow suppression (step 2.5)', () => {
   });
 
   it('suppresses BEFORE Cedar: a would-be deny still records shadow_suppressed, not a policy block', async () => {
-    h.policy.decision = { decision: 'deny', bundle_version: '2026.07+deny', determining_policies: [] };
+    h.policy.decision = {
+      decision: 'deny',
+      bundle_version: '2026.07+deny',
+      determining_policies: [],
+    };
     const result = await h.core.callTool(shadowCaller(), 'scripted', 'write_probe', {}, CORR);
     expect(errorOf(result).message).toContain('side effects suppressed');
     const event = h.audit.at(-1)!;

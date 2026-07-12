@@ -53,7 +53,6 @@ import {
   type ControlActivities,
   type ExecutedWrite,
   type PrincipalSnapshot,
-  type RouteResult,
   type ShadowStepInput,
   type StepDispatch,
   type StepExecution,

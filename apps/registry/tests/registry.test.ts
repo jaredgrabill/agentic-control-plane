@@ -123,13 +123,17 @@ class MemoryStore implements RegistryStore {
     const row = this.rows.get(this.key(id, v));
     if (row === undefined) throw new Error(`no version ${v} of ${id}`);
     // Enforce the partial-unique invariants the DB enforces.
-    if (to === 'active' && this.rowsOf(id).some((r) => r !== row && r.card.lifecycle_state === 'active')) {
+    if (
+      to === 'active' &&
+      this.rowsOf(id).some((r) => r !== row && r.card.lifecycle_state === 'active')
+    ) {
       throw new InvariantViolation('one_active_version', 'another version is already active');
     }
     if (
       (to === 'shadow' || to === 'canary') &&
       this.rowsOf(id).some(
-        (r) => r !== row && (r.card.lifecycle_state === 'shadow' || r.card.lifecycle_state === 'canary'),
+        (r) =>
+          r !== row && (r.card.lifecycle_state === 'shadow' || r.card.lifecycle_state === 'canary'),
       )
     ) {
       throw new InvariantViolation('one_candidate_version', 'a candidate already exists');
@@ -365,7 +369,9 @@ describe('registration', () => {
       version: '0.1.0',
     });
     expect(changed.statusCode).toBe(409);
-    expect(changed.json<{ error: { message: string } }>().error.message).toContain('bump the version');
+    expect(changed.json<{ error: { message: string } }>().error.message).toContain(
+      'bump the version',
+    );
   });
 
   it('a new version never touches sibling rows (debt #3)', async () => {
@@ -424,7 +430,9 @@ describe('registration', () => {
     expect(rejected.json<{ error: { message: string } }>().error.message).toContain('compensator');
 
     const withCompensator = await register({
-      manifest: manifest({ capabilities: [r2Cap({ compensator: 'change.withdraw' }), withdrawCap()] }),
+      manifest: manifest({
+        capabilities: [r2Cap({ compensator: 'change.withdraw' }), withdrawCap()],
+      }),
       version: '0.2.0',
     });
     expect(withCompensator.statusCode).toBe(201);
@@ -452,7 +460,10 @@ describe('registration', () => {
   it('rejects a compensator+irreversible contradiction', async () => {
     const res = await register({
       manifest: manifest({
-        capabilities: [r2Cap({ compensator: 'change.withdraw', irreversible: true }), withdrawCap()],
+        capabilities: [
+          r2Cap({ compensator: 'change.withdraw', irreversible: true }),
+          withdrawCap(),
+        ],
       }),
       version: '0.1.0',
     });
@@ -528,7 +539,10 @@ describe('registration', () => {
 
   it('rejects duplicate capability names and a missing version', async () => {
     const cap = manifest().capabilities[0];
-    const dup = await register({ manifest: manifest({ capabilities: [cap, cap] }), version: '0.1.0' });
+    const dup = await register({
+      manifest: manifest({ capabilities: [cap, cap] }),
+      version: '0.1.0',
+    });
     expect(dup.statusCode).toBe(400);
 
     const noVersion = await register({ manifest: manifest() });
@@ -677,7 +691,9 @@ describe('versioned transitions and scope classes', () => {
     await register({ manifest: manifest(), version: '0.2.0' });
     const noBaseline = await transitionVersion('knowledge-agent', '0.2.0', 'shadow');
     expect(noBaseline.statusCode).toBe(409);
-    expect(noBaseline.json<{ error: { message: string } }>().error.message).toContain('eval_baseline');
+    expect(noBaseline.json<{ error: { message: string } }>().error.message).toContain(
+      'eval_baseline',
+    );
 
     // A deploy edge driven with only admin scope is 403.
     const wrongScope = await transitionVersion('knowledge-agent', '0.1.0', 'shadow', {

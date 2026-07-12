@@ -21,7 +21,9 @@ const flag = (name, fallback) => {
   const i = args.indexOf(name);
   return i >= 0 ? args[i + 1] : fallback;
 };
-const positionals = args.filter((a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1]?.startsWith('--')));
+const positionals = args.filter(
+  (a, i) => !a.startsWith('--') && !(i > 0 && args[i - 1]?.startsWith('--')),
+);
 
 const tokenUrl = process.env.ACP_TOKEN_URL ?? 'http://localhost:7101';
 const gatewayUrl = process.env.ACP_GATEWAY_URL ?? 'http://localhost:7100';
@@ -50,7 +52,9 @@ async function mint(scope) {
 async function start() {
   const [agentId, candidateVersion] = positionals;
   if (agentId === undefined || candidateVersion === undefined) {
-    console.error('usage: deploy.mjs start <agent-id> <candidate-version> [--tenant t] [--config json]');
+    console.error(
+      'usage: deploy.mjs start <agent-id> <candidate-version> [--tenant t] [--config json]',
+    );
     process.exit(2);
   }
   const tenant = flag('--tenant');
@@ -112,7 +116,9 @@ async function status() {
   console.log('='.repeat(56));
   console.log(`Deployment ${view.deployment_id}`);
   console.log('='.repeat(56));
-  console.log(`  phase:    ${view.phase}${view.ramp_percent !== undefined ? ` @ ${view.ramp_percent}%` : ''}`);
+  console.log(
+    `  phase:    ${view.phase}${view.ramp_percent !== undefined ? ` @ ${view.ramp_percent}%` : ''}`,
+  );
   console.log(`  running:  ${view.running ?? false}   aborted: ${view.aborted}`);
   if (Array.isArray(view.gate_reports) && view.gate_reports.length > 0) {
     console.log('  gate reports:');

@@ -1841,11 +1841,15 @@ describe('ShadowStepWorkflow (D6 mirror)', () => {
     const shadow = audited.find((e) => e.event_type === 'deployment.shadow_result')!;
     expect(shadow).toBeDefined();
     // Paired to the primary on (task_id, step_id).
-    expect((shadow.reason as { task_id: string; step_id: string })).toEqual({
+    expect(shadow.reason as { task_id: string; step_id: string }).toEqual({
       task_id: TASK_ID,
       step_id: SHADOW_STEP,
     });
-    const details = shadow.details as { status: string; incumbent_version: string; output_digest: string };
+    const details = shadow.details as {
+      status: string;
+      incumbent_version: string;
+      output_digest: string;
+    };
     expect(details.status).toBe('completed');
     expect(details.incumbent_version).toBe('0.1.0');
     expect(details.output_digest).toMatch(/^sha256:/);

@@ -347,9 +347,7 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
         );
       }
       if (!candRes.ok) throw new Error(`candidate lookup failed: ${candRes.status}`);
-      const candidate = (await candRes.json()) as AgentCard & {
-        eval_baseline?: { suite?: { digest?: string } };
-      };
+      const candidate = (await candRes.json()) as AgentCard;
       if (candidate.lifecycle_state !== 'registered') {
         throw ApplicationFailure.nonRetryable(
           `candidate ${input.agentId}@${input.candidateVersion} is ${candidate.lifecycle_state}, ` +
@@ -375,14 +373,13 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
       let incumbentVersion: string | undefined;
       let baselineNote = 'no incumbent baseline to compare';
       if (activeRes.ok) {
-        const { agents } = (await activeRes.json()) as {
-          agents: (AgentCard & { eval_baseline?: { suite?: { digest?: string } } })[];
-        };
+        const { agents } = (await activeRes.json()) as { agents: AgentCard[] };
         const incumbent = agents.find((a) => a.manifest.id === input.agentId);
         if (incumbent !== undefined) {
           incumbentVersion = incumbent.version;
-          const incDigest = incumbent.eval_baseline?.suite?.digest;
-          const candDigest = candidate.eval_baseline?.suite?.digest;
+          const incDigest = incumbent.eval_baseline?.suite.digest;
+          // candidate.eval_baseline is guaranteed present (guarded above).
+          const candDigest = candidate.eval_baseline.suite.digest;
           baselineNote =
             incDigest !== undefined && incDigest === candDigest
               ? 'comparable_suite'

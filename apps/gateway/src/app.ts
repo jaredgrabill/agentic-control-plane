@@ -434,7 +434,8 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
     }
     // The tenant whose shadow/canary traffic the gates evaluate. Defaults to the
     // caller's tenant; an operator may target another tenant explicitly.
-    const tenant = typeof body.tenant === 'string' && body.tenant !== '' ? body.tenant : claims.tenant;
+    const tenant =
+      typeof body.tenant === 'string' && body.tenant !== '' ? body.tenant : claims.tenant;
     const config: DeploymentConfig = {
       ...DEFAULT_DEPLOYMENT_CONFIG,
       ...body.config,
@@ -471,7 +472,8 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
     const claims = await authenticate(deps, request);
     requireScope(claims, DEPLOY_READ_SCOPE);
     const { agent_id } = request.params as { agent_id: string };
-    if (!AGENT_ID_RE.test(agent_id)) throw new AuthError('agent_id must be a lowercase agent id', 400);
+    if (!AGENT_ID_RE.test(agent_id))
+      throw new AuthError('agent_id must be a lowercase agent id', 400);
     const view = await deps.deployments.status(agent_id);
     if (view === undefined) {
       return reply
@@ -485,7 +487,8 @@ export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
     const claims = await authenticate(deps, request);
     requireScope(claims, DEPLOY_WRITE_SCOPE);
     const { agent_id } = request.params as { agent_id: string };
-    if (!AGENT_ID_RE.test(agent_id)) throw new AuthError('agent_id must be a lowercase agent id', 400);
+    if (!AGENT_ID_RE.test(agent_id))
+      throw new AuthError('agent_id must be a lowercase agent id', 400);
     const result = await deps.deployments.abort(agent_id);
     if (result.outcome === 'not_found') {
       return reply
