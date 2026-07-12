@@ -14,6 +14,7 @@ import {
   type PlatformClaims,
 } from '@acp/service-kit';
 import { ApplicationFailure } from '@temporalio/common';
+import { loadResolvedPriceBook } from '@acp/cost-meter';
 import { RULE_PLANNER, buildPlanSteps } from './planner.js';
 import type { ControlActivities, PrincipalSnapshot } from './types.js';
 
@@ -29,6 +30,8 @@ export interface ControlDeps {
   audit: AuditPublisher | { publish(event: AuditEvent): Promise<void> };
   logger: Logger;
   fetchImpl?: typeof fetch;
+  /** Absolute path to the current price book (Cost Meter); default packaged book. */
+  priceBookPath: string;
 }
 
 /**
@@ -223,6 +226,19 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
 
     async emitAudit(event) {
       await deps.audit.publish(auditEventParser.parse(event));
+    },
+
+    getPriceBook() {
+      // Load + validate + resolve to integer micros on the activity side, so
+      // the workflow isolate only ever holds integer rates. A malformed or
+      // missing book rejects here (the synchronous throw is turned into a
+      // rejection); the workflow decides fail-closed vs. disable-recording
+      // based on whether max_cost_usd is set.
+      try {
+        return Promise.resolve(loadResolvedPriceBook({ path: deps.priceBookPath }));
+      } catch (err) {
+        return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+      }
     },
   };
 }

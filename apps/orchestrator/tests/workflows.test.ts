@@ -7,6 +7,7 @@ import type {
   TaskRequest,
   TaskResult,
 } from '@acp/protocol';
+import type { ResolvedPriceBook } from '@acp/cost-meter/pricing';
 import { ApplicationFailure } from '@temporalio/common';
 import { TestWorkflowEnvironment } from '@temporalio/testing';
 import { Worker, bundleWorkflowCode, type WorkflowBundle } from '@temporalio/worker';
@@ -136,6 +137,36 @@ const control: ControlActivities = {
     audited.push(e);
     return Promise.resolve();
   }),
+  getPriceBook: vi.fn(),
+};
+
+// Resolved books (integer micro-USD/MTok), as the loader would produce.
+const ZERO_MICROS = {
+  inputMicrosPerMTok: 0,
+  outputMicrosPerMTok: 0,
+  cacheReadMicrosPerMTok: 0,
+  cacheWriteMicrosPerMTok: 0,
+};
+// The default for existing regression tests: every usage prices to $0, so
+// max_cost_usd passes through untouched and cost recording is a no-op.
+const zeroBook: ResolvedPriceBook = { version: 'test-zero', models: {}, fallback: ZERO_MICROS };
+// A priced book: dev-echo@1 known, plus non-zero fallback for unknown models.
+const pricedBook: ResolvedPriceBook = {
+  version: 'test-2026-07',
+  models: {
+    'dev-echo@1': {
+      inputMicrosPerMTok: 1_000_000, // $1/MTok
+      outputMicrosPerMTok: 2_000_000, // $2/MTok
+      cacheReadMicrosPerMTok: 100_000,
+      cacheWriteMicrosPerMTok: 1_250_000,
+    },
+  },
+  fallback: {
+    inputMicrosPerMTok: 5_000_000, // $5/MTok
+    outputMicrosPerMTok: 25_000_000, // $25/MTok
+    cacheReadMicrosPerMTok: 500_000,
+    cacheWriteMicrosPerMTok: 6_250_000,
+  },
 };
 
 type Handler = (req: StepRequest) => Promise<StepResult>;
@@ -178,6 +209,7 @@ beforeEach(() => {
       determining_policies: ['allow-r0-delegation'],
     });
   vi.mocked(control.brokerToken).mockReset().mockResolvedValue({ token: 'brokered.jwt' });
+  vi.mocked(control.getPriceBook).mockReset().mockResolvedValue(zeroBook);
   knowledgeExec.mockReset();
   cloudExec.mockReset();
   codeExec.mockReset();
@@ -586,5 +618,204 @@ describe('TaskWorkflow v1', () => {
     expect(result.error?.class).toBe('permanent');
     expect(result.error?.message).toContain('intake verification');
     expect(control.planTask).not.toHaveBeenCalled();
+  });
+});
+
+describe('TaskWorkflow cost meter', () => {
+  const completedAudit = () =>
+    audited.find((e) => e.event_type === 'task.completed')!.details as {
+      usage_totals: { cost_usd: number | null };
+      price_book_version: string | null;
+      cost_fallback_priced?: boolean;
+      steps: { capability: string; cost_usd?: number }[];
+    };
+
+  // Usage carrying a concrete model id (dev-echo@1 is priced in pricedBook).
+  const usageWith = (input: number, output: number, model = 'dev-echo@1'): StepResult['usage'] => ({
+    input_tokens: input,
+    output_tokens: output,
+    llm_calls: 1,
+    model,
+  });
+
+  it('(1) cost gate trips: a step whose cost meets the budget skips the remainder', async () => {
+    vi.mocked(control.getPriceBook).mockResolvedValue(pricedBook);
+    vi.mocked(control.planTask).mockResolvedValue({ plan: dependentPlan, planDigest: DIGEST });
+    // Step 1: 2000 in @ $1/MTok = 2000 micros = $0.002 ≥ the $0.001 budget.
+    cloudExec.mockImplementation((req) =>
+      Promise.resolve(
+        completedStep(req, answerOutput(COST_TEXT, ['cloud/cost-report'], 0.8), usageWith(2000, 0)),
+      ),
+    );
+
+    const result = await runTask({ ...task, budget: { max_cost_usd: 0.001 } }, [
+      'cloud-agent',
+      'code-agent',
+    ]);
+    expect(result.status).toBe('partial');
+    expect(result.error).toEqual({
+      class: 'budget_exhausted',
+      message: 'budget exhausted after step 1 of 2: max_cost_usd 0.001 reached',
+    });
+    expect(result.gaps).toEqual([
+      'budget exhausted after step 1 of 2: max_cost_usd 0.001 reached — code.ci_health not executed',
+    ]);
+    expect(codeExec).not.toHaveBeenCalled();
+    expect(audited.filter((e) => e.event_type === 'step.skipped')).toHaveLength(1);
+
+    const details = completedAudit();
+    expect(details.usage_totals.cost_usd).toBe(0.002);
+    expect(details.price_book_version).toBe('test-2026-07');
+    const cloudStep = details.steps.find((s) => s.capability === 'cloud.cost_analysis');
+    expect(cloudStep?.cost_usd).toBe(0.002);
+  });
+
+  it('(2) honest overshoot: a parallel wave that clears the gate at dispatch is kept whole', async () => {
+    vi.mocked(control.getPriceBook).mockResolvedValue(pricedBook);
+    vi.mocked(control.planTask).mockResolvedValue({ plan: fanOutPlan, planDigest: DIGEST });
+    // Each step $0.002; combined $0.004 overshoots the $0.003 budget — but the
+    // gate sees $0 at dispatch, so both dispatch and both are kept.
+    cloudExec.mockImplementation((req) =>
+      Promise.resolve(
+        completedStep(req, answerOutput(COST_TEXT, ['cloud/cost-report'], 0.8), usageWith(2000, 0)),
+      ),
+    );
+    codeExec.mockImplementation((req) =>
+      Promise.resolve(
+        completedStep(req, answerOutput(CI_TEXT, ['code/ci-activity'], 0.9), usageWith(2000, 0)),
+      ),
+    );
+
+    const result = await runTask({ ...task, budget: { max_cost_usd: 0.003 } }, [
+      'cloud-agent',
+      'code-agent',
+    ]);
+    expect(result.status).toBe('completed');
+    expect(result.error).toBeUndefined();
+    expect(cloudExec).toHaveBeenCalledTimes(1);
+    expect(codeExec).toHaveBeenCalledTimes(1);
+
+    const details = completedAudit();
+    // Recorded cost overshoots the budget honestly.
+    expect(details.usage_totals.cost_usd).toBe(0.004);
+    expect(details.usage_totals.cost_usd! > 0.003).toBe(true);
+  });
+
+  it('(3) remaining budget decrements: step 2 carries budget minus step 1 cost (micro-exact)', async () => {
+    vi.mocked(control.getPriceBook).mockResolvedValue(pricedBook);
+    vi.mocked(control.planTask).mockResolvedValue({ plan: dependentPlan, planDigest: DIGEST });
+    const forwarded: (StepRequest['budget'] | undefined)[] = [];
+    cloudExec.mockImplementation((req) => {
+      forwarded.push(req.budget);
+      // 2000 in @ $1/MTok = $0.002.
+      return Promise.resolve(
+        completedStep(req, answerOutput(COST_TEXT, ['cloud/cost-report'], 0.8), usageWith(2000, 0)),
+      );
+    });
+    codeExec.mockImplementation((req) => {
+      forwarded.push(req.budget);
+      return Promise.resolve(
+        completedStep(req, answerOutput(CI_TEXT, ['code/ci-activity'], 0.9), usageWith(0, 0)),
+      );
+    });
+
+    const result = await runTask({ ...task, budget: { max_cost_usd: 0.01 } }, [
+      'cloud-agent',
+      'code-agent',
+    ]);
+    expect(result.status).toBe('completed');
+    // Wave 1 sees the full $0.01; wave 2 sees $0.01 − $0.002 = $0.008.
+    expect(forwarded).toEqual([{ max_cost_usd: 0.01 }, { max_cost_usd: 0.008 }]);
+  });
+
+  it('(4) zero-LLM: no tokens cost nothing, and the gate never trips even at a tiny budget', async () => {
+    vi.mocked(control.getPriceBook).mockResolvedValue(pricedBook);
+    knowledgeExec.mockImplementation((req) =>
+      Promise.resolve(
+        completedStep(req, answerOutput('answer [1].', ['policy/change-management'], 0.9), {
+          input_tokens: 0,
+          output_tokens: 0,
+          llm_calls: 0,
+        }),
+      ),
+    );
+
+    const result = await runTask({ ...task, budget: { max_cost_usd: 0.000001 } }, [
+      'knowledge-agent',
+    ]);
+    expect(result.status).toBe('completed');
+    expect(knowledgeExec).toHaveBeenCalledTimes(1);
+    expect(completedAudit().usage_totals.cost_usd).toBe(0);
+  });
+
+  it('(5) fallback pricing: usage without a model prices on the fallback and is flagged', async () => {
+    vi.mocked(control.getPriceBook).mockResolvedValue(pricedBook);
+    knowledgeExec.mockImplementation((req) =>
+      Promise.resolve(
+        completedStep(req, answerOutput('answer [1].', ['policy/change-management'], 0.9), {
+          // No model → fallback $5/MTok: 1000 in = $0.005.
+          input_tokens: 1000,
+          output_tokens: 0,
+          llm_calls: 1,
+        }),
+      ),
+    );
+
+    const result = await runTask(task, ['knowledge-agent']);
+    expect(result.status).toBe('completed');
+    const details = completedAudit();
+    expect(details.usage_totals.cost_usd).toBe(0.005);
+    expect(details.cost_fallback_priced).toBe(true);
+  });
+
+  it('(6) records cost without a cost budget: no enforcement, still priced and versioned', async () => {
+    vi.mocked(control.getPriceBook).mockResolvedValue(pricedBook);
+    knowledgeExec.mockImplementation((req) =>
+      Promise.resolve(
+        completedStep(
+          req,
+          answerOutput('answer [1].', ['policy/change-management'], 0.9),
+          usageWith(1000, 0), // 1000 in @ $1/MTok = $0.001
+        ),
+      ),
+    );
+
+    const result = await runTask(task, ['knowledge-agent']);
+    expect(result.status).toBe('completed');
+    const details = completedAudit();
+    expect(details.usage_totals.cost_usd).toBe(0.001);
+    expect(details.price_book_version).toBe('test-2026-07');
+    expect(details.cost_fallback_priced).toBeUndefined();
+  });
+
+  it('(7a) fault injection with a cost budget: fail closed, name the price book, dispatch nothing', async () => {
+    vi.mocked(control.getPriceBook).mockRejectedValue(
+      ApplicationFailure.nonRetryable('price book activity blew up'),
+    );
+
+    const result = await runTask({ ...task, budget: { max_cost_usd: 0.01 } }, ['knowledge-agent']);
+    expect(result.status).toBe('failed');
+    expect(result.error?.class).toBe('retryable');
+    expect(result.error?.message).toContain('price book unavailable');
+    expect(control.brokerToken).not.toHaveBeenCalled();
+    expect(knowledgeExec).not.toHaveBeenCalled();
+    expect(audited.some((e) => e.event_type === 'task.completed')).toBe(false);
+  });
+
+  it('(7b) fault injection without a cost budget: proceed, cost null, version null', async () => {
+    vi.mocked(control.getPriceBook).mockRejectedValue(
+      ApplicationFailure.nonRetryable('price book activity blew up'),
+    );
+    knowledgeExec.mockImplementation((req) =>
+      Promise.resolve(
+        completedStep(req, answerOutput('answer [1].', ['policy/change-management'], 0.9)),
+      ),
+    );
+
+    const result = await runTask(task, ['knowledge-agent']);
+    expect(result.status).toBe('completed');
+    const details = completedAudit();
+    expect(details.usage_totals.cost_usd).toBeNull();
+    expect(details.price_book_version).toBeNull();
   });
 });

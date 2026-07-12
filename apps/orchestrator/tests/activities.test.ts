@@ -2,6 +2,7 @@ import type { AgentCard, AuditEvent, TaskRequest } from '@acp/protocol';
 import { plan as planParser } from '@acp/protocol';
 import { createLogger, sha256Digest } from '@acp/service-kit';
 import { describe, expect, it, vi } from 'vitest';
+import { CURRENT_PRICE_BOOK_VERSION, defaultPriceBookPath } from '@acp/cost-meter';
 import { createControlActivities } from '../src/activities.js';
 import type { PrincipalSnapshot } from '../src/types.js';
 
@@ -58,7 +59,11 @@ const verify = vi.fn((token: string) =>
     : Promise.reject(new Error('token verification failed')),
 );
 
-function makeActivities(fetchImpl: typeof fetch, audit: AuditEvent[] = []) {
+function makeActivities(
+  fetchImpl: typeof fetch,
+  audit: AuditEvent[] = [],
+  priceBookPathOverride?: string,
+) {
   return createControlActivities({
     registryUrl: 'http://registry.test',
     policyUrl: 'http://policy.test',
@@ -74,6 +79,7 @@ function makeActivities(fetchImpl: typeof fetch, audit: AuditEvent[] = []) {
     },
     logger: createLogger('orchestrator-test'),
     fetchImpl,
+    priceBookPath: priceBookPathOverride ?? defaultPriceBookPath(),
   });
 }
 
@@ -436,5 +442,30 @@ describe('emitAudit', () => {
       /does not conform/,
     );
     expect(audit).toHaveLength(1);
+  });
+});
+
+describe('getPriceBook', () => {
+  const noFetch = (() => {
+    throw new Error('getPriceBook must not touch the network');
+  }) as unknown as typeof fetch;
+
+  it('loads and resolves the packaged current price book', async () => {
+    const book = await makeActivities(noFetch).getPriceBook();
+    expect(book.version).toBe(CURRENT_PRICE_BOOK_VERSION);
+    // Resolved to integer micro-USD rates: dev-echo@1 input $1/MTok.
+    expect(book.models['dev-echo@1']?.inputMicrosPerMTok).toBe(1_000_000);
+    expect(book.fallback.inputMicrosPerMTok).toBeGreaterThan(0);
+  });
+
+  it('honors the price book path override', async () => {
+    const book = await makeActivities(noFetch, [], defaultPriceBookPath()).getPriceBook();
+    expect(book.version).toBe(CURRENT_PRICE_BOOK_VERSION);
+  });
+
+  it('throws on a malformed or missing price book', async () => {
+    await expect(
+      makeActivities(noFetch, [], '/no/such/pricebook.json').getPriceBook(),
+    ).rejects.toThrow(/could not be read or parsed/);
   });
 });

@@ -13,6 +13,7 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "@acp/cost-meter": "workspace:*",
     "@acp/protocol": "workspace:*",
     "@acp/service-kit": "workspace:*",
     "@opentelemetry/exporter-trace-otlp-http": "^0.203.0",

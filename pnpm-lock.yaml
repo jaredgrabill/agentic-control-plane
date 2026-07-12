@@ -276,6 +276,9 @@ importers:
 
   apps/orchestrator:
     dependencies:
+      '@acp/cost-meter':
+        specifier: workspace:*
+        version: link:../../packages/cost-meter
       '@acp/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol

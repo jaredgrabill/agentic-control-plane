@@ -24,6 +24,10 @@ import type {
   TaskRequest,
   TaskResult,
 } from '@acp/protocol';
+// The PURE pricing subpath only — never the node loader. Workflow code runs
+// in the deterministic isolate; importing `@acp/cost-meter` (fs) here would
+// be caught by the bundleWorkflowCode test.
+import { priceUsageMicros, type ResolvedPriceBook } from '@acp/cost-meter/pricing';
 import { synthesizeAnswer, type StepOutcome } from './synthesis.js';
 import {
   MAX_DELEGATION_DEPTH,
@@ -81,18 +85,50 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
     details: { plan, planner: plan.planner },
   });
 
-  // Budget ledger: max_steps and max_tokens gate dispatch; max_cost_usd is
-  // recorded, not enforced (pricing is Cost Meter scope). Gating happens at
-  // dispatch — in-flight steps of a parallel wave complete and are kept, so
-  // max_tokens can overshoot by in-flight usage.
+  // Cost Meter: resolve the current price book once, pin its version for the
+  // whole task. If the book can't be loaded, fail CLOSED when max_cost_usd is
+  // set (the budget cannot be honored) and otherwise proceed with cost
+  // recording disabled — a pricing outage must never silently drop an
+  // enforced budget, nor block a task that had none.
+  let book: ResolvedPriceBook | undefined;
+  try {
+    book = await control.getPriceBook();
+  } catch {
+    if (task.budget?.max_cost_usd !== undefined) {
+      return fail(task, {
+        class: 'retryable',
+        message:
+          'price book unavailable — max_cost_usd cannot be enforced; task rejected fail-closed',
+      });
+    }
+    book = undefined;
+  }
+
+  // Budget ledger: max_steps, max_tokens, and max_cost_usd gate dispatch.
+  // Gating happens at dispatch — in-flight steps of a parallel wave complete
+  // and are kept, so any budget can overshoot by in-flight usage (honest
+  // overshoot). max_cost_usd is enforced only when the book is available;
+  // maxCostMicros is undefined otherwise (recording disabled). Ceiling the
+  // budget to micros guarantees any positive budget is ≥ 1 micro, so the
+  // first step always dispatches.
+  const maxCostMicros =
+    book !== undefined && task.budget?.max_cost_usd !== undefined
+      ? Math.ceil(task.budget.max_cost_usd * 1_000_000)
+      : undefined;
   const ledger = {
     maxSteps: task.budget?.max_steps,
     maxTokens: task.budget?.max_tokens,
+    maxCostMicros,
     stepsDispatched: 0,
     inputTokens: 0,
     outputTokens: 0,
+    costMicros: 0,
   };
   const tokensUsed = (): number => ledger.inputTokens + ledger.outputTokens;
+  // Per-step cost in micros (for the audit) and whether any step was priced
+  // on the fallback rates (unknown/absent model).
+  const stepCosts = new Map<string, number>();
+  let anyFallbackPriced = false;
 
   const results = new Map<string, StepResult>();
   const skipped = new Map<string, string>();
@@ -160,7 +196,9 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
           ? `max_steps ${ledger.maxSteps} reached`
           : ledger.maxTokens !== undefined && tokensUsed() >= ledger.maxTokens
             ? `max_tokens ${ledger.maxTokens} reached`
-            : undefined;
+            : ledger.maxCostMicros !== undefined && ledger.costMicros >= ledger.maxCostMicros
+              ? `max_cost_usd ${task.budget?.max_cost_usd} reached`
+              : undefined;
       if (reason === undefined) {
         wave.push(step);
         continue;
@@ -179,7 +217,12 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
     // 4) Dispatch the wave in parallel; every step carries the REMAINING
     // budget, not the whole task budget.
     if (wave.length > 0) {
-      const remaining = remainingBudget(task.budget, tokensUsed());
+      const remaining = remainingBudget(
+        task.budget,
+        tokensUsed(),
+        ledger.costMicros,
+        ledger.maxCostMicros,
+      );
       ledger.stepsDispatched += wave.length;
       const waveResults = await Promise.all(
         wave.map((step) =>
@@ -203,6 +246,14 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
         results.set(result.step_id, result);
         ledger.inputTokens += result.usage?.input_tokens ?? 0;
         ledger.outputTokens += result.usage?.output_tokens ?? 0;
+        // Tally after Promise.all so overshoot is honest by construction: a
+        // whole parallel wave is priced only once every step has completed.
+        if (book !== undefined) {
+          const { micros, fallbackUsed } = priceUsageMicros(result.usage, book);
+          ledger.costMicros += micros;
+          stepCosts.set(result.step_id, micros);
+          if (fallbackUsed) anyFallbackPriced = true;
+        }
       }
     }
     if (budgetStop !== undefined) break;
@@ -255,8 +306,20 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
         step_id: s.step_id,
         capability: s.capability,
         status: results.get(s.step_id)?.status ?? 'skipped',
+        // Per-step cost in USD, present only for steps priced under a book.
+        ...(stepCosts.has(s.step_id)
+          ? { cost_usd: (stepCosts.get(s.step_id) ?? 0) / 1_000_000 }
+          : {}),
       })),
-      usage_totals: { input_tokens: ledger.inputTokens, output_tokens: ledger.outputTokens },
+      usage_totals: {
+        input_tokens: ledger.inputTokens,
+        output_tokens: ledger.outputTokens,
+        // Total task cost in USD, or null when pricing was disabled (no book).
+        cost_usd: book !== undefined ? ledger.costMicros / 1_000_000 : null,
+      },
+      // The exact book version this cost was computed against — reproducible.
+      price_book_version: book?.version ?? null,
+      ...(anyFallbackPriced ? { cost_fallback_priced: true } : {}),
       budget: task.budget ?? null,
     },
   });
@@ -423,11 +486,27 @@ function fail(task: TaskRequest, error: NonNullable<TaskResult['error']>): TaskR
   };
 }
 
-function remainingBudget(budget: Budget | undefined, tokensUsed: number): Budget | undefined {
+function remainingBudget(
+  budget: Budget | undefined,
+  tokensUsed: number,
+  costMicrosUsed: number,
+  maxCostMicros: number | undefined,
+): Budget | undefined {
   if (budget === undefined) return undefined;
+  // When the book priced the cost budget, forward the REMAINING dollars
+  // (micro-exact). Computed only at dispatch, where the gate guarantees
+  // costMicrosUsed < maxCostMicros — so the forwarded max_cost_usd is always
+  // strictly positive (satisfying the budget schema). Book-less tasks with no
+  // cost budget pass through exactly as before.
+  const cost =
+    maxCostMicros !== undefined
+      ? { max_cost_usd: (maxCostMicros - costMicrosUsed) / 1_000_000 }
+      : budget.max_cost_usd === undefined
+        ? {}
+        : { max_cost_usd: budget.max_cost_usd };
   const remaining: Budget = {
     ...(budget.max_tokens === undefined ? {} : { max_tokens: budget.max_tokens - tokensUsed }),
-    ...(budget.max_cost_usd === undefined ? {} : { max_cost_usd: budget.max_cost_usd }),
+    ...cost,
   };
   return Object.keys(remaining).length > 0 ? remaining : undefined;
 }
