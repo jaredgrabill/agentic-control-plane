@@ -207,3 +207,33 @@ misconfigured):
 3. Message another agent directly (no subject permissions exist for it).
 4. Mutate their own registry record, manifest, or policy.
 5. Act without an audit record (fail-closed for writes).
+
+## Known boundaries
+
+Boundaries that are safe under the v0 scope model but would need tightening if
+that model changes. Documented so they are not rediscovered as surprises.
+
+- **Platform-service scopes trust a caller-supplied `tenant` parameter.**
+  Several routes read the tenant to operate on from a request parameter rather
+  than binding it to the caller's `claims.tenant`:
+  - `audit:read` on the audit-read routes (`/v1/verify`,
+    `/v1/tasks/:id/reconstruction`, `/v1/events`) queries whatever tenant the
+    caller names.
+  - `deploy:write` targets the audit stream and gate thresholds/soaks of
+    whatever tenant the deployment request names.
+
+  This is intentional and safe in v0: these scopes are held **only by platform
+  services** (`svc-ci`, `svc-orchestrator`, `svc-evaluation`), which are
+  platform-role principals that legitimately read and act **across tenants**
+  (e.g. verifying every tenant's hash chain, evaluating any tenant's shadow
+  traffic). No tenant operator or agent holds them, so the `tenant` parameter
+  is never an attacker-reachable authorization input today.
+
+  It becomes a real authorization gap **if any of these scopes is ever
+  delegated to a tenant operator**. Before that happens, non-platform callers
+  MUST be constrained to their own tenant — i.e. assert
+  `claims.tenant === <requested tenant>` for any caller that is not a
+  platform-role principal, while leaving platform-role callers unrestricted
+  (they must keep their cross-tenant reach). A defense-in-depth assertion of
+  exactly this shape is a candidate hardening for the audit-read routes and the
+  deploy target.
