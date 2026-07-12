@@ -328,8 +328,36 @@ export interface DeploymentPreflight {
   baselineNote: string;
 }
 
+/** The verdict of the pre-dispatch kill-switch checkpoint (checkKillSwitch activity). */
+export type KillSwitchVerdict =
+  | { halted: false }
+  | {
+      halted: true;
+      tier: 'capability' | 'risk' | 'fleet' | 'agent';
+      target: string;
+      reason: string;
+    };
+
 /** Control-plane activities implemented by the orchestrator's own worker. */
 export interface ControlActivities {
+  /**
+   * Tier-2/3 kill-switch checkpoint (item 5, checkpoint 1). Answers from the
+   * worker's in-memory KillSwitchWatcher (fast path). The compensation-exemption
+   * matrix is enforced HERE so it is identical wherever the activity is called:
+   * a named-capability or agent flag blocks even a compensator (surgical intent
+   * wins), while a fleet halt or a covering risk-class flag is EXEMPT for a
+   * compensator (else a halt would make an in-flight write permanently
+   * un-compensable — the kill switch would preserve the danger). Called before
+   * authorizeDelegation and again after an approval wait (symmetric with the
+   * re-discovery), so a suspension DURING a gate still fails the step closed.
+   */
+  checkKillSwitch(input: {
+    capability: string;
+    risk: string;
+    agentId: string;
+    /** True when this dispatch is a saga compensator (unwind) — fleet/risk exempt. */
+    compensation: boolean;
+  }): Promise<KillSwitchVerdict>;
   /**
    * ADR-0007 intake verification: verifies the forwarded subject token
    * (audience acp:gateway) while it is fresh and snapshots the verified

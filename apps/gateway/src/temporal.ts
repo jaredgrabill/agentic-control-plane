@@ -16,6 +16,7 @@ import type {
   DeploymentStatusView,
   TaskStarter,
 } from './app.js';
+import { RUNNING_TASKS_QUERY, type FleetCancellerClient } from './fleet-canceller.js';
 
 export const TASK_QUEUE = 'acp-tasks';
 
@@ -47,6 +48,7 @@ export async function connectTemporal(): Promise<{
   starter: TemporalTaskStarter;
   approvals: TemporalApprovalGateway;
   deployments: TemporalDeploymentController;
+  fleet: TemporalFleetCancellerClient;
 }> {
   const connection = await Connection.connect({
     address: env('ACP_TEMPORAL_ADDRESS', 'localhost:7233'),
@@ -62,7 +64,38 @@ export async function connectTemporal(): Promise<{
     starter: new TemporalTaskStarter(client),
     approvals: new TemporalApprovalGateway(client),
     deployments: new TemporalDeploymentController(client),
+    fleet: new TemporalFleetCancellerClient(client),
   };
+}
+
+/**
+ * The fleet auto-canceller's Temporal seam: a standard-visibility query for
+ * RUNNING TaskWorkflows, and a cancel-by-id that never throws on a terminal or
+ * absent workflow (idempotent under repeated sweeps and replica overlap).
+ */
+export class TemporalFleetCancellerClient implements FleetCancellerClient {
+  constructor(private readonly client: Client) {}
+
+  async *listRunningTaskWorkflowIds(): AsyncIterable<string> {
+    for await (const wf of this.client.workflow.list({ query: RUNNING_TASKS_QUERY })) {
+      yield wf.workflowId;
+    }
+  }
+
+  async cancel(workflowId: string): Promise<'cancelling' | 'not_found' | 'already_terminal'> {
+    const handle = this.client.workflow.getHandle(workflowId);
+    try {
+      const description = await handle.describe();
+      if (description.status.name !== 'RUNNING' && description.status.name !== 'CONTINUED_AS_NEW') {
+        return 'already_terminal';
+      }
+      await handle.cancel();
+      return 'cancelling';
+    } catch (err) {
+      if (err instanceof WorkflowNotFoundError) return 'not_found';
+      throw err;
+    }
+  }
 }
 
 export class TemporalTaskStarter implements TaskStarter {

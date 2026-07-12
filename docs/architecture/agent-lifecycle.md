@@ -115,17 +115,21 @@ v0 deviations (deliberate, documented):
 
 Tiered, tested, and owned:
 
-1. **Agent** — suspend one agent version (registry state → `suspended`;
-   routers observe the NATS registry event within seconds; in-flight Temporal
-   workflows receive a cancellation signal and run compensation).
-2. **Capability** — disable one capability platform-wide (e.g., all R2
-   writes) via policy flag, without touching agents.
-3. **Fleet** — halt all agent dispatch; the orchestrator queues or rejects
-   new tasks.
+1. **Agent** — suspend one agent (registry state → `suspended`; routers observe
+   the NATS registry event within seconds). In-flight tasks auto-unwind at their
+   next dispatch or are cancelled explicitly.
+2. **Capability / risk class** (Phase 3 item 5) — disable one capability, or a
+   whole risk class (monotonic — an R2 flag blocks R2 and R3), platform-wide via
+   the registry's audited `killswitch.capability.<name>` /
+   `killswitch.risk.<class>` flags, without touching agents.
+3. **Fleet** (Phase 3 item 5) — halt all task intake (gateway `503`) and dispatch,
+   and auto-cancel every in-flight `TaskWorkflow` (the gateway fleet
+   auto-canceller); v0 rejects new tasks rather than queueing them.
 
 Each tier has a named owner and a runbook, requires no vendor involvement,
 and is exercised quarterly (game days). Every activation is itself an audit
-event.
+event. **See the [kill-switch & audit-integrity runbooks](../runbooks/README.md)**
+for per-tier activation/verify/reinstate procedures and the drill checklist.
 
 **Kill-switch mid-task delivery (v1, Phase 3 item 2).** Suspending an agent
 (`scripts/kill-switch.mjs suspend <id>`) does NOT by itself signal running
@@ -146,8 +150,10 @@ Temporal workflows. Two mechanisms cover in-flight tasks:
 1. `scripts/kill-switch.mjs suspend <agent-id> --reason "<why>"` — flips the
    registry flag; new dispatch to that agent stops within seconds.
 2. Identify in-flight tasks touching the agent (audit stream: `step.dispatched`
-   for the agent with no terminal `task.completed`). A fleet task→agent index
-   for automatic routing arrives with item 5; until then this is a manual join.
+   for the agent with no terminal `task.completed`) — a manual join for the agent
+   tier. (The **fleet** tier gets automatic cancellation of every in-flight task
+   via the gateway auto-canceller, Phase 3 item 5; the agent tier stays targeted
+   and manual by design.)
 3. For each such task, `POST /v1/tasks/:task_id/cancel` to force the
    drain-then-unwind, or let auto-unwind fire at the next dispatch.
 4. Verify each task's terminal `compensation.completed`. A

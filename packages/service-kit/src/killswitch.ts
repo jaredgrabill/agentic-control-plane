@@ -7,6 +7,20 @@ export const CONTROL_BUCKET = 'acp_control';
 const FLEET_KEY = 'killswitch.fleet';
 const agentKey = (agentId: string): string => `killswitch.agent.${agentId}`;
 /**
+ * Tier-2 capability flag key. Capability names are `[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*`
+ * (e.g. change.submit) — all KV-legal characters (`.` and `_` plus alphanumerics),
+ * so no encoding is needed and there is no collision with the agent-id namespace.
+ */
+const capabilityKey = (name: string): string => `killswitch.capability.${name}`;
+/** Tier-2 risk-class flag key. Class ∈ {R1,R2,R3} (R0 is refused at the flip surface). */
+const riskKey = (riskClass: string): string => `killswitch.risk.${riskClass}`;
+
+/** Risk rank: a flag on class C blocks every executing risk with rank ≥ rank(C). */
+const RISK_RANK: Record<string, number> = { R0: 0, R1: 1, R2: 2, R3: 3 };
+/** Risk classes a flag may target — R0 is never a valid target (halt the fleet instead). */
+export const FLAGGABLE_RISK_CLASSES = ['R1', 'R2', 'R3'] as const;
+const rankOf = (risk: string): number => RISK_RANK[risk] ?? 3;
+/**
  * Principal denylist key (ADR-0007 broker-time check, item 0c). Keyed by the
  * full principal string (agent:{id}@{ver}, user:{id}, svc:{id}). NATS KV keys
  * forbid `:` and `@` (only `-/_=.` plus alphanumerics), so the principal is
@@ -33,6 +47,8 @@ export interface KillSwitchState {
  */
 export class KillSwitchWatcher {
   private readonly state = new Map<string, KillSwitchState>();
+  private readonly flipListeners: ((key: string, state: KillSwitchState | undefined) => void)[] =
+    [];
   private stopped = false;
 
   private constructor(
@@ -51,16 +67,41 @@ export class KillSwitchWatcher {
         if (watcher.stopped) break;
         if (entry.operation === 'DEL' || entry.operation === 'PURGE') {
           watcher.state.delete(entry.key);
+          watcher.notifyFlip(entry.key, undefined);
           continue;
         }
         try {
-          watcher.state.set(entry.key, JSON.parse(entry.string()) as KillSwitchState);
+          const next = JSON.parse(entry.string()) as KillSwitchState;
+          watcher.state.set(entry.key, next);
+          watcher.notifyFlip(entry.key, next);
         } catch {
           logger.error({ key: entry.key }, 'unparseable kill-switch entry ignored');
         }
       }
     })();
     return watcher;
+  }
+
+  /**
+   * Registers a listener invoked on every kill-switch KV change (the raw key
+   * and the parsed state, or undefined on delete). The fleet auto-canceller
+   * (item 5) subscribes to react to a fleet halt without polling. History
+   * entries delivered before the listener registers are NOT replayed to it —
+   * a subscriber that must act on an already-active flag reads the state
+   * directly (e.g. fleetHalt()) at startup.
+   */
+  onFlip(listener: (key: string, state: KillSwitchState | undefined) => void): void {
+    this.flipListeners.push(listener);
+  }
+
+  private notifyFlip(key: string, state: KillSwitchState | undefined): void {
+    for (const listener of this.flipListeners) {
+      try {
+        listener(key, state);
+      } catch (err) {
+        this.logger.error({ key, err }, 'kill-switch flip listener threw (ignored)');
+      }
+    }
   }
 
   fleetHalt(): KillSwitchState | undefined {
@@ -71,6 +112,38 @@ export class KillSwitchWatcher {
   agentSuspension(agentId: string): KillSwitchState | undefined {
     const s = this.state.get(agentKey(agentId));
     return s?.active === true ? s : undefined;
+  }
+
+  /** Tier-2: whether a specific capability is suspended by name (blocks it even during compensation). */
+  capabilitySuspension(name: string): KillSwitchState | undefined {
+    const s = this.state.get(capabilityKey(name));
+    return s?.active === true ? s : undefined;
+  }
+
+  /**
+   * Tier-2: whether an EXECUTING risk class is blocked by an active risk-class
+   * flag. Monotonic — a flag on class C blocks every executing risk with rank
+   * ≥ rank(C), so `killswitch.risk.R2` blocks R2 and R3 but not R1. Returns the
+   * first (lowest-class) active flag that covers the executing risk.
+   */
+  riskClassSuspension(risk: string): KillSwitchState | undefined {
+    const execRank = rankOf(risk);
+    for (const cls of FLAGGABLE_RISK_CLASSES) {
+      if (execRank < rankOf(cls)) continue;
+      const s = this.state.get(riskKey(cls));
+      if (s?.active === true) return s;
+    }
+    return undefined;
+  }
+
+  /**
+   * Tier-2 convenience: a capability named `name` executing at declared `risk`
+   * is halted if EITHER its own capability flag OR a covering risk-class flag
+   * is active. The named flag is checked first so a surgical suspension is the
+   * reported reason.
+   */
+  capabilityHalt(name: string, risk: string): KillSwitchState | undefined {
+    return this.capabilitySuspension(name) ?? this.riskClassSuspension(risk);
   }
 
   /**
@@ -134,6 +207,46 @@ export class KillSwitchControl {
     await this.kv.put(FLEET_KEY, JSON.stringify({ active: false }));
   }
 
+  /** Tier-2: suspend a single capability by name (surgical — blocks even compensators). */
+  async suspendCapability(name: string, reason: string, activatedBy: string): Promise<void> {
+    await this.kv.put(
+      capabilityKey(name),
+      JSON.stringify({
+        active: true,
+        reason,
+        activated_by: activatedBy,
+        activated_at: new Date().toISOString(),
+      } satisfies KillSwitchState),
+    );
+  }
+
+  async reinstateCapability(name: string): Promise<void> {
+    await this.kv.put(capabilityKey(name), JSON.stringify({ active: false }));
+  }
+
+  /**
+   * Tier-2: suspend a whole risk class (blocks every executing risk with rank ≥
+   * this class). R0 is refused — there is no read-only class worth flagging;
+   * halt the fleet instead.
+   */
+  async suspendRiskClass(riskClass: string, reason: string, activatedBy: string): Promise<void> {
+    assertFlaggableRisk(riskClass);
+    await this.kv.put(
+      riskKey(riskClass),
+      JSON.stringify({
+        active: true,
+        reason,
+        activated_by: activatedBy,
+        activated_at: new Date().toISOString(),
+      } satisfies KillSwitchState),
+    );
+  }
+
+  async reinstateRiskClass(riskClass: string): Promise<void> {
+    assertFlaggableRisk(riskClass);
+    await this.kv.put(riskKey(riskClass), JSON.stringify({ active: false }));
+  }
+
   async denyPrincipal(sub: string, reason: string, activatedBy: string): Promise<void> {
     await this.kv.put(
       principalKey(sub),
@@ -148,5 +261,15 @@ export class KillSwitchControl {
 
   async allowPrincipal(sub: string): Promise<void> {
     await this.kv.put(principalKey(sub), JSON.stringify({ active: false }));
+  }
+}
+
+/** Rejects R0 (and any non-{R1,R2,R3}) as a risk-class flag target. */
+export function assertFlaggableRisk(riskClass: string): void {
+  if (!(FLAGGABLE_RISK_CLASSES as readonly string[]).includes(riskClass)) {
+    throw new Error(
+      `risk class ${JSON.stringify(riskClass)} cannot be kill-switched — only ` +
+        `${FLAGGABLE_RISK_CLASSES.join(', ')} (R0 is read-only; halt the fleet instead)`,
+    );
   }
 }

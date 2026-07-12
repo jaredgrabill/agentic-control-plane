@@ -3,6 +3,7 @@ import {
   ensureAuditStream,
   AuditPublisher,
   JwtVerifier,
+  KillSwitchControl,
   connectBus,
   createLogger,
   env,
@@ -55,6 +56,7 @@ const app = buildRegistryApp({
   signingKey: { kid, privateKey },
   jwks: { keys: [{ ...publicJwk, kid, alg: 'EdDSA', use: 'sig' }] },
   announcer: await NatsRegistryAnnouncer.connect(nc, logger),
+  control: await KillSwitchControl.open(nc),
   audit: new AuditPublisher(nc, logger),
   logger,
 });

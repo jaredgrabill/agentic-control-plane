@@ -9,7 +9,7 @@ import {
   initTelemetry,
 } from '@acp/service-kit';
 import pg from 'pg';
-import { buildAuditApp } from './app.js';
+import { buildAuditApp, resolveRetentionHotDays } from './app.js';
 import { runConsumer } from './loop.js';
 import { PgAuditStore } from './store.js';
 
@@ -21,6 +21,10 @@ const pool = new pg.Pool({
 });
 const store = new PgAuditStore(pool);
 await store.migrate();
+
+// Fail-closed governance: refuse to boot if hot retention is below the
+// six-month floor (EU AI Act Art.19). Resolved before listening.
+const retentionHotDays = resolveRetentionHotDays(process.env.ACP_AUDIT_RETENTION_HOT_DAYS);
 
 const nc = await connectBus({
   name: 'audit',
@@ -36,6 +40,7 @@ const app = buildAuditApp({
   ),
   store,
   logger,
+  retentionHotDays,
 });
 
 const port = envInt('ACP_AUDIT_PORT', 7104);

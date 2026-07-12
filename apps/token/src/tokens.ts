@@ -31,11 +31,24 @@ export interface KillSwitchLike {
   fleetHalt(): unknown;
   agentSuspension(agentId: string): unknown;
   principalDenied(sub: string): unknown;
+  /** Tier-2 named-capability flag (item 5) — blocks even a compensator. */
+  capabilitySuspension(name: string): unknown;
+  /** Tier-2 monotonic risk-class flag (item 5) — exempt for a compensator. */
+  riskClassSuspension(risk: string): unknown;
 }
 
 /** Why a mint was refused, for the token.denied audit and the 403 body. */
 export interface TokenDenial {
-  reason: 'fleet_halt' | 'killswitch' | 'principal_denylist';
+  reason:
+    | 'fleet_halt'
+    | 'killswitch'
+    | 'principal_denylist'
+    | 'capability_killswitch'
+    | 'risk_killswitch';
+  /** The kill-switch tier that tripped (audit details). */
+  tier: 'fleet' | 'agent' | 'principal' | 'capability' | 'risk';
+  /** The tier target (agent id, capability name, risk class, principal, or 'fleet'). */
+  target: string;
   /** The control-KV key that tripped, e.g. killswitch.agent.cloud-agent. */
   key: string;
   /** The offending principal (suspended agent, denylisted subject). */
@@ -228,12 +241,22 @@ export class TokenIssuer {
     checkFleet: boolean;
     agentPrincipals: string[];
     denylistPrincipals: string[];
+    /**
+     * The executing capability grounds (item 5). When present, the mint is
+     * refused if the named capability is suspended (blocks even a compensator)
+     * or — for a NON-compensator mint — a covering risk-class flag is active.
+     */
+    capability?: CapabilityGrounds;
+    /** True when this mint carries compensation grounds — fleet + risk exempt. */
+    isCompensation?: boolean;
   }): TokenDenial | undefined {
     const ks = this.killSwitch;
     if (ks === undefined) return undefined;
     if (params.checkFleet && ks.fleetHalt() !== undefined) {
       return {
         reason: 'fleet_halt',
+        tier: 'fleet',
+        target: 'fleet',
         key: 'killswitch.fleet',
         principal: params.primaryPrincipal,
         tenant: params.tenant,
@@ -244,6 +267,8 @@ export class TokenIssuer {
       if (id !== undefined && ks.agentSuspension(id) !== undefined) {
         return {
           reason: 'killswitch',
+          tier: 'agent',
+          target: id,
           key: `killswitch.agent.${id}`,
           principal: p,
           tenant: params.tenant,
@@ -254,8 +279,38 @@ export class TokenIssuer {
       if (ks.principalDenied(p) !== undefined) {
         return {
           reason: 'principal_denylist',
+          tier: 'principal',
+          target: p,
           key: `killswitch.principal.${p}`,
           principal: p,
+          tenant: params.tenant,
+        };
+      }
+    }
+    // Tier-2 capability/risk flags (item 5). A named-capability flag blocks even
+    // a compensator (surgical intent wins); a covering risk-class flag is EXEMPT
+    // for a compensator so an unwind can still mint its token under a class halt.
+    if (params.capability !== undefined) {
+      if (ks.capabilitySuspension(params.capability.name) !== undefined) {
+        return {
+          reason: 'capability_killswitch',
+          tier: 'capability',
+          target: params.capability.name,
+          key: `killswitch.capability.${params.capability.name}`,
+          principal: params.primaryPrincipal,
+          tenant: params.tenant,
+        };
+      }
+      if (
+        params.isCompensation !== true &&
+        ks.riskClassSuspension(params.capability.risk) !== undefined
+      ) {
+        return {
+          reason: 'risk_killswitch',
+          tier: 'risk',
+          target: params.capability.risk,
+          key: `killswitch.risk.${params.capability.risk}`,
+          principal: params.primaryPrincipal,
           tenant: params.tenant,
         };
       }
@@ -505,12 +560,20 @@ export class TokenIssuer {
     // Broker-time denylist: refuse to mint a fresh step token for a halted
     // fleet, a suspended target agent, or a denylisted subject/actor — this
     // is what stops a suspended agent getting new tokens for a task's life.
+    // Item 5 extends this to tier-2 capability/risk flags read from the
+    // executing capability grounds, with the compensation-exemption matrix: a
+    // fleet halt and a covering risk-class flag are EXEMPT for a compensator
+    // mint (else a halt makes an in-flight write permanently un-compensable),
+    // but a named-capability flag blocks even a compensator.
+    const isCompensationMint = request.compensation !== undefined;
     this.assertNotDenied('delegate', {
       tenant: subject.tenant,
       primaryPrincipal: actor,
-      checkFleet: true,
+      checkFleet: !isCompensationMint,
       agentPrincipals: [actor],
       denylistPrincipals: [subject.sub, actor],
+      ...(request.capability === undefined ? {} : { capability: request.capability }),
+      isCompensation: isCompensationMint,
     });
     const act: ActClaim =
       actor === request.client.principal

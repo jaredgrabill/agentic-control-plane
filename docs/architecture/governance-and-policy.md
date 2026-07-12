@@ -192,7 +192,9 @@ per deployment policy.
   bundle changes ride the organization's own change process (the ITSM
   agent's domain — the platform eats its own dog food).
 - **Kill-switch drills** quarterly, per tier, with measured
-  time-to-suspension (an SLO: agent suspension propagates in < 10 s).
+  time-to-suspension (an SLO: every tier propagates in < 10 s). Procedures,
+  the compensation-exemption matrix, and the drill checklist live in the
+  [kill-switch & audit-integrity runbooks](../runbooks/README.md).
 
 ## What Agents Can Never Do
 

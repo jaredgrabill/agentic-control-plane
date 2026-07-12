@@ -44,6 +44,10 @@ export interface KillSwitch {
   agentSuspension(agentId: string): { active: boolean; reason?: string } | undefined;
   /** Broker-time denylist backstop: revokes a specific user/service/agent principal. */
   principalDenied(sub: string): { active: boolean; reason?: string } | undefined;
+  /** Tier-2 named-capability flag (item 5) — blocks even a compensator. */
+  capabilitySuspension(name: string): { active: boolean; reason?: string } | undefined;
+  /** Tier-2 monotonic risk-class flag (item 5) — exempt for a bound compensator. */
+  riskClassSuspension(risk: string): { active: boolean; reason?: string } | undefined;
 }
 
 export interface AuditSink {
@@ -136,22 +140,44 @@ export class ToolGatewayCore {
       outcome,
     });
 
-    // (1) kill switch — refused before anything else runs or is recorded.
-    const halt = this.deps.killSwitch?.fleetHalt();
-    if (halt !== undefined) {
-      return refuse(
-        fail('upstream_auth', 'platform fleet halt is active — tool calls are refused'),
-        'error:upstream_auth',
+    // Every kill-switch refusal is now AUDITED (routed 0a-QA #1): a suspended or
+    // compromised principal hammering the gateway under an active switch must
+    // leave a per-request trail — the exact telemetry a trust boundary wants.
+    // These checks precede the Cedar decision, so their audit carries no policy
+    // reference; details.refusal='killswitch' with {tier, target}.
+    const ks = this.deps.killSwitch;
+    const killSwitchRefuse = async (
+      tier: string,
+      target: string,
+      message: string,
+    ): Promise<{ result: CallToolResult; outcome: Outcome }> => {
+      await this.emitAudit(caller, serverId, tool, args, corr, undefined, 'error:upstream_auth', {
+        killSwitch: { tier, target },
+      });
+      return refuse(fail('upstream_auth', message), 'error:upstream_auth');
+    };
+
+    // A bound compensator's tool call is EXEMPT from fleet + risk halts (else an
+    // unwind under a halt is impossible and the write stays in effect). Derived
+    // from VERIFIED claims correlated to THIS task — a forged header cannot set it.
+    const compensationBound = deriveCompensation(caller.claims, corr).active;
+    const executingCap = caller.claims.capability;
+
+    // (1) kill switch — fleet, agent, principal denylist, then tier-2 flags.
+    if (ks?.fleetHalt() !== undefined && !compensationBound) {
+      return killSwitchRefuse(
+        'fleet',
+        'fleet',
+        'platform fleet halt is active — tool calls are refused',
       );
     }
-    if (caller.agentId !== undefined) {
-      const suspension = this.deps.killSwitch?.agentSuspension(caller.agentId);
-      if (suspension !== undefined) {
-        return refuse(
-          fail('upstream_auth', `agent ${caller.agentId} is suspended (kill switch)`),
-          'error:upstream_auth',
-        );
-      }
+    if (caller.agentId !== undefined && ks?.agentSuspension(caller.agentId) !== undefined) {
+      // Agent tier blocks even a compensator (design-2 honest-incomplete).
+      return killSwitchRefuse(
+        'agent',
+        caller.agentId,
+        `agent ${caller.agentId} is suspended (kill switch)`,
+      );
     }
     // Principal-denylist backstop (0c QA MEDIUM). 0c revoked denylisted
     // principals only at broker time, so an outstanding ≤15min acp:tools token
@@ -159,17 +185,35 @@ export class ToolGatewayCore {
     // denylisted user/service was never revoked at the gateway at all. Check
     // BOTH the acting principal (act.sub — the agent) and the original subject
     // (sub — the user/service the chain started from) against the raw-string
-    // denylist; the watcher applies the KV key encoding symmetrically. Like
-    // the sibling kill-switch refusals, this precedes the Cedar decision and
-    // carries no policy reference; auditing all kill-switch refusals uniformly
-    // is item 5's retrofit (SPRINT routed-to-item-5, from 0a QA #1).
+    // denylist; the watcher applies the KV key encoding symmetrically. Blocks
+    // even a compensator (a denylisted identity is revoked outright).
     for (const sub of new Set([caller.principal, caller.sub])) {
-      if (this.deps.killSwitch?.principalDenied(sub) !== undefined) {
-        return refuse(
-          fail('upstream_auth', `principal ${sub} is denylisted (kill switch)`),
-          'error:upstream_auth',
-        );
+      if (ks?.principalDenied(sub) !== undefined) {
+        return killSwitchRefuse('principal', sub, `principal ${sub} is denylisted (kill switch)`);
       }
+    }
+    // Tier-2 named capability flag vs the VERIFIED executing capability claim —
+    // blocks EVEN a bound compensator (surgical intent wins).
+    if (executingCap !== undefined && ks?.capabilitySuspension(executingCap.name) !== undefined) {
+      return killSwitchRefuse(
+        'capability',
+        executingCap.name,
+        `capability ${executingCap.name} is halted by kill switch — tool calls refused`,
+      );
+    }
+    // Tier-2 risk-class flag vs the executing capability's declared risk —
+    // exempt for a bound compensator (else the unwind cannot run under the halt).
+    if (
+      executingCap !== undefined &&
+      !compensationBound &&
+      ks?.riskClassSuspension(executingCap.risk) !== undefined
+    ) {
+      return killSwitchRefuse(
+        'risk',
+        executingCap.risk,
+        `risk class ${executingCap.risk} is halted by kill switch (executing capability ` +
+          `${executingCap.name}) — tool calls refused`,
+      );
     }
 
     // (2) governed lookup — the config allowlist IS the tool surface.
@@ -182,6 +226,19 @@ export class ToolGatewayCore {
           `tool ${tool} is not governed on server ${serverId} — see deploy/dev/tool-servers.json`,
         ),
         'error:not_found',
+      );
+    }
+
+    // (2.6) tier-2 risk-class flag vs the TOOL's own declared risk — catches a
+    // direct user/service R2 tool call that carries NO capability claim (so the
+    // risk-vs-claim check above could not see it). Exempt for a bound
+    // compensator. Precedes shadow suppression and Cedar; audited as a
+    // kill-switch refusal.
+    if (!compensationBound && ks?.riskClassSuspension(spec.risk) !== undefined) {
+      return killSwitchRefuse(
+        'risk',
+        spec.risk,
+        `risk class ${spec.risk} is halted by kill switch (tool ${serverId}/${tool}) — refused`,
       );
     }
 
@@ -490,6 +547,13 @@ export class ToolGatewayCore {
         ...(extras.shadowSuppressed !== undefined
           ? { shadow_suppressed: true, tool_risk: extras.shadowSuppressed.toolRisk }
           : {}),
+        ...(extras.killSwitch !== undefined
+          ? {
+              refusal: 'killswitch',
+              tier: extras.killSwitch.tier,
+              target: extras.killSwitch.target,
+            }
+          : {}),
       },
     };
     try {
@@ -510,6 +574,8 @@ interface AuditExtras {
   riskRefusal?: RiskRefusal;
   /** Present when a shadow-context write was suppressed (step 2.5). */
   shadowSuppressed?: { toolRisk: string };
+  /** Present when a kill-switch refusal fired (step 1 / 2.6) — tier-1/2/3 + denylist. */
+  killSwitch?: { tier: string; target: string };
 }
 
 /** The approval context handed to Cedar: granted only when a claim binds to THIS step. */

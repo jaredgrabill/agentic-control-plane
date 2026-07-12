@@ -3,9 +3,20 @@ import { JwtVerifier, createLogger } from '@acp/service-kit';
 import type { FastifyInstance } from 'fastify';
 import { exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { buildAuditApp, AUDIT_AUDIENCE } from '../src/app.js';
+import {
+  buildAuditApp,
+  AUDIT_AUDIENCE,
+  RETENTION_FLOOR_DAYS,
+  resolveRetentionHotDays,
+} from '../src/app.js';
 import { handleAuditMessage } from '../src/consumer.js';
-import type { AuditQuery, AuditStore } from '../src/store.js';
+import {
+  CHAIN_ALGORITHM,
+  GENESIS_PREV_HASH,
+  computeRecordHash,
+  type ChainRow,
+} from '../src/chain.js';
+import type { AuditQuery, AuditStore, ChainHead } from '../src/store.js';
 
 const ISSUER = 'https://token.test.local';
 const logger = createLogger('audit-test');
@@ -30,16 +41,30 @@ function validEvent(overrides: Partial<AuditEvent> = {}): AuditEvent {
   };
 }
 
+/**
+ * Chain-aware in-memory store: mirrors PgAuditStore's per-tenant hashing so the
+ * /v1/verify endpoint and tamper detection are testable at the app level without
+ * Postgres (the DB trigger enforcement is exercised by the E2E tamper drill).
+ */
 class MemoryStore implements AuditStore {
   events = new Map<string, AuditEvent>();
+  chains = new Map<string, ChainRow[]>();
   failNext = false;
   append(event: AuditEvent): Promise<void> {
     if (this.failNext) {
       this.failNext = false;
       return Promise.reject(new Error('postgres down'));
     }
-    // Idempotent on event_id, like the ON CONFLICT DO NOTHING real store.
-    if (!this.events.has(event.event_id)) this.events.set(event.event_id, event);
+    // Idempotent on event_id (like ON CONFLICT DO NOTHING) — no double-chain.
+    if (this.events.has(event.event_id)) return Promise.resolve();
+    this.events.set(event.event_id, event);
+    const rows = this.chains.get(event.tenant) ?? [];
+    const prev = rows.at(-1);
+    const chainSeq = (prev?.chain_seq ?? 0) + 1;
+    const prevHash = prev?.record_hash ?? GENESIS_PREV_HASH;
+    const recordHash = computeRecordHash({ tenant: event.tenant, chainSeq, prevHash, event });
+    rows.push({ chain_seq: chainSeq, prev_hash: prevHash, record_hash: recordHash, event });
+    this.chains.set(event.tenant, rows);
     return Promise.resolve();
   }
   query(q: AuditQuery): Promise<AuditEvent[]> {
@@ -52,6 +77,18 @@ class MemoryStore implements AuditStore {
           (q.since === undefined || Date.parse(e.occurred_at) >= Date.parse(q.since)),
       ),
     );
+  }
+  chainPage(tenant: string, fromSeq: number, limit: number): Promise<ChainRow[]> {
+    const rows = (this.chains.get(tenant) ?? []).filter((r) => r.chain_seq >= fromSeq);
+    return Promise.resolve(rows.slice(0, limit));
+  }
+  chainHead(tenant: string): Promise<ChainHead | undefined> {
+    const h = (this.chains.get(tenant) ?? []).at(-1);
+    return Promise.resolve(h && { chain_seq: h.chain_seq, record_hash: h.record_hash });
+  }
+  chainByTask(tenant: string, taskId: string, limit: number): Promise<ChainRow[]> {
+    const rows = (this.chains.get(tenant) ?? []).filter((r) => r.event.reason?.task_id === taskId);
+    return Promise.resolve(rows.slice(0, limit));
   }
 }
 
@@ -217,5 +254,140 @@ describe('provenance API', () => {
       headers: { authorization: `Bearer ${await makeToken('task:submit')}` },
     });
     expect(wrongScope.statusCode).toBe(403);
+  });
+
+  async function verify(query: string, scope = 'audit:read') {
+    return app.inject({
+      url: `/v1/verify?${query}`,
+      headers: { authorization: `Bearer ${await makeToken(scope)}` },
+    });
+  }
+
+  it('verifies a clean chain: verified true, head reported, records counted', async () => {
+    const res = await verify('tenant=acme');
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{
+      verified: boolean;
+      algorithm: string;
+      records_checked: number;
+      head: { chain_seq: number; record_hash: string };
+    }>();
+    expect(body.verified).toBe(true);
+    expect(body.algorithm).toBe(CHAIN_ALGORITHM);
+    expect(body.records_checked).toBe(2);
+    expect(body.head.chain_seq).toBe(2);
+    expect(body.head.record_hash).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it('detects a mutated record as hash_mismatch at its seq', async () => {
+    // Tamper directly with the stored chain row (simulating a DB mutation that
+    // bypassed the append-only trigger), leaving record_hash untouched.
+    const rows = store.chains.get('acme')!;
+    rows[1]!.event = { ...rows[1]!.event, event_type: 'model.invoked' };
+    const res = await verify('tenant=acme');
+    const body = res.json<{ verified: boolean; failure: { kind: string; chain_seq: number } }>();
+    expect(body.verified).toBe(false);
+    expect(body.failure.kind).toBe('hash_mismatch');
+    expect(body.failure.chain_seq).toBe(2);
+  });
+
+  it('detects a broken link when a record hash is rewritten (link_mismatch)', async () => {
+    // Rewrite row 1's record_hash so row 2's prev_hash no longer links.
+    const rows = store.chains.get('acme')!;
+    rows[0]!.record_hash = `sha256:${'a'.repeat(64)}`;
+    const res = await verify('tenant=acme');
+    const body = res.json<{ verified: boolean; failure: { kind: string; chain_seq: number } }>();
+    expect(body.verified).toBe(false);
+    // Row 1 recompute now mismatches its rewritten hash first → hash_mismatch@1.
+    expect(body.failure.chain_seq).toBe(1);
+    expect(body.failure.kind).toBe('hash_mismatch');
+  });
+
+  it('verifies a pruned suffix against a supplied anchor, and 400s without one', async () => {
+    const rows = store.chains.get('acme')!;
+    // Verify from seq 2 using seq 1's record_hash as the anchor → passes.
+    const ok = await verify(`tenant=acme&from_seq=2&anchor_prev_hash=${rows[0]!.record_hash}`);
+    expect(ok.json<{ verified: boolean; records_checked: number }>()).toMatchObject({
+      verified: true,
+      records_checked: 1,
+    });
+    // A wrong anchor → link_mismatch at seq 2.
+    const bad = await verify(`tenant=acme&from_seq=2&anchor_prev_hash=sha256:${'b'.repeat(64)}`);
+    expect(bad.json<{ verified: boolean; failure: { kind: string } }>().failure.kind).toBe(
+      'link_mismatch',
+    );
+    // from_seq>1 without an anchor is a 400 (cannot verify a suffix blind).
+    expect((await verify('tenant=acme&from_seq=2')).statusCode).toBe(400);
+  });
+
+  it('requires a tenant and the audit:read scope', async () => {
+    expect((await verify('')).statusCode).toBe(400);
+    expect((await verify('tenant=acme', 'task:submit')).statusCode).toBe(403);
+    expect((await app.inject({ url: '/v1/verify?tenant=acme' })).statusCode).toBe(401);
+  });
+
+  const RECON_TASK = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40';
+  async function reconstruct(taskId: string, query: string, scope = 'audit:read') {
+    return app.inject({
+      url: `/v1/tasks/${taskId}/reconstruction?${query}`,
+      headers: { authorization: `Bearer ${await makeToken(scope)}` },
+    });
+  }
+
+  it('reconstructs a task from its records (the two seeded events share a task_id)', async () => {
+    const res = await reconstruct(RECON_TASK, 'tenant=acme');
+    expect(res.statusCode).toBe(200);
+    const body = res.json<{
+      task_id: string;
+      integrity: { records: number };
+      timeline: unknown[];
+    }>();
+    expect(body.task_id).toBe(RECON_TASK);
+    expect(body.integrity.records).toBe(2);
+    expect(body.timeline).toHaveLength(2);
+  });
+
+  it('404s an unknown task and a cross-tenant task, and 400s a non-uuid / missing tenant', async () => {
+    expect((await reconstruct(RECON_TASK, 'tenant=other-tenant')).statusCode).toBe(404);
+    const unknown = '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3fff';
+    expect((await reconstruct(unknown, 'tenant=acme')).statusCode).toBe(404);
+    expect((await reconstruct('not-a-uuid', 'tenant=acme')).statusCode).toBe(400);
+    expect((await reconstruct(RECON_TASK, '')).statusCode).toBe(400);
+    expect((await reconstruct(RECON_TASK, 'tenant=acme', 'task:submit')).statusCode).toBe(403);
+  });
+
+  it('serves the retention policy (default floor) behind audit:read', async () => {
+    const res = await app.inject({
+      url: '/v1/retention',
+      headers: { authorization: `Bearer ${await makeToken()}` },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({
+      hot_days: RETENTION_FLOOR_DAYS,
+      floor_days: RETENTION_FLOOR_DAYS,
+      archival: 'deployment-policy',
+      worm: 'deployment-policy',
+    });
+    const wrong = await app.inject({
+      url: '/v1/retention',
+      headers: { authorization: `Bearer ${await makeToken('task:submit')}` },
+    });
+    expect(wrong.statusCode).toBe(403);
+  });
+});
+
+describe('resolveRetentionHotDays (six-month floor)', () => {
+  it('defaults to the floor when unset', () => {
+    expect(resolveRetentionHotDays(undefined)).toBe(RETENTION_FLOOR_DAYS);
+    expect(resolveRetentionHotDays('')).toBe(RETENTION_FLOOR_DAYS);
+  });
+  it('accepts a value at or above the floor', () => {
+    expect(resolveRetentionHotDays('183')).toBe(183);
+    expect(resolveRetentionHotDays('365')).toBe(365);
+  });
+  it('refuses a sub-floor or invalid value (fail-closed at boot)', () => {
+    expect(() => resolveRetentionHotDays('182')).toThrow(/below the 183-day floor/);
+    expect(() => resolveRetentionHotDays('0')).toThrow();
+    expect(() => resolveRetentionHotDays('nope')).toThrow(/positive integer/);
   });
 });

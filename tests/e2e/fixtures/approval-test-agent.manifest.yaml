@@ -91,3 +91,32 @@ capabilities:
         description: always fails
       - input: { note: b }
         description: always fails
+  - name: gov.test_slow_fail
+    description: >
+      An R0 capability that sleeps (default ~6s, overridable via input.sleep_ms)
+      then fails permanently. The kill-switch-audit E2E slice uses the sleep as a
+      window to activate a risk-class kill switch AFTER the preceding R2 write has
+      completed but BEFORE this step fails, so the ensuing saga unwind runs a
+      compensator under an active R2 flag (exemption matrix).
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: true
+      properties:
+        sleep_ms: { type: number }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: {}
+        description: sleep then fail
+      - input: { sleep_ms: 6000 }
+        description: sleep 6s then fail
+      - input: { sleep_ms: 3000 }
+        description: sleep 3s then fail
