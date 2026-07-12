@@ -562,6 +562,37 @@ describe('registration', () => {
     expect(r1Irr.json<{ error: { message: string } }>().error.message).toContain('R1');
   });
 
+  it('accepts an r0/r1-only manifest that declares no compensator (netsec-agent shape)', async () => {
+    // Rule 6: R0 declares neither compensator nor irreversible; R1 may declare
+    // a compensator but never needs one. A read-plus-draft agent (the netsec
+    // v0 posture: R0 reads + a side-effect-free R1 draft, zero write surface)
+    // must register without any compensation machinery.
+    const res = await register({
+      manifest: manifest({
+        capabilities: [
+          {
+            name: 'netsec.rule_search',
+            description: 'Search the firewall ruleset.',
+            risk: 'R0',
+            input_schema: { type: 'object' },
+            output_schema: { type: 'object' },
+            examples: [{ input: {} }, { input: {} }, { input: {} }],
+          },
+          {
+            name: 'netsec.rule_draft',
+            description: 'Draft a reviewable rule change; nothing is applied.',
+            risk: 'R1',
+            input_schema: { type: 'object' },
+            output_schema: { type: 'object' },
+            examples: [{ input: {} }, { input: {} }, { input: {} }],
+          },
+        ],
+      }),
+      version: '0.1.0',
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
   it('rejects duplicate capability names and a missing version', async () => {
     const cap = manifest().capabilities[0];
     const dup = await register({
