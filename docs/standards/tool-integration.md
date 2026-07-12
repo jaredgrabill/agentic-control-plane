@@ -51,6 +51,39 @@ schema on the platform — token cost and attack surface both drop.
 - Pagination/truncation is explicit: tools return bounded results with
   continuation tokens; "return everything" tools fail review.
 
+### Risk-class enforcement (v1, item 3)
+
+The rules above are enforced, not aspirational:
+
+- **Risk is required config.** `tool-servers.json` declares a `risk` on every
+  tool; a tool with no (or an invalid) risk is a startup parse error — a tool
+  cannot slip in ungoverned.
+- **Enforcement reads a SIGNED claim, not a header.** The orchestrator brokers
+  the executing capability's name + declared risk into a signed `capability`
+  token claim on every step mint. The claim rides verbatim only across the
+  agent's same-actor `acp:tools` exchange (it is dropped on any actor change),
+  so it cannot be forged (the token service rejects a body-supplied capability)
+  or laundered onto another actor. The tool gateway enforces
+  `rank(tool_risk) ≤ rank(capability_risk)`; a token with no capability context
+  (a direct user/service caller) may call only R0/R1 tools — every R2+ mutation
+  is refused, so writes flow only through the governed task path.
+- **Defense in depth.** The structural check (gateway step 3.5, after Cedar,
+  before the rate limiter) AND a Cedar pair-policy (a plain permit bound on the
+  step's approval/compensation grounds + an annotated gate) must BOTH pass for
+  an R2 tool. Either alone blocks an unauthorized write. R3 tools are refused
+  unconditionally. Every refusal is audited `tool.called` `denied`.
+- **Idempotency key = the step id.** Agents pass `idempotency_key = ctx.stepId`
+  (plan-minted, stable across activity retries) on every write; a multi-write
+  step suffixes it (`${stepId}:restore:apply`). The reference mock ledger
+  replays the stored result byte-identically, rejects a key reused with
+  different args, and never records a failed result (transient retries must
+  re-execute). `dry_run` validates the full state machine with zero mutation.
+- **Honest inverses.** A write's compensator must restore prior state, not
+  approximate it. `cloud.tag_apply` returns the previous value of each key it
+  set (null when absent); its compensator `cloud.tag_restore` re-applies
+  previous values and removes only keys that were genuinely absent — deleting
+  alone would lie when the apply overwrote an existing tag.
+
 ## Sandboxed Execution Tools
 
 Tools that execute agent-influenced code (interpreters, shells, compilers,
