@@ -12,8 +12,13 @@ import { PgAuditStore } from '../src/store.js';
  * (the trigger enforcement itself is E2E'd against the real DB).
  */
 class FakePool {
-  rows: { tenant: string; chain_seq: number; prev_hash: string; record_hash: string; event_id: string }[] =
-    [];
+  rows: {
+    tenant: string;
+    chain_seq: number;
+    prev_hash: string;
+    record_hash: string;
+    event_id: string;
+  }[] = [];
   injectConflictOnce = false;
   /** When set, chainHead reports an empty chain even though rows exist — models a persistent conflict. */
   headBlind = false;
@@ -28,7 +33,8 @@ class FakePool {
         .sort((a, b) => b.chain_seq - a.chain_seq)[0];
       return Promise.resolve({
         rowCount: head === undefined ? 0 : 1,
-        rows: head === undefined ? [] : [{ chain_seq: head.chain_seq, record_hash: head.record_hash }],
+        rows:
+          head === undefined ? [] : [{ chain_seq: head.chain_seq, record_hash: head.record_hash }],
       });
     }
     if (sql.includes('INSERT INTO audit_events')) {
@@ -66,7 +72,7 @@ function ev(id: string, tenant = 'acme', taskId?: string): AuditEvent {
     actor: { principal: 'svc:orchestrator' },
     action: { name: 'x' },
     ...(taskId === undefined ? {} : { reason: { task_id: taskId } }),
-  } as AuditEvent;
+  };
 }
 
 const ids = [
@@ -95,12 +101,15 @@ describe('PgAuditStore chain append (fake pool)', () => {
     const events: Record<string, AuditEvent> = {};
     for (const id of ids) {
       events[id] = ev(id);
-      await store.append(events[id]!);
+      await store.append(events[id]);
     }
     expect(fake.rows.map((r) => r.chain_seq)).toEqual([1, 2, 3]);
     expect(fake.rows[0]!.prev_hash).toBe(GENESIS_PREV_HASH);
     // The produced chain verifies clean.
-    const res = verifyChainPage('acme', chainOf(fake, events), { seq: 1, prevHash: GENESIS_PREV_HASH });
+    const res = verifyChainPage('acme', chainOf(fake, events), {
+      seq: 1,
+      prevHash: GENESIS_PREV_HASH,
+    });
     expect(res.ok).toBe(true);
   });
 

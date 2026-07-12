@@ -45,6 +45,7 @@ const control: ControlActivities = {
   planTask: vi.fn(),
   discoverAgent: vi.fn(),
   resolveRoute: vi.fn(),
+  checkKillSwitch: vi.fn(),
   authorizeDelegation: vi.fn(),
   brokerToken: vi.fn(),
   digestApprovalSubject: vi.fn().mockResolvedValue({ subject_digest: `sha256:${'a'.repeat(64)}` }),

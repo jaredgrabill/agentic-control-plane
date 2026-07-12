@@ -96,7 +96,9 @@ async function runFlip(spec, flipTargetArg, reasonArg) {
     }),
   });
   if (!tokenRes.ok) {
-    console.error(`token service refused admin credentials: ${tokenRes.status} ${await tokenRes.text()}`);
+    console.error(
+      `token service refused admin credentials: ${tokenRes.status} ${await tokenRes.text()}`,
+    );
     process.exit(1);
   }
   const { access_token } = await tokenRes.json();

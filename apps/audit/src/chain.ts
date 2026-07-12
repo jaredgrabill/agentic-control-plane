@@ -54,11 +54,7 @@ export interface ChainRow {
   event: AuditEvent;
 }
 
-export type ChainFailureKind =
-  | 'hash_mismatch'
-  | 'link_mismatch'
-  | 'seq_gap'
-  | 'genesis_mismatch';
+export type ChainFailureKind = 'hash_mismatch' | 'link_mismatch' | 'seq_gap' | 'genesis_mismatch';
 
 export interface ChainFailure {
   chain_seq: number;
@@ -85,14 +81,22 @@ export type VerifyPageResult =
  * breaks its own recompute; a rewritten record breaks the NEXT row's linkage
  * unless the whole suffix is rewritten (threat model §4).
  */
-export function verifyChainPage(tenant: string, rows: ChainRow[], anchor: ChainAnchor): VerifyPageResult {
+export function verifyChainPage(
+  tenant: string,
+  rows: ChainRow[],
+  anchor: ChainAnchor,
+): VerifyPageResult {
   let seq = anchor.seq;
   let prevHash = anchor.prevHash;
   let checked = 0;
   for (const row of rows) {
     const eventId = row.event.event_id;
     if (row.chain_seq !== seq) {
-      return { ok: false, checked, failure: { chain_seq: row.chain_seq, event_id: eventId, kind: 'seq_gap' } };
+      return {
+        ok: false,
+        checked,
+        failure: { chain_seq: row.chain_seq, event_id: eventId, kind: 'seq_gap' },
+      };
     }
     if (row.prev_hash !== prevHash) {
       return {
@@ -112,7 +116,11 @@ export function verifyChainPage(tenant: string, rows: ChainRow[], anchor: ChainA
       event: row.event,
     });
     if (recomputed !== row.record_hash) {
-      return { ok: false, checked, failure: { chain_seq: seq, event_id: eventId, kind: 'hash_mismatch' } };
+      return {
+        ok: false,
+        checked,
+        failure: { chain_seq: seq, event_id: eventId, kind: 'hash_mismatch' },
+      };
     }
     checked += 1;
     prevHash = row.record_hash;

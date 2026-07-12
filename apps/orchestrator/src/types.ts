@@ -331,7 +331,12 @@ export interface DeploymentPreflight {
 /** The verdict of the pre-dispatch kill-switch checkpoint (checkKillSwitch activity). */
 export type KillSwitchVerdict =
   | { halted: false }
-  | { halted: true; tier: 'capability' | 'risk' | 'fleet' | 'agent'; target: string; reason: string };
+  | {
+      halted: true;
+      tier: 'capability' | 'risk' | 'fleet' | 'agent';
+      target: string;
+      reason: string;
+    };
 
 /** Control-plane activities implemented by the orchestrator's own worker. */
 export interface ControlActivities {

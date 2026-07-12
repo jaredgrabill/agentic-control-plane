@@ -452,7 +452,10 @@ function parseFlipBody(request: FastifyRequest): { active: boolean; reason: stri
     throw new AuthError('active (boolean) is required — true to suspend, false to reinstate', 400);
   }
   if (typeof body.reason !== 'string' || body.reason.trim() === '') {
-    throw new AuthError('reason is required — it lands in the audit record and the control state', 400);
+    throw new AuthError(
+      'reason is required — it lands in the audit record and the control state',
+      400,
+    );
   }
   return { active: body.active, reason: body.reason };
 }

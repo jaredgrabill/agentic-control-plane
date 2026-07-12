@@ -1380,7 +1380,10 @@ export async function ApprovalWorkflow(input: ApprovalGateInput): Promise<Approv
     // delegation chain: trust the signal's chain only when it actually starts at
     // the approver (outermost link), else record the approver alone (routed
     // item-1-QA — approver_chain was previously taken verbatim).
-    { principal: decision.approver, chain: validatedApproverChain(decision.approver, decision.approver_chain) },
+    {
+      principal: decision.approver,
+      chain: validatedApproverChain(decision.approver, decision.approver_chain),
+    },
   );
 
   return {

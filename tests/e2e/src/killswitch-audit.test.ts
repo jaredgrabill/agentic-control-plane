@@ -125,7 +125,8 @@ async function waitForResult(taskId: string, timeoutMs = 120_000): Promise<TaskR
       headers: { authorization: `Bearer ${await janeToken()}` },
     });
     const body = (await res.json()) as { status: string; result: TaskResult | null };
-    if (['completed', 'failed', 'cancelled'].includes(body.status) && body.result) return body.result;
+    if (['completed', 'failed', 'cancelled'].includes(body.status) && body.result)
+      return body.result;
     if (Date.now() > deadline) throw new Error(`task ${taskId} still ${body.status}`);
     await new Promise((r) => setTimeout(r, 1000));
   }
@@ -166,7 +167,12 @@ async function verifyChain(tenant: string): Promise<{
 beforeAll(async () => {
   platform = await startPlatform();
   const writeToken = await ciToken('acp:registry', 'registry:write registry:admin');
-  await registerAndActivate(APPROVAL_MANIFEST_PATH, APPROVAL_AGENT_ID, writeToken, 'killswitch-audit E2E');
+  await registerAndActivate(
+    APPROVAL_MANIFEST_PATH,
+    APPROVAL_AGENT_ID,
+    writeToken,
+    'killswitch-audit E2E',
+  );
   agent = await startApprovalAgent();
 }, 300_000);
 
@@ -222,7 +228,10 @@ describe('kill switch tiers 2-3 + audit integrity', () => {
     // is the window to activate the R2 halt after the write completes.
     const r = await submit({
       text: 'risk exemption sequence',
-      context: { sequence: ['gov.test_write', 'gov.test_slow_fail'], inputs: [{ target: 'r2' }, { sleep_ms: 8000 }] },
+      context: {
+        sequence: ['gov.test_write', 'gov.test_slow_fail'],
+        inputs: [{ target: 'r2' }, { sleep_ms: 8000 }],
+      },
     });
     expect(r.status).toBe(202);
     const taskId = r.taskId!;
@@ -239,9 +248,9 @@ describe('kill switch tiers 2-3 + audit integrity', () => {
       const fresh = await waitForResult(freshTask);
       expect(fresh.status).not.toBe('completed');
       expect(JSON.stringify(fresh.gaps)).toMatch(/kill switch/i);
-      expect((await auditEvents(freshTask)).some((e) => e.event_type === 'approval.requested')).toBe(
-        false,
-      );
+      expect(
+        (await auditEvents(freshTask)).some((e) => e.event_type === 'approval.requested'),
+      ).toBe(false);
 
       // The in-flight task's slow step fails → the R2 write is unwound. The
       // compensator (gov.test_undo, R2) is EXEMPT from the R2 halt → it runs and
@@ -337,7 +346,13 @@ describe('kill switch tiers 2-3 + audit integrity', () => {
     const pool = new pg.Pool({ connectionString: DB_URL });
     const recordHash = (chainSeq: number, prevHash: string, event: unknown): string =>
       sha256Digest(
-        stableStringify({ v: 'acp-audit-chain/v1', tenant, chain_seq: chainSeq, prev_hash: prevHash, event }),
+        stableStringify({
+          v: 'acp-audit-chain/v1',
+          tenant,
+          chain_seq: chainSeq,
+          prev_hash: prevHash,
+          event,
+        }),
       );
     const mkEvent = (): AuditEvent => ({
       event_id: randomUUID(),
@@ -358,7 +373,17 @@ describe('kill switch tiers 2-3 + audit integrity', () => {
         await pool.query(
           `INSERT INTO audit_events (event_id, occurred_at, tenant, event_type, principal, event, chain_seq, prev_hash, record_hash)
            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [event.event_id, event.occurred_at, tenant, event.event_type, 'svc:test', JSON.stringify(event), seq, prev, hash],
+          [
+            event.event_id,
+            event.occurred_at,
+            tenant,
+            event.event_type,
+            'svc:test',
+            JSON.stringify(event),
+            seq,
+            prev,
+            hash,
+          ],
         );
         rows.push({ id: event.event_id, seq, prev, hash, event });
         prev = hash;
@@ -366,7 +391,9 @@ describe('kill switch tiers 2-3 + audit integrity', () => {
 
       // (a) UPDATE is refused by the append-only trigger.
       await expect(
-        pool.query(`UPDATE audit_events SET event_type='model.invoked' WHERE event_id=$1`, [rows[1]!.id]),
+        pool.query(`UPDATE audit_events SET event_type='model.invoked' WHERE event_id=$1`, [
+          rows[1]!.id,
+        ]),
       ).rejects.toThrow(/append-only/);
 
       // (b) A forged INSERT with bad linkage is refused by chain_check.
@@ -395,7 +422,10 @@ describe('kill switch tiers 2-3 + audit integrity', () => {
       const res = await fetch(`${AUDIT_URL}/v1/verify?tenant=${tenant}`, {
         headers: { authorization: `Bearer ${token}` },
       });
-      const body = (await res.json()) as { verified: boolean; failure?: { kind: string; chain_seq: number } };
+      const body = (await res.json()) as {
+        verified: boolean;
+        failure?: { kind: string; chain_seq: number };
+      };
       expect(body.verified).toBe(false);
       expect(body.failure?.kind).toBe('hash_mismatch');
       expect(body.failure?.chain_seq).toBe(2);

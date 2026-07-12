@@ -548,7 +548,11 @@ export class ToolGatewayCore {
           ? { shadow_suppressed: true, tool_risk: extras.shadowSuppressed.toolRisk }
           : {}),
         ...(extras.killSwitch !== undefined
-          ? { refusal: 'killswitch', tier: extras.killSwitch.tier, target: extras.killSwitch.target }
+          ? {
+              refusal: 'killswitch',
+              tier: extras.killSwitch.tier,
+              target: extras.killSwitch.target,
+            }
           : {}),
       },
     };

@@ -20,7 +20,7 @@ function event(over: Partial<AuditEvent> = {}): AuditEvent {
     action: { name: 'tool:cloud-estate:cost_report' },
     reason: { task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40' },
     ...over,
-  } as AuditEvent;
+  };
 }
 
 /** Chains `events` from genesis into ordered ChainRows, exactly as the store does. */
@@ -38,10 +38,20 @@ function chain(events: AuditEvent[]): ChainRow[] {
 
 describe('computeRecordHash canonicalization', () => {
   it('is a sha256:<hex> digest and stable across runs', () => {
-    const h = computeRecordHash({ tenant: TENANT, chainSeq: 1, prevHash: GENESIS_PREV_HASH, event: event() });
+    const h = computeRecordHash({
+      tenant: TENANT,
+      chainSeq: 1,
+      prevHash: GENESIS_PREV_HASH,
+      event: event(),
+    });
     expect(h).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(h).toBe(
-      computeRecordHash({ tenant: TENANT, chainSeq: 1, prevHash: GENESIS_PREV_HASH, event: event() }),
+      computeRecordHash({
+        tenant: TENANT,
+        chainSeq: 1,
+        prevHash: GENESIS_PREV_HASH,
+        event: event(),
+      }),
     );
   });
 
@@ -57,8 +67,13 @@ describe('computeRecordHash canonicalization', () => {
         unicode: 'café — obéir 🚦',
         nested: { z: 1, a: 2, m: [3, 2, 1] },
       },
-    } as Partial<AuditEvent>);
-    const direct = computeRecordHash({ tenant: TENANT, chainSeq: 5, prevHash: GENESIS_PREV_HASH, event: ev });
+    });
+    const direct = computeRecordHash({
+      tenant: TENANT,
+      chainSeq: 5,
+      prevHash: GENESIS_PREV_HASH,
+      event: ev,
+    });
     const roundTripped = computeRecordHash({
       tenant: TENANT,
       chainSeq: 5,
@@ -75,7 +90,9 @@ describe('computeRecordHash canonicalization', () => {
     expect(computeRecordHash({ ...base, tenant: 'other' })).not.toBe(h);
     expect(computeRecordHash({ ...base, chainSeq: 4 })).not.toBe(h);
     expect(computeRecordHash({ ...base, prevHash: `sha256:${'1'.repeat(64)}` })).not.toBe(h);
-    expect(computeRecordHash({ ...base, event: event({ event_type: 'model.invoked' }) })).not.toBe(h);
+    expect(computeRecordHash({ ...base, event: event({ event_type: 'model.invoked' }) })).not.toBe(
+      h,
+    );
   });
 
   it('uses the algorithm tag so a format change is detectable', () => {
@@ -85,7 +102,12 @@ describe('computeRecordHash canonicalization', () => {
 
 describe('verifyChainPage', () => {
   const genesis = { seq: 1, prevHash: GENESIS_PREV_HASH };
-  const three = () => chain([event({ event_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51' }), event({ event_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f52' }), event({ event_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f53' })]);
+  const three = () =>
+    chain([
+      event({ event_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f51' }),
+      event({ event_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f52' }),
+      event({ event_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f53' }),
+    ]);
 
   it('accepts a clean chain from genesis and advances the anchor', () => {
     const res = verifyChainPage(TENANT, three(), genesis);

@@ -20,6 +20,8 @@ const killSwitch = {
   fleetHalt: () => (ks.fleet ? { active: true } : undefined),
   agentSuspension: (id: string) => (ks.agents.has(id) ? { active: true } : undefined),
   principalDenied: (sub: string) => (ks.principals.has(sub) ? { active: true } : undefined),
+  capabilitySuspension: () => undefined,
+  riskClassSuspension: () => undefined,
 };
 
 let core: BusAuthCore;

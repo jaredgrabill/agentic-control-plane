@@ -706,7 +706,10 @@ describe('TaskWorkflow kill switch (checkpoint 1)', () => {
     expect(audited.some((e) => e.event_type === 'approval.requested')).toBe(false);
     // checkKillSwitch was consulted BEFORE authorizeDelegation.
     expect(control.checkKillSwitch).toHaveBeenCalledWith(
-      expect.objectContaining({ capability: 'knowledge.answer_with_citations', compensation: false }),
+      expect.objectContaining({
+        capability: 'knowledge.answer_with_citations',
+        compensation: false,
+      }),
     );
   });
 });

@@ -337,7 +337,11 @@ describe('provenance API', () => {
   it('reconstructs a task from its records (the two seeded events share a task_id)', async () => {
     const res = await reconstruct(RECON_TASK, 'tenant=acme');
     expect(res.statusCode).toBe(200);
-    const body = res.json<{ task_id: string; integrity: { records: number }; timeline: unknown[] }>();
+    const body = res.json<{
+      task_id: string;
+      integrity: { records: number };
+      timeline: unknown[];
+    }>();
     expect(body.task_id).toBe(RECON_TASK);
     expect(body.integrity.records).toBe(2);
     expect(body.timeline).toHaveLength(2);

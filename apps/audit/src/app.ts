@@ -131,7 +131,8 @@ export function buildAuditApp(deps: AuditDeps): FastifyInstance {
     let failure: ChainFailure | undefined;
 
     for (;;) {
-      const limit = toSeq === undefined ? VERIFY_PAGE : Math.min(VERIFY_PAGE, toSeq - anchor.seq + 1);
+      const limit =
+        toSeq === undefined ? VERIFY_PAGE : Math.min(VERIFY_PAGE, toSeq - anchor.seq + 1);
       if (limit <= 0) break;
       const rows = await deps.store.chainPage(q.tenant, anchor.seq, limit);
       if (rows.length === 0) break;
@@ -152,7 +153,8 @@ export function buildAuditApp(deps: AuditDeps): FastifyInstance {
       algorithm: CHAIN_ALGORITHM,
       verified: failure === undefined,
       records_checked: recordsChecked,
-      head: head === undefined ? null : { chain_seq: head.chain_seq, record_hash: head.record_hash },
+      head:
+        head === undefined ? null : { chain_seq: head.chain_seq, record_hash: head.record_hash },
       ...(failure === undefined ? {} : { failure }),
     };
   });
@@ -183,7 +185,9 @@ export function buildAuditApp(deps: AuditDeps): FastifyInstance {
       });
     }
     const truncated = rows.length > RECONSTRUCT_CAP;
-    return reply.send(reconstructTask(task_id, q.tenant, rows.slice(0, RECONSTRUCT_CAP), truncated));
+    return reply.send(
+      reconstructTask(task_id, q.tenant, rows.slice(0, RECONSTRUCT_CAP), truncated),
+    );
   });
 
   // Retention policy surface (D9). The hot floor is enforced at boot; archival

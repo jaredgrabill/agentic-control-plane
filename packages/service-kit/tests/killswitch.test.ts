@@ -100,9 +100,15 @@ describe('KillSwitchControl capability and risk flags', () => {
     await control.reinstateCapability('change.submit');
     expect(JSON.parse(puts[2]![1])).toEqual({ active: false });
 
-    await expect(control.suspendRiskClass('R0', 'x', 'y')).rejects.toThrow(/cannot be kill-switched/);
-    expect(() => assertFlaggableRisk('R0')).toThrow(/R0 is read-only/);
-    expect(() => assertFlaggableRisk('R2')).not.toThrow();
+    await expect(control.suspendRiskClass('R0', 'x', 'y')).rejects.toThrow(
+      /cannot be kill-switched/,
+    );
+    expect(() => {
+      assertFlaggableRisk('R0');
+    }).toThrow(/R0 is read-only/);
+    expect(() => {
+      assertFlaggableRisk('R2');
+    }).not.toThrow();
   });
 });
 

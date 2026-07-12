@@ -27,7 +27,13 @@ interface StepReconstruction {
     rubber_stamp?: boolean;
   };
   tokens: { at: string; audience?: unknown; scope?: unknown }[];
-  tool_calls: { at: string; server?: unknown; tool?: unknown; outcome?: unknown; refusal?: unknown }[];
+  tool_calls: {
+    at: string;
+    server?: unknown;
+    tool?: unknown;
+    outcome?: unknown;
+    refusal?: unknown;
+  }[];
   completed?: { at: string; status: unknown; usage?: unknown };
   skipped?: { at: string; gap?: unknown };
   compensation?: unknown;
@@ -69,6 +75,8 @@ export function reconstructTask(
     return s;
   };
 
+  const firstSeq = rows[0]?.chain_seq;
+  const lastSeq = rows.at(-1)?.chain_seq;
   const recon: TaskReconstruction = {
     task_id: taskId,
     tenant,
@@ -76,9 +84,9 @@ export function reconstructTask(
     integrity: {
       records: rows.length,
       span:
-        rows.length === 0
+        firstSeq === undefined || lastSeq === undefined
           ? null
-          : { from_seq: rows[0]!.chain_seq, to_seq: rows[rows.length - 1]!.chain_seq },
+          : { from_seq: firstSeq, to_seq: lastSeq },
     },
     steps: [],
     timeline: [],
@@ -95,12 +103,14 @@ export function reconstructTask(
       ...(stepId === undefined ? {} : { step_id: stepId }),
     });
 
-    switch (e.event_type) {
+    switch (e.event_type as string) {
       case 'task.submitted':
         recon.submitted = {
           at: e.occurred_at,
           actor: e.actor.principal,
-          ...(e.action.inputs_digest === undefined ? {} : { inputs_digest: e.action.inputs_digest }),
+          ...(e.action.inputs_digest === undefined
+            ? {}
+            : { inputs_digest: e.action.inputs_digest }),
           ...(e.artifacts?.workflow_run_id === undefined
             ? {}
             : { workflow_run_id: e.artifacts.workflow_run_id }),
@@ -110,7 +120,9 @@ export function reconstructTask(
         recon.plan = {
           at: e.occurred_at,
           ...(details.planner === undefined ? {} : { planner: details.planner }),
-          ...(e.action.outputs_digest === undefined ? {} : { plan_digest: e.action.outputs_digest }),
+          ...(e.action.outputs_digest === undefined
+            ? {}
+            : { plan_digest: e.action.outputs_digest }),
           ...(details.plan === undefined ? {} : { plan: details.plan }),
         };
         break;
@@ -118,9 +130,9 @@ export function reconstructTask(
         if (stepId !== undefined) {
           const s = stepOf(stepId);
           s.dispatched_at = e.occurred_at;
-          if (details.capability !== undefined) s.capability = String(details.capability);
+          if (typeof details.capability === 'string') s.capability = details.capability;
           if (e.artifacts?.agent_id !== undefined || e.artifacts?.agent_version !== undefined) {
-            s.agent = { id: e.artifacts?.agent_id, version: e.artifacts?.agent_version };
+            s.agent = { id: e.artifacts.agent_id, version: e.artifacts.agent_version };
           }
           if (details.route !== undefined) s.route = details.route;
           if (details.policy !== undefined) s.policy_decisions.push(details.policy);
@@ -146,18 +158,19 @@ export function reconstructTask(
       case 'approval.timeout':
         if (stepId !== undefined) {
           const status = e.event_type.slice('approval.'.length) as
-            | 'requested'
-            | 'granted'
-            | 'denied'
-            | 'timeout';
+            'requested' | 'granted' | 'denied' | 'timeout';
           stepOf(stepId).approval = {
             status,
-            ...(details.approval_id === undefined ? {} : { approval_id: String(details.approval_id) }),
+            ...(typeof details.approval_id === 'string'
+              ? { approval_id: details.approval_id }
+              : {}),
             ...(e.event_type === 'approval.granted' || e.event_type === 'approval.denied'
               ? { approver: e.actor.principal }
               : {}),
             ...(details.latency_ms === undefined ? {} : { latency_ms: Number(details.latency_ms) }),
-            ...(details.rubber_stamp === undefined ? {} : { rubber_stamp: Boolean(details.rubber_stamp) }),
+            ...(details.rubber_stamp === undefined
+              ? {}
+              : { rubber_stamp: Boolean(details.rubber_stamp) }),
           };
         }
         break;
@@ -209,6 +222,8 @@ export function reconstructTask(
     }
   }
 
-  recon.steps = stepOrder.map((id) => steps.get(id)!);
+  recon.steps = stepOrder
+    .map((id) => steps.get(id))
+    .filter((s): s is StepReconstruction => s !== undefined);
   return recon;
 }

@@ -225,19 +225,24 @@ beforeAll(async () => {
     },
     control: {
       suspendCapability: (name, reason, by) => (
-        flips.push({ op: 'suspendCapability', target: name, reason, by }), Promise.resolve()
+        flips.push({ op: 'suspendCapability', target: name, reason, by }),
+        Promise.resolve()
       ),
       reinstateCapability: (name) => (
-        flips.push({ op: 'reinstateCapability', target: name }), Promise.resolve()
+        flips.push({ op: 'reinstateCapability', target: name }),
+        Promise.resolve()
       ),
       suspendRiskClass: (cls, reason, by) => (
-        flips.push({ op: 'suspendRiskClass', target: cls, reason, by }), Promise.resolve()
+        flips.push({ op: 'suspendRiskClass', target: cls, reason, by }),
+        Promise.resolve()
       ),
       reinstateRiskClass: (cls) => (
-        flips.push({ op: 'reinstateRiskClass', target: cls }), Promise.resolve()
+        flips.push({ op: 'reinstateRiskClass', target: cls }),
+        Promise.resolve()
       ),
       haltFleet: (reason, by) => (
-        flips.push({ op: 'haltFleet', target: 'fleet', reason, by }), Promise.resolve()
+        flips.push({ op: 'haltFleet', target: 'fleet', reason, by }),
+        Promise.resolve()
       ),
       resumeFleet: () => (flips.push({ op: 'resumeFleet', target: 'fleet' }), Promise.resolve()),
     },
@@ -899,11 +904,7 @@ describe('baseline recording (version-aware)', () => {
 });
 
 describe('tier-2/3 kill-switch flip routes', () => {
-  async function flip(
-    path: string,
-    body: unknown,
-    scope = 'registry:admin',
-  ): Promise<ReturnType<typeof app.inject>> {
+  async function flip(path: string, body: Record<string, unknown>, scope = 'registry:admin') {
     return app.inject({
       method: 'POST',
       url: path,
@@ -921,7 +922,12 @@ describe('tier-2/3 kill-switch flip routes', () => {
     expect(res.json()).toMatchObject({ tier: 'capability', target: 'change.submit', active: true });
     // Flip happened before the audit (KV first, event second).
     expect(flips).toEqual([
-      { op: 'suspendCapability', target: 'change.submit', reason: 'bad drafts', by: 'svc:agent-ci' },
+      {
+        op: 'suspendCapability',
+        target: 'change.submit',
+        reason: 'bad drafts',
+        by: 'svc:agent-ci',
+      },
     ]);
     const audit = auditEvents.at(-1)!;
     expect(audit.event_type).toBe('killswitch.activated');
@@ -954,18 +960,20 @@ describe('tier-2/3 kill-switch flip routes', () => {
   });
 
   it('halts and resumes the fleet', async () => {
-    expect((await flip('/v1/killswitch/fleet', { active: true, reason: 'p1' })).statusCode).toBe(202);
-    expect(flips.at(-1)).toMatchObject({ op: 'haltFleet', reason: 'p1' });
-    expect((await flip('/v1/killswitch/fleet', { active: false, reason: 'recovered' })).statusCode).toBe(
+    expect((await flip('/v1/killswitch/fleet', { active: true, reason: 'p1' })).statusCode).toBe(
       202,
     );
+    expect(flips.at(-1)).toMatchObject({ op: 'haltFleet', reason: 'p1' });
+    expect(
+      (await flip('/v1/killswitch/fleet', { active: false, reason: 'recovered' })).statusCode,
+    ).toBe(202);
     expect(flips.at(-1)).toMatchObject({ op: 'resumeFleet' });
   });
 
   it('rejects a bad capability name, a missing reason, and a missing active flag', async () => {
-    expect((await flip('/v1/killswitch/capability/NotACap', { active: true, reason: 'x' })).statusCode).toBe(
-      400,
-    );
+    expect(
+      (await flip('/v1/killswitch/capability/NotACap', { active: true, reason: 'x' })).statusCode,
+    ).toBe(400);
     expect((await flip('/v1/killswitch/fleet', { active: true })).statusCode).toBe(400);
     expect((await flip('/v1/killswitch/fleet', { reason: 'x' })).statusCode).toBe(400);
   });

@@ -28,22 +28,79 @@ function ev(over: Partial<AuditEvent>): AuditEvent {
     ...(over.reason === undefined ? {} : { reason: over.reason }),
     ...(over.artifacts === undefined ? {} : { artifacts: over.artifacts }),
     ...(over.details === undefined ? {} : { details: over.details }),
-  } as AuditEvent;
+  };
 }
 
 describe('reconstructTask (scenario-4-shaped set)', () => {
   const events: AuditEvent[] = [
-    ev({ event_type: 'task.submitted', actor: { principal: 'user:jane' }, reason: { task_id: TASK }, action: { name: 't', inputs_digest: `sha256:${'a'.repeat(64)}` }, artifacts: { workflow_run_id: 'run-1' } }),
-    ev({ event_type: 'task.planned', action: { name: 't', outputs_digest: `sha256:${'b'.repeat(64)}` }, reason: { task_id: TASK }, details: { planner: 'rule-planner@1', plan: { steps: [] } } }),
-    ev({ event_type: 'step.dispatched', reason: { task_id: TASK, step_id: STEP_A }, artifacts: { agent_id: 'change-agent', agent_version: '0.1.0' }, details: { capability: 'change.submit', route: 'active', policy: { decision: 'require-approval', bundle_version: '2026.07' } } }),
-    ev({ event_type: 'approval.requested', reason: { task_id: TASK, step_id: STEP_A }, details: { approval_id: 'ap-1' } }),
-    ev({ event_type: 'approval.granted', actor: { principal: 'user:boss' }, reason: { task_id: TASK, step_id: STEP_A }, details: { approval_id: 'ap-1', latency_ms: 4200, rubber_stamp: false } }),
-    ev({ event_type: 'token.brokered', reason: { task_id: TASK, step_id: STEP_A }, details: { audience: 'acp:agent:change-agent', scope: 'itsm:write' } }),
-    ev({ event_type: 'tool.called', reason: { task_id: TASK, step_id: STEP_A }, details: { server: 'itsm', tool: 'change_submit', outcome: 'ok' } }),
-    ev({ event_type: 'step.completed', reason: { task_id: TASK, step_id: STEP_A }, details: { status: 'completed', usage: { input_tokens: 10 } } }),
-    ev({ event_type: 'step.skipped', reason: { task_id: TASK, step_id: STEP_B }, details: { capability: 'change.verify', gap: 'depends on change.submit, which failed' } }),
-    ev({ event_type: 'compensation.completed', reason: { task_id: TASK }, details: { status: 'complete', compensated: [{ compensator: 'change.withdraw' }] } }),
-    ev({ event_type: 'task.completed', reason: { task_id: TASK }, details: { status: 'partial', gaps: ['change.verify skipped'], compensation: { status: 'complete' } } }),
+    ev({
+      event_type: 'task.submitted',
+      actor: { principal: 'user:jane' },
+      reason: { task_id: TASK },
+      action: { name: 't', inputs_digest: `sha256:${'a'.repeat(64)}` },
+      artifacts: { workflow_run_id: 'run-1' },
+    }),
+    ev({
+      event_type: 'task.planned',
+      action: { name: 't', outputs_digest: `sha256:${'b'.repeat(64)}` },
+      reason: { task_id: TASK },
+      details: { planner: 'rule-planner@1', plan: { steps: [] } },
+    }),
+    ev({
+      event_type: 'step.dispatched',
+      reason: { task_id: TASK, step_id: STEP_A },
+      artifacts: { agent_id: 'change-agent', agent_version: '0.1.0' },
+      details: {
+        capability: 'change.submit',
+        route: 'active',
+        policy: { decision: 'require-approval', bundle_version: '2026.07' },
+      },
+    }),
+    ev({
+      event_type: 'approval.requested',
+      reason: { task_id: TASK, step_id: STEP_A },
+      details: { approval_id: 'ap-1' },
+    }),
+    ev({
+      event_type: 'approval.granted',
+      actor: { principal: 'user:boss' },
+      reason: { task_id: TASK, step_id: STEP_A },
+      details: { approval_id: 'ap-1', latency_ms: 4200, rubber_stamp: false },
+    }),
+    ev({
+      event_type: 'token.brokered',
+      reason: { task_id: TASK, step_id: STEP_A },
+      details: { audience: 'acp:agent:change-agent', scope: 'itsm:write' },
+    }),
+    ev({
+      event_type: 'tool.called',
+      reason: { task_id: TASK, step_id: STEP_A },
+      details: { server: 'itsm', tool: 'change_submit', outcome: 'ok' },
+    }),
+    ev({
+      event_type: 'step.completed',
+      reason: { task_id: TASK, step_id: STEP_A },
+      details: { status: 'completed', usage: { input_tokens: 10 } },
+    }),
+    ev({
+      event_type: 'step.skipped',
+      reason: { task_id: TASK, step_id: STEP_B },
+      details: { capability: 'change.verify', gap: 'depends on change.submit, which failed' },
+    }),
+    ev({
+      event_type: 'compensation.completed',
+      reason: { task_id: TASK },
+      details: { status: 'complete', compensated: [{ compensator: 'change.withdraw' }] },
+    }),
+    ev({
+      event_type: 'task.completed',
+      reason: { task_id: TASK },
+      details: {
+        status: 'partial',
+        gaps: ['change.verify skipped'],
+        compensation: { status: 'complete' },
+      },
+    }),
   ];
 
   const recon = reconstructTask(TASK, 'acme', rowsOf(events), false);
@@ -65,11 +122,15 @@ describe('reconstructTask (scenario-4-shaped set)', () => {
     expect(a.capability).toBe('change.submit');
     expect(a.agent).toEqual({ id: 'change-agent', version: '0.1.0' });
     expect(a.policy_decisions).toHaveLength(1);
-    expect(a.approval).toMatchObject({ status: 'granted', approver: 'user:boss', latency_ms: 4200 });
+    expect(a.approval).toMatchObject({
+      status: 'granted',
+      approver: 'user:boss',
+      latency_ms: 4200,
+    });
     expect(a.tokens).toHaveLength(1);
     expect(a.tool_calls[0]).toMatchObject({ server: 'itsm', tool: 'change_submit', outcome: 'ok' });
     expect(a.completed).toMatchObject({ status: 'completed' });
-    expect(recon.steps[1]!.skipped).toMatchObject({ gap: expect.stringContaining('depends on') });
+    expect(recon.steps[1]?.skipped?.gap).toContain('depends on');
   });
 
   it('surfaces the compensation summary from compensation.completed', () => {
@@ -88,11 +149,19 @@ describe('reconstructTask (scenario-4-shaped set)', () => {
       TASK,
       'acme',
       rowsOf([
-        ev({ event_type: 'task.cancel_requested', actor: { principal: 'svc:gateway' }, reason: { task_id: TASK }, details: { trigger: 'fleet_killswitch', reason: 'p1' } }),
+        ev({
+          event_type: 'task.cancel_requested',
+          actor: { principal: 'svc:gateway' },
+          reason: { task_id: TASK },
+          details: { trigger: 'fleet_killswitch', reason: 'p1' },
+        }),
       ]),
       false,
     );
-    expect(cancelled.cancellation).toMatchObject({ trigger: 'fleet_killswitch', actor: 'svc:gateway' });
+    expect(cancelled.cancellation).toMatchObject({
+      trigger: 'fleet_killswitch',
+      actor: 'svc:gateway',
+    });
   });
 
   it('carries the truncated flag through', () => {
@@ -112,31 +181,71 @@ describe('reconstructTask (scenario-4-shaped set)', () => {
       TASK,
       'acme',
       rowsOf([
-        ev({ event_type: 'task.submitted', actor: { principal: 'user:x' }, reason: { task_id: TASK }, action: { name: 't' } }),
+        ev({
+          event_type: 'task.submitted',
+          actor: { principal: 'user:x' },
+          reason: { task_id: TASK },
+          action: { name: 't' },
+        }),
         ev({ event_type: 'task.planned', reason: { task_id: TASK }, action: { name: 't' } }),
         // dispatched with no agent/route/policy details, and NO step_id (task-level).
         ev({ event_type: 'step.dispatched', reason: { task_id: TASK }, details: {} }),
         // a fully-detailed dispatched carrying a step but no policy.
-        ev({ event_type: 'step.dispatched', reason: { task_id: TASK, step_id: STEP_A }, details: { capability: 'x.y' } }),
+        ev({
+          event_type: 'step.dispatched',
+          reason: { task_id: TASK, step_id: STEP_A },
+          details: { capability: 'x.y' },
+        }),
         // an approval.denied names its approver; a token with no audience/scope.
-        ev({ event_type: 'approval.denied', actor: { principal: 'user:boss' }, reason: { task_id: TASK, step_id: STEP_A }, details: {} }),
-        ev({ event_type: 'token.brokered', reason: { task_id: TASK, step_id: STEP_A }, details: {} }),
+        ev({
+          event_type: 'approval.denied',
+          actor: { principal: 'user:boss' },
+          reason: { task_id: TASK, step_id: STEP_A },
+          details: {},
+        }),
+        ev({
+          event_type: 'token.brokered',
+          reason: { task_id: TASK, step_id: STEP_A },
+          details: {},
+        }),
         // a tool refusal carries the refusal marker.
-        ev({ event_type: 'tool.called', reason: { task_id: TASK, step_id: STEP_A }, details: { server: 's', tool: 't', outcome: 'error:upstream_auth', refusal: 'killswitch' } }),
+        ev({
+          event_type: 'tool.called',
+          reason: { task_id: TASK, step_id: STEP_A },
+          details: {
+            server: 's',
+            tool: 't',
+            outcome: 'error:upstream_auth',
+            refusal: 'killswitch',
+          },
+        }),
         // compensation.started before completed → in_progress summary.
-        ev({ event_type: 'compensation.started', reason: { task_id: TASK }, details: { stack_depth: 1 } }),
+        ev({
+          event_type: 'compensation.started',
+          reason: { task_id: TASK },
+          details: { stack_depth: 1 },
+        }),
         // an unmodelled event type is ignored except for the timeline.
-        ev({ event_type: 'model.invoked', reason: { task_id: TASK, step_id: STEP_A }, details: {} }),
-        ev({ event_type: 'task.completed', reason: { task_id: TASK }, details: { status: 'failed' } }),
+        ev({
+          event_type: 'model.invoked',
+          reason: { task_id: TASK, step_id: STEP_A },
+          details: {},
+        }),
+        ev({
+          event_type: 'task.completed',
+          reason: { task_id: TASK },
+          details: { status: 'failed' },
+        }),
       ]),
       false,
     );
     expect(sparse.submitted).toMatchObject({ actor: 'user:x' });
-    expect(sparse.plan).toMatchObject({ at: expect.any(String) });
-    const a = sparse.steps.find((s) => s.step_id === STEP_A)!;
-    expect(a.approval).toMatchObject({ status: 'denied', approver: 'user:boss' });
-    expect(a.tokens[0]).toEqual({ at: expect.any(String) });
-    expect(a.tool_calls[0]).toMatchObject({ refusal: 'killswitch' });
+    expect(typeof sparse.plan?.at).toBe('string');
+    const a = sparse.steps.find((s) => s.step_id === STEP_A);
+    expect(a).toBeDefined();
+    expect(a!.approval).toMatchObject({ status: 'denied', approver: 'user:boss' });
+    expect(Object.keys(a!.tokens[0] ?? {})).toEqual(['at']);
+    expect(a!.tool_calls[0]).toMatchObject({ refusal: 'killswitch' });
     expect(sparse.compensation).toMatchObject({ in_progress: { stack_depth: 1 } });
     // A dispatched with no step_id did not create a phantom step.
     expect(sparse.steps.map((s) => s.step_id)).toEqual([STEP_A]);

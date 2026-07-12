@@ -41,7 +41,9 @@ const tokenRes = await fetch(`${tokenUrl}/v1/token`, {
   }),
 });
 if (!tokenRes.ok) {
-  console.error(`token service refused audit credentials: ${tokenRes.status} ${await tokenRes.text()}`);
+  console.error(
+    `token service refused audit credentials: ${tokenRes.status} ${await tokenRes.text()}`,
+  );
   process.exit(1);
 }
 const { access_token } = await tokenRes.json();
@@ -69,21 +71,33 @@ if (asJson) {
 console.log(`Task ${recon.task_id} (tenant ${recon.tenant})`);
 console.log(
   `  integrity: ${recon.integrity.records} records` +
-    (recon.integrity.span ? `, chain_seq ${recon.integrity.span.from_seq}..${recon.integrity.span.to_seq}` : '') +
+    (recon.integrity.span
+      ? `, chain_seq ${recon.integrity.span.from_seq}..${recon.integrity.span.to_seq}`
+      : '') +
     (recon.truncated ? ' (TRUNCATED)' : ''),
 );
-if (recon.submitted) console.log(`  submitted by ${recon.submitted.actor} at ${recon.submitted.at}`);
-if (recon.plan) console.log(`  plan: ${recon.plan.planner ?? 'unknown'} (${recon.plan.plan_digest ?? 'no digest'})`);
+if (recon.submitted)
+  console.log(`  submitted by ${recon.submitted.actor} at ${recon.submitted.at}`);
+if (recon.plan)
+  console.log(
+    `  plan: ${recon.plan.planner ?? 'unknown'} (${recon.plan.plan_digest ?? 'no digest'})`,
+  );
 for (const step of recon.steps ?? []) {
   const status = step.completed?.status ?? (step.skipped ? 'skipped' : 'pending');
   const agent = step.agent ? `${step.agent.id ?? '?'}@${step.agent.version ?? '?'}` : '?';
   console.log(`  step ${step.capability ?? step.step_id} → ${agent}: ${status}`);
-  if (step.approval) console.log(`    approval: ${step.approval.status} by ${step.approval.approver ?? '—'}`);
+  if (step.approval)
+    console.log(`    approval: ${step.approval.status} by ${step.approval.approver ?? '—'}`);
   for (const call of step.tool_calls ?? []) {
-    console.log(`    tool: ${call.server}/${call.tool} → ${call.outcome}${call.refusal ? ` (${call.refusal})` : ''}`);
+    console.log(
+      `    tool: ${call.server}/${call.tool} → ${call.outcome}${call.refusal ? ` (${call.refusal})` : ''}`,
+    );
   }
   if (step.skipped) console.log(`    skipped: ${step.skipped.gap ?? ''}`);
 }
 if (recon.compensation) console.log(`  compensation: ${JSON.stringify(recon.compensation)}`);
-if (recon.cancellation) console.log(`  cancelled: trigger=${recon.cancellation.trigger ?? '—'} by ${recon.cancellation.actor}`);
+if (recon.cancellation)
+  console.log(
+    `  cancelled: trigger=${recon.cancellation.trigger ?? '—'} by ${recon.cancellation.actor}`,
+  );
 if (recon.outcome) console.log(`  outcome: ${recon.outcome.status}`);

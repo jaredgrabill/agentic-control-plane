@@ -31,8 +31,7 @@ import type { KillSwitchState, Logger } from '@acp/service-kit';
 const FLEET_KEY = 'killswitch.fleet';
 export const FLEET_SWEEP_INTERVAL_MS = 15_000;
 /** The standard-visibility query selecting the workflows a fleet halt cancels. */
-export const RUNNING_TASKS_QUERY =
-  "WorkflowType = 'TaskWorkflow' AND ExecutionStatus = 'Running'";
+export const RUNNING_TASKS_QUERY = "WorkflowType = 'TaskWorkflow' AND ExecutionStatus = 'Running'";
 
 /** The kill-switch read side the canceller subscribes to (service-kit KillSwitchWatcher). */
 export interface FleetWatcher {
@@ -127,7 +126,7 @@ export class FleetCanceller {
       void this.sweepOnce();
     }, this.intervalMs);
     // Do not keep the process alive solely for the sweep timer.
-    this.timer.unref?.();
+    this.timer.unref();
   }
 
   private stopSweeping(): void {
@@ -176,7 +175,10 @@ export class FleetCanceller {
         }
       }
     } catch (err) {
-      this.deps.logger.error({ err }, 'fleet auto-cancel sweep listing failed — retrying next tick');
+      this.deps.logger.error(
+        { err },
+        'fleet auto-cancel sweep listing failed — retrying next tick',
+      );
     }
   }
 
