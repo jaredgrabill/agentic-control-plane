@@ -32,6 +32,7 @@ import { ErrorCode, McpError } from '@modelcontextprotocol/sdk/types.js';
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js';
 import { CapabilityError, ErrorClass } from '@acp/agent-sdk';
 import { parseToolEnvelope } from './envelope.js';
+import type { ToolTokenProvider } from './exchanger.js';
 import type { CallOptions, ToolClient, ToolResponse } from './types.js';
 
 /**
@@ -50,10 +51,21 @@ const REQUEST_TIMEOUT_CODE: number = ErrorCode.RequestTimeout;
 export class McpToolClient implements ToolClient {
   private readonly servers: Record<string, ServerBinding>;
   private readonly timeoutMs: number;
+  /**
+   * When set (Phase 3 item 0c), the step's delegated token is exchanged for
+   * an `acp:tools` token before it becomes the gateway Authorization bearer.
+   * Unset agents send the delegated token verbatim (dev/test seam).
+   */
+  private readonly tokenProvider: ToolTokenProvider | undefined;
 
-  constructor(options: { servers: Record<string, ServerBinding>; timeoutMs?: number }) {
+  constructor(options: {
+    servers: Record<string, ServerBinding>;
+    timeoutMs?: number;
+    tokenProvider?: ToolTokenProvider;
+  }) {
     this.servers = options.servers;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.tokenProvider = options.tokenProvider;
   }
 
   /**
@@ -79,13 +91,22 @@ export class McpToolClient implements ToolClient {
       );
     }
     const client = new Client({ name: 'acp-tool-client', version: '0.1.0' });
+    // Exchange the delegated token for an acp:tools token only for URL
+    // bindings — transport-factory bindings (hermetic in-memory tests)
+    // ignore headers entirely, so there is no bearer to bind and no reason
+    // to spend a round trip. The exchanged token is the ONLY token that ever
+    // reaches the gateway; the raw delegated token never leaves this call.
+    const effectiveOptions =
+      'url' in binding && this.tokenProvider !== undefined && options?.delegatedToken !== undefined
+        ? { ...options, delegatedToken: await this.tokenProvider(options.delegatedToken) }
+        : options;
     const transport: Transport =
       'url' in binding
         ? // The SDK types sessionId as `string | undefined` where Transport
           // declares `sessionId?: string`; the cast bridges the
           // exactOptionalPropertyTypes mismatch, nothing more.
           (new StreamableHTTPClientTransport(new URL(binding.url), {
-            requestInit: { headers: callHeaders(binding.headers, options) },
+            requestInit: { headers: callHeaders(binding.headers, effectiveOptions) },
           }) as Transport)
         : binding.transport();
     try {

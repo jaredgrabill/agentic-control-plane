@@ -4,6 +4,12 @@
  */
 
 export { fail, ok, parseToolEnvelope, toCallToolResult } from './envelope.js';
+export {
+  TOOLS_AUDIENCE,
+  toolTokenProvider,
+  type ToolTokenProvider,
+  type ToolTokenProviderOptions,
+} from './exchanger.js';
 export { FakeToolClient, type FakeToolHandler } from './fake.js';
 export { McpToolClient, type ServerBinding } from './mcp-client.js';
 export { noRetriever } from './no-retriever.js';

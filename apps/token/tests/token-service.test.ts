@@ -317,6 +317,101 @@ describe('RFC 8693 exchange', () => {
   });
 });
 
+describe('governance-claim exchange propagation (SPRINT cross-item contract)', () => {
+  // A broker-delegated token carrying `brokered` grounds, delegated to
+  // agent:something@0.1.0 — the shape an agent holds mid-task after 0c.
+  async function brokeredDelegatedToken(): Promise<string> {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/delegate',
+      headers: { authorization: basic('svc-orchestrator', 'orch-secret') },
+      payload: {
+        grant_type: BROKER_DELEGATION_GRANT,
+        subject: {
+          sub: 'user:jane.doe',
+          tenant: 'acme',
+          roles: ['tenant-user'],
+          scopes: ['knowledge:search:read', 'cloud:cost:read'],
+        },
+        audience: 'acp:agent:something',
+        scope: 'knowledge:search:read',
+        actor: 'agent:something@0.1.0',
+        grounds: {
+          task_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40',
+          subject_jti: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f41',
+          verified_at: new Date().toISOString(),
+        },
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    return res.json<{ access_token: string }>().access_token;
+  }
+
+  async function exchangeAs(
+    id: string,
+    secret: string,
+    payload: Record<string, string>,
+  ): Promise<{ statusCode: number; body: { access_token: string } }> {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/token/exchange',
+      headers: { authorization: basic(id, secret) },
+      payload: { grant_type: TOKEN_EXCHANGE_GRANT, ...payload },
+    });
+    return { statusCode: res.statusCode, body: res.json<{ access_token: string }>() };
+  }
+
+  it('propagates brokered verbatim across the agent per-call acp:tools exchange (same actor)', async () => {
+    const delegated = await brokeredDelegatedToken();
+    // The agent narrows its own token toward acp:tools with its own client:
+    // actor defaults to agent:something@0.1.0, which equals subject.act.sub —
+    // the idempotent same-actor branch — so the brokered grounds ride through.
+    const res = await exchangeAs('agent-something', 'agent-secret', {
+      subject_token: delegated,
+      audience: 'acp:tools',
+    });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token);
+    expect(claims.aud).toBe('acp:tools');
+    const brokered = claims.brokered as { task_id: string; verified_at: string } | undefined;
+    expect(brokered?.task_id).toBe('0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f40');
+    // Chain preserved verbatim — no duplicate agent link.
+    expect(delegationChain(claims).map((l) => l.sub)).toEqual([
+      'user:jane.doe',
+      'svc:orchestrator',
+      'agent:something@0.1.0',
+    ]);
+  });
+
+  it('DROPS brokered when a platform client appends a NEW actor (not same-actor)', async () => {
+    const delegated = await brokeredDelegatedToken();
+    // A platform-role client re-exchanges naming a different actor — the
+    // task grounds must NOT be inherited by an actor the broker never bound.
+    const res = await exchangeAs('svc-orchestrator', 'orch-secret', {
+      subject_token: delegated,
+      audience: 'acp:tools',
+      actor: 'agent:someone-else@0.1.0',
+    });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token);
+    expect(claims.brokered).toBeUndefined();
+  });
+
+  it('DROPS brokered on a chain-free rescope (actor === subject, no chain)', async () => {
+    // A plain user token (no act, no brokered) rescoped toward acp:tools:
+    // nothing to propagate, and no brokered fabricated.
+    const userToken = await issueUserToken('knowledge:search:read');
+    const res = await exchangeAs('cli-jane', 'jane-secret', {
+      subject_token: userToken,
+      audience: 'acp:tools',
+      actor: 'user:jane.doe',
+    });
+    expect(res.statusCode).toBe(200);
+    const claims = decodeJwt(res.body.access_token);
+    expect(claims.brokered).toBeUndefined();
+  });
+});
+
 describe('ADR-0007 broker delegation', () => {
   const SNAPSHOT = {
     sub: 'user:jane.doe',

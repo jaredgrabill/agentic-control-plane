@@ -13,6 +13,19 @@ export interface ActClaim {
   act?: ActClaim;
 }
 
+/**
+ * Broker-minted grounds tying a token back to the task intake that
+ * authorized it (ADR-0007). Only `TokenIssuer.delegate()` sets it; the
+ * exchange path propagates it verbatim across same-actor narrowing
+ * exchanges (SPRINT cross-item contract, item-3 D2) so an agent's per-call
+ * acp:tools token still carries the task binding downstream PEPs check.
+ */
+export interface BrokeredClaim {
+  task_id: string;
+  subject_jti?: string;
+  verified_at: string;
+}
+
 export interface PlatformClaims extends JWTPayload {
   sub: string;
   tenant: string;
@@ -20,6 +33,8 @@ export interface PlatformClaims extends JWTPayload {
   /** Space-delimited per RFC 8693 / OAuth. */
   scope: string;
   act?: ActClaim;
+  /** Present only on broker-delegated tokens and their same-actor exchanges. */
+  brokered?: BrokeredClaim;
 }
 
 export class AuthError extends Error {

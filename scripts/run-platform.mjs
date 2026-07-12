@@ -98,7 +98,10 @@ const services = [
     { ACP_MOCK_FORGE_PORT: '7302', ACP_MOCK_FIXTURES: join(repoRoot, 'fixtures', 'acme-corp') },
   ],
   // Item 5: agent tool calls traverse the Tool Gateway PEP; the mocks stay
-  // reachable on 7301/7302 as the gateway's upstreams only.
+  // reachable on 7301/7302 as the gateway's upstreams only. Item 0c: each
+  // agent holds its OWN token-service client so it can exchange the step's
+  // delegated token for the gateway's acp:tools audience (a second,
+  // independent credential — a stolen step token opens nothing).
   [
     'cloud-agent',
     'node',
@@ -106,6 +109,8 @@ const services = [
     {
       ACP_TOOL_SERVER_CLOUD_ESTATE_URL: 'http://localhost:7106/mcp/cloud-estate',
       ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+      ACP_AGENT_CLIENT_ID: 'agent-cloud-agent',
+      ACP_AGENT_CLIENT_SECRET: 'agent-cloud-dev-secret',
     },
   ],
   [
@@ -115,6 +120,8 @@ const services = [
     {
       ACP_TOOL_SERVER_CODE_FORGE_URL: 'http://localhost:7106/mcp/code-forge',
       ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+      ACP_AGENT_CLIENT_ID: 'agent-code-agent',
+      ACP_AGENT_CLIENT_SECRET: 'agent-code-dev-secret',
     },
   ],
 ];

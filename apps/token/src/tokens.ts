@@ -143,12 +143,26 @@ export class TokenIssuer {
     // plain user token toward acp:knowledge), no delegation happened — the
     // exchange must not fabricate an act link, or downstream PEPs would
     // record a bogus [user, user] chain.
-    const act: ActClaim | undefined =
-      subject.act?.sub === actor
-        ? subject.act
-        : actor === subject.sub && subject.act === undefined
-          ? undefined
-          : { sub: actor, ...(subject.act !== undefined ? { act: subject.act } : {}) };
+    const sameActor = subject.act?.sub === actor;
+    const act: ActClaim | undefined = sameActor
+      ? subject.act
+      : actor === subject.sub && subject.act === undefined
+        ? undefined
+        : { sub: actor, ...(subject.act !== undefined ? { act: subject.act } : {}) };
+
+    // Governance-claim exchange propagation (SPRINT cross-item contract,
+    // item-3 D2): broker-minted grounds ride VERBATIM only across same-actor
+    // narrowing exchanges — the existing idempotent-actor branch. This is
+    // what lets an agent's per-call acp:agent→acp:tools exchange (post-0c
+    // audience flip) still carry the brokered.task_id binding downstream
+    // PEPs check. Any actor-appending exchange or chain-free rescope DROPS
+    // it (a new actor must not inherit another actor's task grounds). The
+    // claim can only come from the verified subject token — the exchange
+    // endpoint accepts no body-supplied brokered claim — so there is no
+    // injection path. Item 3 formalizes the full claim list; 0c ships
+    // `brokered`, the one claim already minted (supersedes design-0c §4's
+    // "no brokered claim propagates").
+    const brokered = sameActor ? subject.brokered : undefined;
 
     return this.sign(
       {
@@ -158,6 +172,7 @@ export class TokenIssuer {
         roles: subject.roles,
         scope: scopes.join(' '),
         ...(act !== undefined ? { act } : {}),
+        ...(brokered !== undefined ? { brokered } : {}),
       },
       request.ttlSeconds ?? DEFAULT_TTL_SECONDS,
     );
