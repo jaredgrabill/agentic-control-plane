@@ -17,6 +17,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
 import type { AuditEvent } from '@acp/protocol';
+import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   AUDIT_URL,
@@ -32,6 +33,40 @@ import {
 const execFileAsync = promisify(execFile);
 let platform: ChildProcess | undefined;
 const candidateWorkers: ChildProcess[] = [];
+
+const DB_URL = process.env.ACP_DATABASE_URL ?? 'postgres://acp:acp-dev-password@localhost:5432/acp';
+let registryDb: pg.Pool | undefined;
+
+/**
+ * Restores the shared registry to this file's pre-run baseline: knowledge-agent
+ * 0.1.0 active, with the 0.2.0/0.3.0 candidate rows this file created removed.
+ * The full CI suite shares one postgres, so a promotion of 0.2.0 (and retirement
+ * of 0.1.0) here bleeds into every later file that expects 0.1.0 to be the active
+ * knowledge agent (exit-scenario, orchestrator-v1, …). Scoped to this one agent's
+ * rows — never a global truncate or `down -v`. lifecycle_state is not part of the
+ * card signature (signCard covers manifest/version/registeredAt), so rewriting it
+ * in the jsonb card is signature-safe. Tolerates the table not existing yet.
+ */
+async function restoreKnowledgeRegistryBaseline(): Promise<void> {
+  const db = (registryDb ??= new pg.Pool({ connectionString: DB_URL }));
+  try {
+    // Drop the promoted/candidate rows FIRST so restoring 0.1.0 to active cannot
+    // trip the one_active_version partial-unique index.
+    await db.query(
+      `DELETE FROM agent_versions WHERE agent_id = 'knowledge-agent' AND version IN ('0.2.0', '0.3.0')`,
+    );
+    await db.query(
+      `UPDATE agent_versions
+          SET state = 'active',
+              card = jsonb_set(card, '{lifecycle_state}', '"active"'),
+              updated_at = now()
+        WHERE agent_id = 'knowledge-agent' AND version = '0.1.0'`,
+    );
+  } catch (err) {
+    // 42P01 = undefined_table: the registry never created it, so nothing bled.
+    if ((err as { code?: string }).code !== '42P01') throw err;
+  }
+}
 
 /**
  * The project venv's python interpreter. uv lays the venv out per-OS —
@@ -350,6 +385,14 @@ afterAll(async () => {
   } catch {
     /* teardown is best-effort */
   }
+  // Restore the shared registry so this file's promotion of 0.2.0 does not bleed
+  // into later suite files that expect knowledge-agent 0.1.0 to be active.
+  try {
+    await restoreKnowledgeRegistryBaseline();
+  } catch {
+    /* teardown is best-effort */
+  }
+  await registryDb?.end();
 }, 120_000);
 
 describe('deployment controller v0 (DoD)', () => {
