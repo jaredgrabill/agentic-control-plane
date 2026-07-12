@@ -7,7 +7,7 @@ function configWith(entry: Partial<ToolServerEntry>): ToolServerConfig {
     id: 'cloud-estate',
     url: 'http://localhost:7301/mcp',
     auth: { mode: 'static-headers', headers: {} },
-    tools: { inventory_search: { scope: 'cloud:inventory:read' } },
+    tools: { inventory_search: { scope: 'cloud:inventory:read', risk: 'R0' } },
     rate_limit: { per_minute: 60, burst: 3 },
     timeout_ms: 15000,
     ...entry,
@@ -75,8 +75,8 @@ describe('TokenBucketLimiter', () => {
       configWith({
         rate_limit: { per_minute: 60, burst: 1 },
         tools: {
-          inventory_search: { scope: 'cloud:inventory:read' },
-          cost_report: { scope: 'cloud:cost:read' },
+          inventory_search: { scope: 'cloud:inventory:read', risk: 'R0' },
+          cost_report: { scope: 'cloud:cost:read', risk: 'R0' },
         },
       }),
       c.now,
@@ -95,8 +95,8 @@ describe('TokenBucketLimiter', () => {
         rate_limit: { per_minute: 60, burst: 10 },
         tool_rate_limits: { inventory_search: { per_minute: 60, burst: 1 } },
         tools: {
-          inventory_search: { scope: 'cloud:inventory:read' },
-          cost_report: { scope: 'cloud:cost:read' },
+          inventory_search: { scope: 'cloud:inventory:read', risk: 'R0' },
+          cost_report: { scope: 'cloud:cost:read', risk: 'R0' },
         },
       }),
       c.now,

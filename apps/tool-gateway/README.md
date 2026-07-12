@@ -8,11 +8,43 @@ and only the endpoint env var changes to
 `http://localhost:7106/mcp/cloud-estate`.
 
 Per call, in order: authN (delegated JWT) → kill switch → governed-tool
-lookup → Cedar → rate limit → input schema validation → credential
-brokering → forward → response validation → `tool.called` audit + OTel
-span. Every refusal after authN is a typed ToolEnvelope error inside an
-MCP result, so the `@acp/tool-client` error mapping fires unchanged;
-authN failures are HTTP 401.
+lookup → Cedar → **risk-class check** → rate limit → input schema
+validation → credential brokering → forward → response validation →
+`tool.called` audit + OTel span. Every refusal after authN is a typed
+ToolEnvelope error inside an MCP result, so the `@acp/tool-client` error
+mapping fires unchanged; authN failures are HTTP 401.
+
+## Risk-class enforcement (item 3)
+
+Every governed tool declares a `risk` class (R0..R3) in
+`tool-servers.json`; a tool with no risk is a config parse error. After
+Cedar allows, a **structural** check enforces (`core.ts` step 3.5,
+before the limiter so laundering probes cost no quota):
+
+- an **R3** tool is refused unconditionally (platform-wide disabled);
+- the executing capability's risk is read from the **signed `capability`
+  claim** the orchestrator brokered into the step token (never a header,
+  never self-declared — the token service rejects a body-supplied
+  capability, and the claim propagates only across the agent's same-actor
+  `acp:tools` exchange). A tool whose risk **exceeds** the capability risk
+  is refused — an R0/R1 step cannot launder an R2 write. A compensator
+  carries the compensator capability's own R2 risk and passes;
+- with **no capability context** (a direct user/service caller, or a token
+  that lost the claim across an actor change) every **R2+** tool is
+  refused — mutations flow only through the governed task path.
+
+This is defense-in-depth with the Cedar pair-policies (§`policies/`): the
+R2 tool permit binds on `context.approval`/`context.compensation`, and the
+structural check binds on the capability risk — either alone blocks an
+unauthorized write. Every refusal is audited `tool.called` `denied` with
+`details.refusal = "risk_class"` and the tool/capability risks.
+
+The Cedar context also carries `capability` (the executing name+risk,
+defaulting to R0) and `compensation` (active only when a compensation
+claim's brokered task matches this correlation). One consequence of the
+same-actor exchange propagation: a knowledge-mode per-call exchange also
+carries the claim into the `acp:knowledge` token — harmless, since that
+audience cannot open the tool gateway.
 
 ## Which tokens the gateway accepts
 

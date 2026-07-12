@@ -17,8 +17,8 @@ const SAMPLE = {
         },
       },
       tools: {
-        inventory_search: { scope: 'cloud:inventory:read' },
-        cost_report: { scope: 'cloud:cost:read' },
+        inventory_search: { scope: 'cloud:inventory:read', risk: 'R0' },
+        cost_report: { scope: 'cloud:cost:read', risk: 'R0' },
       },
       rate_limit: { per_minute: 60, burst: 20 },
       timeout_ms: 15000,
@@ -27,7 +27,7 @@ const SAMPLE = {
       id: 'knowledge',
       url: 'http://localhost:7105/mcp',
       auth: { mode: 'token-exchange', audience: 'acp:knowledge', scope: ['knowledge:search:read'] },
-      tools: { knowledge_search: { scope: 'knowledge:search:read' } },
+      tools: { knowledge_search: { scope: 'knowledge:search:read', risk: 'R0' } },
       rate_limit: { per_minute: 60, burst: 5 },
       tool_rate_limits: { knowledge_search: { per_minute: 30, burst: 5 } },
     },
@@ -46,7 +46,7 @@ describe('parseToolServerConfig', () => {
       mode: 'static-headers',
       headers: { 'x-acp-broker-credential': 'cloud-estate-dev-broker' },
     });
-    expect(cloud.tools.inventory_search).toEqual({ scope: 'cloud:inventory:read' });
+    expect(cloud.tools.inventory_search).toEqual({ scope: 'cloud:inventory:read', risk: 'R0' });
     expect(cloud.timeout_ms).toBe(15000);
 
     const knowledge = config.servers.get('knowledge')!;
@@ -114,6 +114,24 @@ describe('parseToolServerConfig', () => {
         ).scope;
       },
       /needs a \{scope\}/,
+    ],
+    [
+      'tool without a risk class',
+      (s: typeof SAMPLE) => {
+        delete (
+          (s.servers[0]!.tools as Record<string, { risk?: string }>).inventory_search as {
+            risk?: string;
+          }
+        ).risk;
+      },
+      /needs a risk class of R0, R1, R2, or R3/,
+    ],
+    [
+      'tool with an invalid risk class',
+      (s: typeof SAMPLE) => {
+        (s.servers[0]!.tools as Record<string, { risk?: string }>).inventory_search!.risk = 'R9';
+      },
+      /needs a risk class of R0, R1, R2, or R3/,
     ],
     [
       'bad rate limit',
