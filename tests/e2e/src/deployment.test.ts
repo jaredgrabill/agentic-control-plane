@@ -33,6 +33,17 @@ const execFileAsync = promisify(execFile);
 let platform: ChildProcess | undefined;
 const candidateWorkers: ChildProcess[] = [];
 
+/**
+ * The project venv's python interpreter. uv lays the venv out per-OS —
+ * Scripts/python.exe on Windows, bin/python everywhere else — so we cannot
+ * hardcode one layout: a Windows-only path spawns ENOENT on the Linux CI
+ * runner, which failed beforeAll and skipped the whole suite.
+ */
+const venvPython =
+  process.platform === 'win32'
+    ? join(repoRoot, 'python', '.venv', 'Scripts', 'python.exe')
+    : join(repoRoot, 'python', '.venv', 'bin', 'python');
+
 async function getToken(clientId: string, secret: string, audience: string, scope?: string) {
   const res = await fetch(`${TOKEN_URL}/v1/token`, {
     method: 'POST',
@@ -79,7 +90,7 @@ async function registerVersion(
 async function recordBaseline(version: string, writeToken: string): Promise<void> {
   const out = join(mkdtempSync(join(tmpdir(), 'acp-baseline-')), `baseline-${version}.json`);
   await execFileAsync(
-    join(repoRoot, 'python', '.venv', 'Scripts', 'python.exe'),
+    venvPython,
     ['-m', 'knowledge_agent.eval_report', '--out', out, '--agent-version', version],
     { cwd: join(repoRoot, 'python', 'agents', 'knowledge', 'src'), env: { ...process.env } },
   );
@@ -117,25 +128,21 @@ function spawnCandidate(
   secret: string,
   extraEnv: Record<string, string> = {},
 ): ChildProcess {
-  const child = spawn(
-    join(repoRoot, 'python', '.venv', 'Scripts', 'python.exe'),
-    ['-m', 'knowledge_agent.main'],
-    {
-      cwd: join(repoRoot, 'python', 'agents', 'knowledge', 'src'),
-      stdio: ['ignore', 'inherit', 'inherit'],
-      env: {
-        ...process.env,
-        ACP_AGENT_VERSION: version,
-        ACP_AGENT_CLIENT_ID: clientId,
-        ACP_AGENT_CLIENT_SECRET: secret,
-        ACP_TOKEN_URL: TOKEN_URL,
-        ACP_NATS_URL: process.env.ACP_NATS_URL ?? 'nats://localhost:4222',
-        ACP_TEMPORAL_ADDRESS: process.env.ACP_TEMPORAL_ADDRESS ?? 'localhost:7233',
-        ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
-        ...extraEnv,
-      },
+  const child = spawn(venvPython, ['-m', 'knowledge_agent.main'], {
+    cwd: join(repoRoot, 'python', 'agents', 'knowledge', 'src'),
+    stdio: ['ignore', 'inherit', 'inherit'],
+    env: {
+      ...process.env,
+      ACP_AGENT_VERSION: version,
+      ACP_AGENT_CLIENT_ID: clientId,
+      ACP_AGENT_CLIENT_SECRET: secret,
+      ACP_TOKEN_URL: TOKEN_URL,
+      ACP_NATS_URL: process.env.ACP_NATS_URL ?? 'nats://localhost:4222',
+      ACP_TEMPORAL_ADDRESS: process.env.ACP_TEMPORAL_ADDRESS ?? 'localhost:7233',
+      ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+      ...extraEnv,
     },
-  );
+  });
   candidateWorkers.push(child);
   return child;
 }
