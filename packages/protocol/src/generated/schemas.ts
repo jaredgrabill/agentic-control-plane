@@ -436,6 +436,7 @@ export const auditEventSchema = {
         "corpus.mutation",
         "retrieval.served",
         "tool.called",
+        "model.invoked",
         "killswitch.activated",
         "killswitch.cleared"
       ]
