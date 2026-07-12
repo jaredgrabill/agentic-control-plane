@@ -68,6 +68,18 @@ export async function startApprovalAgent(): Promise<RunningAgent> {
       ),
     );
   });
+  // Sleeps then fails — the kill-switch-audit slice uses the sleep window to flip
+  // a risk-class kill switch after the preceding write completed, so the unwind
+  // runs under an active R2 flag (exemption matrix).
+  agent.capability('gov.test_slow_fail', async (_ctx: unknown, input: Record<string, unknown>) => {
+    calls.push({ capability: 'gov.test_slow_fail', input });
+    const sleepMs = typeof input.sleep_ms === 'number' ? input.sleep_ms : 6000;
+    await new Promise((r) => setTimeout(r, sleepMs));
+    throw new CapabilityError(
+      ErrorClass.Permanent,
+      'gov.test_slow_fail always fails after sleeping (compensation trigger)',
+    );
+  });
 
   const connection = await NativeConnection.connect({
     address: process.env.ACP_TEMPORAL_ADDRESS ?? 'localhost:7233',
