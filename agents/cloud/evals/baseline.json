@@ -8,9 +8,9 @@
     "abstention_accuracy": 1
   },
   "suite": {
-    "digest": "sha256:956da26b894595b599934fdcc0d29927c093dd1c99fc3553a4c77c044052d139",
-    "case_count": 8
+    "digest": "sha256:f340a86eb2f7c9eae351ad3ecd9a29f36d1c5b77cca823e456a26fa5bfde1d00",
+    "case_count": 10
   },
   "harness": "acp-agent-sdk-ts@0.1.0",
-  "recorded_at": "2026-07-11T18:09:02.071Z"
+  "recorded_at": "2026-07-12T00:00:00.000Z"
 }

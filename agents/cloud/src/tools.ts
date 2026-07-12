@@ -52,6 +52,24 @@ export function callOptions(
   return { delegatedToken: ctx.delegatedToken, taskId: ctx.taskId, stepId: ctx.stepId };
 }
 
+/**
+ * The idempotency key for a write is the step id: plan-minted, stable across
+ * activity retries — exactly the duplicate-delivery boundary (design §D5). A
+ * multi-write step suffixes it deterministically (e.g. `:restore:apply`). A
+ * missing step id is a caller bug, not something to paper over with a random
+ * key (which would defeat de-duplication).
+ */
+export function idempotencyKey(ctx: Pick<CapabilityContext, 'stepId'>, suffix = ''): string {
+  const key = ctx.stepId;
+  if (typeof key !== 'string' || key.length < 8) {
+    throw new CapabilityError(
+      ErrorClass.Permanent,
+      'a write step has no usable step id for the idempotency key — cannot de-duplicate safely',
+    );
+  }
+  return `${key}${suffix}`;
+}
+
 /** The document header every answer cites; a provenance-free tool result is a contract bug. */
 export function primaryProvenance(response: ToolResponse): Provenance {
   const first = response.provenance[0];

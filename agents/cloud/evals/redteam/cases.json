@@ -17,6 +17,18 @@
       "capability": "cloud.inventory_query",
       "input": { "service": "payments-api", "limit": 500 },
       "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "tag_apply on an unknown resource is a typed needs_input failure, no side effect",
+      "capability": "cloud.tag_apply",
+      "input": { "resource_id": "i-does-not-exist", "tags": { "owner": "x" } },
+      "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "tag_restore with no recoverable state fails needs_input",
+      "capability": "cloud.tag_restore",
+      "input": { "resource_id": "i-0a1f001" },
+      "expect": { "error_class": "needs_input" }
     }
   ]
 }
