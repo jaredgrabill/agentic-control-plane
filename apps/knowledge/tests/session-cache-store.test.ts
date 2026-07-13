@@ -1,10 +1,12 @@
 import { createLogger } from '@acp/service-kit';
 import { describe, expect, it } from 'vitest';
 import {
+  SessionCacheControl,
   SessionContextCache,
   validateEntry,
   type SessionCacheEntry,
   type SessionCacheKv,
+  type SessionCachePurgeKv,
 } from '../src/session-cache.js';
 
 const logger = createLogger('session-cache-store-test');
@@ -43,7 +45,12 @@ function entry(overrides: Partial<SessionCacheEntry> = {}): SessionCacheEntry {
       {
         content: 'A change freeze is in effect.',
         score: 0.5,
-        citation: { doc_id: 'policy/cm', version: '3.2.0', lineage_id: 'lin-1', snippet: 'A change freeze' },
+        citation: {
+          doc_id: 'policy/cm',
+          version: '3.2.0',
+          lineage_id: 'lin-1',
+          snippet: 'A change freeze',
+        },
       },
     ],
     sources: ['policy-docs'],
@@ -107,7 +114,11 @@ describe('SessionContextCache store', () => {
     expect(kv.store.has('k')).toBe(false);
     // A throwing delete must not surface on the hot path.
     const throwing = new SessionContextCache(
-      { get: kv.get.bind(kv), put: kv.put.bind(kv), delete: () => Promise.reject(new Error('kv down')) },
+      {
+        get: kv.get.bind(kv),
+        put: kv.put.bind(kv),
+        delete: () => Promise.reject(new Error('kv down')),
+      },
       262_144,
       logger,
     );
@@ -136,7 +147,9 @@ describe('validateEntry', () => {
     const expiresAt = Math.min(now + ttlMs, tokenExpSec * 1000);
     expect(expiresAt).toBe(1_010_000);
     // At token expiry the entry is already a miss.
-    expect(validateEntry(entry({ expires_at: expiresAt }), expected, genOk, 1_010_000)).toMatchObject({
+    expect(
+      validateEntry(entry({ expires_at: expiresAt }), expected, genOk, 1_010_000),
+    ).toMatchObject({
       ok: false,
       reason: 'expired',
     });
@@ -147,10 +160,14 @@ describe('validateEntry', () => {
     expect(validateEntry(entry({ tenant: 'globex' }), expected, genOk, now)).toMatchObject({
       reason: 'tenant_mismatch',
     });
-    expect(validateEntry(entry({ perm_hash: 'x'.repeat(64) }), expected, genOk, now)).toMatchObject({
-      reason: 'perm_mismatch',
-    });
-    expect(validateEntry(entry({ query_hash: 'x'.repeat(64) }), expected, genOk, now)).toMatchObject({
+    expect(validateEntry(entry({ perm_hash: 'x'.repeat(64) }), expected, genOk, now)).toMatchObject(
+      {
+        reason: 'perm_mismatch',
+      },
+    );
+    expect(
+      validateEntry(entry({ query_hash: 'x'.repeat(64) }), expected, genOk, now),
+    ).toMatchObject({
       reason: 'query_mismatch',
     });
   });
@@ -164,5 +181,44 @@ describe('validateEntry', () => {
   it('treats a wiped generation view (source now unknown → 0) as stale, not fresh', () => {
     const wiped = (): string => '0';
     expect(validateEntry(entry(), expected, wiped, Date.now())).toMatchObject({ reason: 'stale' });
+  });
+});
+
+describe('SessionCacheControl.purgeTenant', () => {
+  class PurgeKv implements SessionCachePurgeKv {
+    readonly store = new Set<string>();
+    readonly purged: string[] = [];
+    keys(filter?: string | string[]): Promise<AsyncIterable<string>> {
+      const f = String(filter).replace('.>', '.');
+      const matches = [...this.store].filter((k) => k.startsWith(f));
+      return Promise.resolve(
+        (async function* () {
+          await Promise.resolve();
+          for (const k of matches) yield k;
+        })(),
+      );
+    }
+    purge(key: string): Promise<void> {
+      this.purged.push(key);
+      this.store.delete(key);
+      return Promise.resolve();
+    }
+  }
+
+  it('purges only the tenant entry keys, not generations or other tenants', async () => {
+    const kv = new PurgeKv();
+    kv.store.add('acme.aaa.bbb');
+    kv.store.add('acme.ccc.ddd');
+    kv.store.add('globex.eee.fff');
+    kv.store.add('gen.acme.policy-docs');
+    const control = new SessionCacheControl(kv);
+    const count = await control.purgeTenant('acme');
+    expect(count).toBe(2);
+    expect(kv.store.has('globex.eee.fff')).toBe(true);
+    expect(kv.store.has('gen.acme.policy-docs')).toBe(true);
+  });
+
+  it('rejects a KV-illegal tenant', async () => {
+    await expect(new SessionCacheControl(new PurgeKv()).purgeTenant('acme.evil')).rejects.toThrow();
   });
 });

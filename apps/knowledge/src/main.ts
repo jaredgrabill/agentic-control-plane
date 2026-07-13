@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import {
   AuditPublisher,
   JwtVerifier,
+  KillSwitchWatcher,
   connectBus,
   createLogger,
   ensureAuditStream,
@@ -21,7 +22,10 @@ import { FixtureConnector } from './connector.js';
 import { HashEmbedder } from './embedding.js';
 import { createIngestionActivities } from './ingestion-activities.js';
 import type { SourceIngestionResult } from './ingestion-workflows.js';
-import { SearchService, type PolicyDecision } from './search.js';
+import { SearchService, type PolicyDecision, type SearchDeps } from './search.js';
+import { SessionCacheGenerations } from './session-cache-generations.js';
+import { runSessionCacheInvalidator } from './session-cache-invalidator.js';
+import { SessionContextCache, ensureSessionCacheBucket } from './session-cache.js';
 import { PgKnowledgeStore } from './store.js';
 
 const logger = createLogger('knowledge');
@@ -59,6 +63,37 @@ const tokenUrl = env('ACP_TOKEN_URL', 'http://localhost:7101');
 const clientId = env('ACP_KNOWLEDGE_CLIENT_ID', 'svc-knowledge');
 const clientSecret = env('ACP_KNOWLEDGE_CLIENT_SECRET', 'knowledge-dev-secret');
 
+// Session context cache (default OFF). When enabled: a MEMORY-storage KV
+// bucket, a generation watcher + durable lineage-invalidation consumer, and a
+// kill-switch watcher so a fleet/tenant halt or principal denial bypasses the
+// cache. Authorization is never cached — SearchService still verifies + Cedar-
+// gates every call and emits retrieval.served on a hit.
+const sessionCacheEnabled = env('ACP_SESSION_CACHE_ENABLED', 'false') === 'true';
+let sessionCacheDeps: Pick<SearchDeps, 'cache' | 'gens' | 'killSwitch' | 'cacheTtlMs'> = {};
+let sessionCacheGenerations: SessionCacheGenerations | undefined;
+let sessionCacheKillSwitch: KillSwitchWatcher | undefined;
+if (sessionCacheEnabled) {
+  const maxValueBytes = envInt('ACP_SESSION_CACHE_MAX_VALUE_BYTES', 262_144);
+  const maxBytes = envInt('ACP_SESSION_CACHE_MAX_BYTES', 64 * 1024 * 1024);
+  const cacheTtlMs = envInt('ACP_SESSION_CACHE_TTL_MS', 60_000);
+  // Bucket ttl=0: the generation keys live in this bucket and must NOT expire,
+  // so per-entry expiry is enforced on read (min(now+ttl, token exp)) and the
+  // bucket is bounded by max_bytes, not a bucket-wide TTL.
+  const cacheKv = await ensureSessionCacheBucket(nc, { maxValueBytes, maxBytes, ttlMs: 0 });
+  sessionCacheGenerations = await SessionCacheGenerations.start(nc, logger);
+  sessionCacheKillSwitch = await KillSwitchWatcher.start(nc, logger);
+  void runSessionCacheInvalidator(nc, cacheKv, logger).catch((err: unknown) => {
+    logger.error({ err }, 'session cache invalidator stopped');
+  });
+  sessionCacheDeps = {
+    cache: new SessionContextCache(cacheKv, maxValueBytes, logger),
+    gens: sessionCacheGenerations,
+    killSwitch: sessionCacheKillSwitch,
+    cacheTtlMs,
+  };
+  logger.info({ maxValueBytes, maxBytes, cacheTtlMs }, 'session context cache enabled');
+}
+
 const search = new SearchService({
   verifier,
   store,
@@ -91,6 +126,7 @@ const search = new SearchService({
   },
   audit,
   logger,
+  ...sessionCacheDeps,
 });
 
 // Temporal: worker for ingestion activities + client to start ingestions.
@@ -153,6 +189,8 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
       await app.close();
       worker.shutdown();
       await workerDone;
+      sessionCacheGenerations?.stop();
+      sessionCacheKillSwitch?.stop();
       await nc.drain();
       await pool.end();
       await telemetry.shutdown();

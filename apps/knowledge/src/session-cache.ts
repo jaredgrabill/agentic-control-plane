@@ -144,7 +144,12 @@ export function deriveCacheKey(input: CacheKeyInput): CacheKey {
     embedding_model: input.embeddingModel,
   };
   const queryHashHex = hex(sha256Digest(stableStringify(query)));
-  return { key: `${perm.tenant}.${permHashHex}.${queryHashHex}`, tenant: perm.tenant, permHashHex, queryHashHex };
+  return {
+    key: `${perm.tenant}.${permHashHex}.${queryHashHex}`,
+    tenant: perm.tenant,
+    permHashHex,
+    queryHashHex,
+  };
 }
 
 /**
@@ -187,13 +192,7 @@ export interface SessionCacheKv {
 
 export type CachePutResult = 'ok' | 'too_large' | 'error';
 
-export type CacheRequestResult =
-  | 'hit'
-  | 'miss'
-  | 'stale'
-  | 'expired'
-  | 'disabled'
-  | 'bypassed';
+export type CacheRequestResult = 'hit' | 'miss' | 'stale' | 'expired' | 'disabled' | 'bypassed';
 
 /**
  * Observability sink for the cache. Defined here (shared) so SearchService can
@@ -208,7 +207,11 @@ export interface SessionCacheMetrics {
 
 export type EntryValidation =
   | { ok: true }
-  | { ok: false; reason: 'expired' | 'tenant_mismatch' | 'perm_mismatch' | 'query_mismatch' | 'stale'; source_id?: string };
+  | {
+      ok: false;
+      reason: 'expired' | 'tenant_mismatch' | 'perm_mismatch' | 'query_mismatch' | 'stale';
+      source_id?: string;
+    };
 
 /**
  * Validates a fetched entry against the caller's freshly-derived key parts,
@@ -287,6 +290,35 @@ export class SessionContextCache {
     } catch (err) {
       this.logger.warn({ err }, 'session cache evict failed (harmless — entry ages out via TTL)');
     }
+  }
+}
+
+/** The narrow KV surface the force-purge admin path needs. The real KV satisfies it. */
+export interface SessionCachePurgeKv {
+  keys(filter?: string | string[]): Promise<AsyncIterable<string>>;
+  purge(key: string): Promise<void>;
+}
+
+/**
+ * Operator force-purge for revoked content. The kill-switch bypass already
+ * stops serving a halted tenant or denied principal immediately; this is the
+ * belt to that suspenders when content must be provably gone before TTL
+ * (hard-delete, crypto-shred, legal hold). It purges only the tenant's ENTRY
+ * keys (`<tenant>.>`), never the generation keys (`gen.>`), so the staleness
+ * view stays intact and every purged query simply re-fetches live.
+ */
+export class SessionCacheControl {
+  constructor(private readonly kv: SessionCachePurgeKv) {}
+
+  async purgeTenant(tenant: string): Promise<number> {
+    const prefix = assertTenantId(tenant);
+    const iter = await this.kv.keys(`${prefix}.>`);
+    let purged = 0;
+    for await (const key of iter) {
+      await this.kv.purge(key);
+      purged += 1;
+    }
+    return purged;
   }
 }
 
