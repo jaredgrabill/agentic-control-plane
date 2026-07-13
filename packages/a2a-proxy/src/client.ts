@@ -100,18 +100,22 @@ export class A2AClient {
   /** Sends one capability invocation and resolves at a terminal task state. */
   async send(request: A2ASendRequest): Promise<A2ATaskView> {
     const deadline = Date.now() + this.timeoutMs;
-    let task = await this.rpc('message/send', {
-      message: {
-        role: 'user',
-        messageId: randomUUID(),
-        parts: [{ kind: 'data', data: request.input }],
-        metadata: {
-          capability: request.capability,
-          task_id: request.taskId,
-          step_id: request.stepId,
+    let task = await this.rpc(
+      'message/send',
+      {
+        message: {
+          role: 'user',
+          messageId: randomUUID(),
+          parts: [{ kind: 'data', data: request.input }],
+          metadata: {
+            capability: request.capability,
+            task_id: request.taskId,
+            step_id: request.stepId,
+          },
         },
       },
-    });
+      deadline,
+    );
 
     while (!TERMINAL_STATES.has(stateOf(task))) {
       if (Date.now() > deadline) {
@@ -123,7 +127,7 @@ export class A2AClient {
         throw new A2ATransportError('remote returned a non-terminal task without an id to poll');
       }
       await this.sleep(this.pollIntervalMs);
-      task = await this.rpc('tasks/get', { id: task.id });
+      task = await this.rpc('tasks/get', { id: task.id }, deadline);
     }
 
     return {
@@ -133,7 +137,11 @@ export class A2AClient {
     };
   }
 
-  private async rpc(method: string, params: Record<string, unknown>): Promise<A2ATask> {
+  private async rpc(
+    method: string,
+    params: Record<string, unknown>,
+    deadline: number,
+  ): Promise<A2ATask> {
     let res: Response;
     try {
       res = await this.fetchImpl(this.opts.endpoint, {
@@ -141,6 +149,11 @@ export class A2AClient {
         // The remote is untrusted: refuse redirects rather than let it 3xx the
         // adapter (and its credential) to an attacker-chosen host.
         redirect: 'error',
+        // Bound the individual request too: timeoutMs was only checked BETWEEN
+        // polls, so a remote that accepted the connection and then never
+        // answered could hang past the deadline. The signal caps each fetch at
+        // the wall-clock remaining (min 1ms).
+        signal: AbortSignal.timeout(Math.max(1, deadline - Date.now())),
         headers: {
           'content-type': 'application/json',
           // The adapter's OWN remote credential — the only secret that ever
@@ -150,6 +163,13 @@ export class A2AClient {
         body: JSON.stringify({ jsonrpc: '2.0', id: randomUUID(), method, params }),
       });
     } catch (err) {
+      // An aborted fetch (AbortSignal.timeout fires a TimeoutError; a generic
+      // abort an AbortError) is a deadline breach, not an unreachable host.
+      if (err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')) {
+        throw new A2ATimeoutError(
+          `remote a2a request exceeded the ${this.timeoutMs}ms adapter deadline`,
+        );
+      }
       throw new A2ATransportError(
         `a2a remote unreachable: ${err instanceof Error ? err.message : String(err)}`,
       );

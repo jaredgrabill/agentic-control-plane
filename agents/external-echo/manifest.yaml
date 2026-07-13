@@ -5,8 +5,9 @@ description: >
   A governed proxy to a remote A2A agent. The orchestrator dispatches to it like
   any native agent; the adapter forwards the capability to a remote A2A endpoint
   using its OWN credential and never the platform's delegated token, treats the
-  remote reply as untrusted (schema-validated, provenance tagged external), and
-  maps an A2A input-required to a needs_input step outcome — never an approval.
+  remote reply as untrusted (schema-validated, remote citations emptied so
+  nothing remote is presented as a first-party source), and maps an A2A
+  input-required to a needs_input step outcome — never an approval.
   Proxy agents are R0/R1 only by convention: the adapter binds no tools and
   forwards no token, so a compromised remote has no system-of-record write path.
 capabilities:
@@ -14,7 +15,7 @@ capabilities:
     description: >
       Echo a prompt through the remote A2A agent and return its answer. A
       read-only (R0) round-trip: no persistent side effect on any platform
-      system of record, and the remote's citations are tagged external.
+      system of record, and the remote's citations are emptied on the way back.
     risk: R0
     input_schema:
       type: object

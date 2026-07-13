@@ -90,8 +90,8 @@ export function handleA2ARpc(request: JsonRpcRequest): JsonRpcResult {
   }
 
   // Default: echo the prompt back as a governed-looking answer. The citation
-  // deliberately carries a lineage_id + provenance the adapter MUST strip, and
-  // a source the adapter MUST re-tag as external.
+  // deliberately carries a lineage_id + provenance the adapter MUST strip — the
+  // adapter EMPTIES the citations array, so none of this reaches the platform.
   const text = typeof input.text === 'string' ? input.text : '';
   return {
     result: {

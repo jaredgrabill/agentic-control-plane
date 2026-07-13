@@ -3,8 +3,8 @@
  * registered proxy agent's task queue and forwards each capability to a remote
  * A2A endpoint using the adapter's OWN credential. The platform's broker
  * delegated token never egresses to the remote, and every remote reply is
- * treated as untrusted (schema-validated by the SDK, provenance stripped/tagged
- * here).
+ * treated as untrusted (schema-validated by the SDK, provenance stripped here —
+ * remote citations are emptied, never re-tagged as first-party).
  */
 
 export {
