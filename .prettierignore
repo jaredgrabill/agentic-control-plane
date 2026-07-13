@@ -6,6 +6,11 @@ python/
 site/
 pnpm-lock.yaml
 **/src/generated/
+# Helm charts are Go-templated YAML — not prettier-parseable; helm lint gates them.
+deploy/helm/
+# Generated API-freeze artifacts (scripts/schema-diff.mjs, scripts/api-report.mjs).
+packages/protocol/schema-baseline.json
+**/etc/*.api.md
 CHANGELOG.md
 docs/
 README.md
