@@ -10,6 +10,7 @@ import {
   envInt,
   initTelemetry,
 } from '@acp/service-kit';
+import { RegistryA2ASource } from './a2a.js';
 import { buildGatewayApp } from './app.js';
 import { PgBudgetAdmission } from './budget.js';
 import { FleetCanceller } from './fleet-canceller.js';
@@ -35,6 +36,25 @@ const audit = new AuditPublisher(nc, logger);
 const budget = new PgBudgetAdmission();
 await budget.migrate();
 
+// Public A2A card edge (item 3): enabled only when the gateway has its own
+// service identity to read the registry with. Without it the /.well-known
+// routes answer 404 — the secure default.
+const a2aClientId = process.env.ACP_GATEWAY_CLIENT_ID;
+const a2aClientSecret = process.env.ACP_GATEWAY_CLIENT_SECRET;
+const a2a =
+  a2aClientId !== undefined && a2aClientSecret !== undefined
+    ? new RegistryA2ASource({
+        registryUrl: env('ACP_REGISTRY_URL', 'http://localhost:7102'),
+        tokenUrl: env('ACP_TOKEN_URL', 'http://localhost:7101'),
+        clientId: a2aClientId,
+        clientSecret: a2aClientSecret,
+        logger,
+      })
+    : undefined;
+if (a2a === undefined) {
+  logger.warn('ACP_GATEWAY_CLIENT_ID/SECRET not set — public a2a card edge disabled');
+}
+
 const app = buildGatewayApp({
   verifier: new JwtVerifier(
     { jwksUrl: env('ACP_JWKS_URL', 'http://localhost:7101/.well-known/jwks.json') },
@@ -47,6 +67,7 @@ const app = buildGatewayApp({
   budget,
   budgetDefaultEstUsd: Number(env('ACP_BUDGET_DEFAULT_EST_USD', '0.01')),
   audit,
+  ...(a2a === undefined ? {} : { a2a }),
   logger,
 });
 

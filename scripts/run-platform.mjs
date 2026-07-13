@@ -61,7 +61,15 @@ const services = [
     },
   ],
   ['audit', 'node', ['apps/audit/dist/main.js'], {}],
-  ['registry', 'node', ['apps/registry/dist/main.js'], {}],
+  [
+    'registry',
+    'node',
+    ['apps/registry/dist/main.js'],
+    {
+      // Item 3 (a2a edge): platform-controlled card export allowlist.
+      ACP_A2A_EXPOSURE: join(repoRoot, 'deploy', 'dev', 'a2a-exposure.json'),
+    },
+  ],
   ['policy', 'node', ['apps/policy/dist/main.js'], {}],
   ['knowledge', 'node', ['apps/knowledge/dist/main.js'], {}],
   [
@@ -88,7 +96,18 @@ const services = [
       ACP_MODEL_CLASSES: join(repoRoot, 'deploy', 'dev', 'model-classes.json'),
     },
   ],
-  ['gateway', 'node', ['apps/gateway/dist/main.js'], {}],
+  [
+    'gateway',
+    'node',
+    ['apps/gateway/dist/main.js'],
+    {
+      // Item 3 (a2a edge): the gateway's own service identity for reading
+      // signed a2a cards from the registry. The public /.well-known routes
+      // stay 404 without these.
+      ACP_GATEWAY_CLIENT_ID: 'svc-gateway',
+      ACP_GATEWAY_CLIENT_SECRET: 'gateway-dev-secret',
+    },
+  ],
   // Item 6: the online-eval scores service (port 7108) — scores store +
   // enforcement brain (budget/drift/ladder). Boots after the stack is up.
   [

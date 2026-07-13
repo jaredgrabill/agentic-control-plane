@@ -14,6 +14,7 @@ import {
 } from '@acp/service-kit';
 import { trace } from '@opentelemetry/api';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { A2ACardSource } from './a2a.js';
 
 export const GATEWAY_AUDIENCE = 'acp:gateway';
 export const TASK_SUBMIT_SCOPE = 'task:submit';
@@ -193,6 +194,13 @@ export interface GatewayDeps {
   /** Reservation estimate (USD) when a submission sets no max_cost_usd; default DEFAULT_BUDGET_EST_USD. */
   budgetDefaultEstUsd?: number;
   audit: AuditSink;
+  /**
+   * Public A2A card edge (item 3). OPTIONAL and absent by default: with no
+   * source wired, the /.well-known routes answer 404 and the gateway
+   * behaves exactly as before. When present, the routes serve ONLY the
+   * registry's signed projection (the gateway holds no signing key).
+   */
+  a2a?: A2ACardSource | undefined;
   logger: Logger;
   now?: () => Date;
 }
@@ -207,6 +215,32 @@ interface SubmitBody {
 
 export function buildGatewayApp(deps: GatewayDeps): FastifyInstance {
   const app = createHttpServer({ serviceName: 'gateway', logger: deps.logger });
+
+  // --- Public A2A card edge (item 3, SF1). UNAUTHENTICATED public reads by
+  // design: they serve only the registry-signed strict projection (or the
+  // index of exposed agents). No caller input crosses this boundary beyond a
+  // shape-validated agent id; disabled (404) unless a card source is wired.
+  // The inbound EXECUTION endpoint (message/send) is deliberately NOT here —
+  // v0 ships card export only and keeps the untrusted inbound surface closed.
+  const a2aDisabled = { error: { message: 'a2a card edge is not enabled', status: 404 } };
+
+  app.get('/.well-known/agent.json', async (request, reply) => {
+    if (deps.a2a === undefined) return reply.status(404).send(a2aDisabled);
+    const res = await deps.a2a.index();
+    return reply.status(res.status).send(res.body);
+  });
+
+  app.get('/v1/a2a/agents/:agent_id/.well-known/agent.json', async (request, reply) => {
+    if (deps.a2a === undefined) return reply.status(404).send(a2aDisabled);
+    const { agent_id } = request.params as { agent_id: string };
+    if (!AGENT_ID_RE.test(agent_id)) {
+      return reply
+        .status(404)
+        .send({ error: { message: `no a2a card for agent ${agent_id}`, status: 404 } });
+    }
+    const res = await deps.a2a.card(agent_id);
+    return reply.status(res.status).send(res.body);
+  });
 
   app.post('/v1/tasks', async (request, reply) => {
     const { claims, token } = await authenticateReturningToken(deps, request);

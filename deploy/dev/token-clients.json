@@ -89,6 +89,14 @@
     "scopes": ["policy:decide"]
   },
   {
+    "client_id": "svc-gateway",
+    "client_secret": "gateway-dev-secret",
+    "principal": "svc:gateway",
+    "tenant": "platform",
+    "roles": ["platform"],
+    "scopes": ["registry:read"]
+  },
+  {
     "client_id": "svc-knowledge",
     "client_secret": "knowledge-dev-secret",
     "principal": "svc:knowledge",
