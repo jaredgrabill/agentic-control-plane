@@ -1,0 +1,188 @@
+id: netsec-agent
+name: Network Security Agent
+owner: team-netsec
+description: >
+  Network-security analysis over the acme firewall ruleset, security groups,
+  IPAM allocations, and vuln scans: search rules, report internet exposure,
+  analyze the impact of a proposed rule change, and draft a human-reviewable
+  rule change. v0 is strictly read-only plus a side-effect-free draft (R0/R1):
+  no capability mutates anything, and applying a rule (netsec.rule_apply, R2)
+  is deliberately absent pending its dual-control design. Answers are
+  deterministic and extractive (no model calls) and every answer cites the
+  netsec snapshot it was grounded on.
+capabilities:
+  - name: netsec.rule_search
+    description: >
+      Search the firewall ruleset by service, source CIDR, port, or direction
+      (at least one filter). Returns the matching rules cited against the
+      ruleset snapshot; abstains when a service filter falls outside the
+      ruleset's coverage.
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        service: { type: string, minLength: 1 }
+        cidr: { type: string, minLength: 1 }
+        port: { type: integer }
+        direction: { type: string, enum: [ingress, egress] }
+        limit: { type: integer, minimum: 1, maximum: 50 }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+        rules: { type: array }
+        total_matched: { type: integer }
+        truncated: { type: boolean }
+    examples:
+      - input: { service: payments-api }
+      - input: { port: 443, direction: ingress }
+      - input: { cidr: 0.0.0.0/0 }
+  - name: netsec.exposure_analysis
+    description: >
+      Report internet-facing exposure: which security groups admit 0.0.0.0/0
+      on which ports, cross-referenced with public IPAM allocations. Scoped to
+      one service or the whole snapshot; abstains when the named service is
+      absent from both the security-group and IPAM snapshots.
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        service: { type: string, minLength: 1 }
+        include_ports:
+          type: array
+          items: { type: integer }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+        exposures: { type: array }
+        internet_exposed: { type: boolean }
+    examples:
+      - input: { service: payments-api }
+      - input: {}
+      - input: { service: ledger-core }
+  - name: netsec.change_impact
+    description: >
+      Analyze a proposed firewall rule change without touching anything: which
+      services are affected, whether it widens internet exposure, and which
+      existing rules overlap it. Pure analysis of a hypothetical — the ruleset
+      is never modified.
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [proposed]
+      properties:
+        proposed:
+          type: object
+          additionalProperties: false
+          required: [action, direction, port, source_cidr]
+          properties:
+            action: { type: string, enum: [add, remove] }
+            direction: { type: string, enum: [ingress, egress] }
+            port: { type: integer }
+            source_cidr: { type: string, minLength: 1 }
+            service: { type: string, minLength: 1 }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+        widens_exposure: { type: boolean }
+        affected_services: { type: array }
+        overlapping_rules: { type: array }
+    examples:
+      - input:
+          proposed:
+            action: add
+            direction: ingress
+            port: 443
+            source_cidr: 0.0.0.0/0
+            service: payments-api
+      - input:
+          proposed:
+            action: remove
+            direction: egress
+            port: 5432
+            source_cidr: 10.0.0.0/8
+            service: ledger-core
+      - input:
+          proposed: { action: add, direction: ingress, port: 22, source_cidr: 0.0.0.0/0 }
+  - name: netsec.rule_draft
+    description: >
+      Draft a human-reviewable firewall rule change for a service: a structured
+      proposed rule plus a rationale, grounded in the current ruleset and cited
+      against it. The draft is an artifact for review — nothing is applied, no
+      external system is touched, and this agent has no capability that could
+      apply it. An unspecified source defaults to the internal corporate range,
+      never the open internet.
+    risk: R1
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [service, intent]
+      properties:
+        service: { type: string, minLength: 1 }
+        intent: { type: string, minLength: 8, maxLength: 500 }
+        direction: { type: string, enum: [ingress, egress] }
+        port: { type: integer }
+        source_cidr: { type: string, minLength: 1 }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+        draft_rule: { type: object }
+        rationale: { type: string }
+    examples:
+      - input:
+          service: payments-api
+          intent: Restrict the payments admin plane to the corporate network range
+          direction: ingress
+          port: 8443
+          source_cidr: 10.0.0.0/8
+      - input:
+          service: ledger-core
+          intent: Limit ledger replication egress to the internal database range
+          direction: egress
+          port: 5432
+          source_cidr: 10.0.0.0/8
+      - input:
+          service: partner-gateway
+          intent: Admit the new partner VPN range on the partner listener
+          direction: ingress
+          port: 8443
+          source_cidr: 203.0.113.0/24
+tools:
+  - server: netsec
+    scopes:
+      - netsec:firewall:read
+      - netsec:secgroup:read
+      - netsec:ipam:read
+      - netsec:vuln:read
+models:
+  allowed: [default-tier]
+data_classification: confidential
+sla:
+  p95_latency_s: 30
+  quality_slo: 0.9

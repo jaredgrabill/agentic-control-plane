@@ -1,0 +1,43 @@
+{
+  "document": {
+    "doc_id": "netsec/security-groups",
+    "version": "2026-07-10",
+    "effective_date": "2026-07-10",
+    "url": "https://netsec.acme.example/security-groups/2026-07-10",
+    "lineage_id": "01981c00-0000-7000-8000-0000000000d2"
+  },
+  "as_of": "2026-07-10",
+  "tenant": "acme",
+  "groups": [
+    {
+      "security_group_id": "sg-payments-01",
+      "service": "payments-api",
+      "ingress": [
+        { "port": 443, "source_cidr": "0.0.0.0/0" },
+        { "port": 8443, "source_cidr": "10.0.0.0/8" }
+      ],
+      "egress": [{ "port": 443, "source_cidr": "0.0.0.0/0" }]
+    },
+    {
+      "security_group_id": "sg-ledger-01",
+      "service": "ledger-core",
+      "ingress": [
+        { "port": 5432, "source_cidr": "10.0.0.0/8" },
+        { "port": 22, "source_cidr": "10.1.2.0/24" }
+      ],
+      "egress": [{ "port": 5432, "source_cidr": "10.0.0.0/8" }]
+    },
+    {
+      "security_group_id": "sg-checkout-01",
+      "service": "checkout-web",
+      "ingress": [{ "port": 443, "source_cidr": "0.0.0.0/0" }],
+      "egress": [{ "port": 443, "source_cidr": "0.0.0.0/0" }]
+    },
+    {
+      "security_group_id": "sg-partner-01",
+      "service": "partner-gateway",
+      "ingress": [{ "port": 8443, "source_cidr": "203.0.113.0/24" }],
+      "egress": []
+    }
+  ]
+}

@@ -38,7 +38,9 @@ services:
       - '4222:4222'
       - '8222:8222'
     volumes:
-      - ./nats/nats-server.conf:/etc/nats/nats-server.conf:ro
+      # The whole conf directory: nats-server.conf includes the GENERATED
+      # per-tenant accounts block (nats-accounts.gen.conf) from the same dir.
+      - ./nats:/etc/nats:ro
       - natsdata:/data/jetstream
     healthcheck:
       test: ['CMD', 'wget', '-q', '-O-', 'http://localhost:8222/healthz']

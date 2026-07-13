@@ -168,31 +168,78 @@ and embedding weaknesses; ASI06 — context poisoning):
 
 Multi-step tasks re-retrieve the same context repeatedly — the repository's
 structural overview, the open incident, the relevant policy section — once
-per sub-task. A **platform-managed Session Context Cache** (NATS KV bucket
-per task session) fixes three things at once: redundant deep retrievals,
-load on Postgres, and *inconsistent snapshots* — every step of a task sees
-the same context state, which matters for both answer coherence and
-replay.
+per sub-task. A **platform-managed Session Context Cache** fixes redundant
+deep retrievals and Postgres load without ever weakening the access check.
+
+It lives **inside the Knowledge Service** (`apps/knowledge/src/session-cache.ts`),
+because `SearchService.search` is the single retrieval door: the SDK
+`Retriever` and the MCP tool server both funnel through it. It memoizes
+**only** the expensive, permission-invariant half of a search —
+`embedder.embed()` + `store.search()`. **Authorization is never cached:**
+every call still runs `verifier.verify()` and the Cedar `policy.authorize()`
+gate, and a cache hit still emits `retrieval.served` with the exact
+`lineage_id`s it served. The cache cannot serve what authorization would
+reject.
 
 This is not agent-local memory (which the standards ban — it breaks replay
-and shadow comparison). It is Knowledge Service infrastructure with the
-same governance as retrieval itself:
+and shadow comparison). The value holds only reconstructable retrieval
+context (chunk text + citations), never execution state (loop position,
+plan progress, conversation memory). It is Knowledge Service infrastructure
+with the same governance as retrieval itself:
 
-- **Permission-snapshot keyed:** the cache is bound to the delegated
-  token's permission snapshot; TTL ≤ token TTL. Content enters the cache
-  under the same classification-aware checks as any retrieval, and a
-  permission change, session end, or kill switch invalidates the bucket.
-  Cached content never outlives the authorization that admitted it.
-- **Provenance-preserving:** entries carry their `lineage_id`s and
-  classification labels; the session's context snapshot is recorded in the
-  audit trail, so replay knows exactly what every step saw.
-- **Lineage-invalidated:** the cache subscribes to `audit.corpus` events
-  for the documents it holds — if a runbook changes mid-incident, the
-  session's next step sees the update, not the stale copy.
-- **Honest about the win:** KV reads are sub-millisecond, but the LLM call
-  dominates loop latency. The real gains are fewer deep retrievals per
-  task, consistent context, and load shedding — measured, like everything,
-  on the cost and latency dashboards.
+- **Permission-snapshot keyed (the security crux):** the entry key is
+  `<tenant>.<permHash>.<queryHash>`, where `permHash = sha256(stable JSON of
+  {v, tenant, actor, sorted scopes, sorted classifications, embedding_model})`
+  is derived from VERIFIED claims only. Two principals share a key **iff**
+  their effective permissions are identical — i.e. the same principal with
+  the same grant, whose authorized view is identical by construction. No
+  request path supplies a `permHash` or reads by a foreign prefix, so a
+  cross-principal or cross-tenant hit is *structurally impossible*, not merely
+  hash-improbable. A narrowed scope or dropped classification changes the
+  key, so the pre-change (broader) entry is unreachable.
+- **TTL ≤ token TTL:** `expires_at = min(now + ttl, claims.exp*1000)`,
+  enforced on read. Cached content never outlives the authorization that
+  admitted it.
+- **Lineage-invalidated:** a durable consumer on `acp.*.audit.corpus.>`
+  bumps `gen.<tenant>.<source_id>` (to the audit stream sequence) on every
+  `corpus.mutation`; entries capture the generation of each source they drew
+  from, and any mismatch is a stale miss + evict. Eviction keys on the stable
+  `source_id`, not the per-version `lineage_id`. If a runbook changes
+  mid-incident, the next step sees the update, not the stale copy.
+- **Kill-switch & revocation:** a fleet or tenant halt, or a principal
+  denial, bypasses the cache entirely (live retrieval, no marker); an
+  operator force-purge (`SessionCacheControl.purgeTenant`) removes a tenant's
+  entries immediately for hard-delete / legal-hold, leaving generations
+  intact.
+- **Memory storage, fail-safe degradation:** the bucket is MEMORY-backed, so
+  classified context never touches disk and a restart resets entries and
+  their captured generations together (self-consistent). Every failure mode —
+  disabled, watcher not yet seeded, any KV error, oversize entry, wiped
+  bucket — degrades to correct LIVE retrieval, never an error and never a
+  stale-wrong serve.
+- **Provenance-preserving:** every hit re-emits `retrieval.served` with the
+  served `lineage_id`s and a `details.cache` marker (`hit`/`miss`), so replay
+  and the dashboards know exactly what each step saw. The honest win is fewer
+  deep retrievals and Postgres load shed, not KV latency.
+
+**Design deviation (recorded):** the earlier sketch imagined a *bucket per
+task session*. The shipped design instead uses a single permission-snapshot-
+keyed bucket. A per-session bucket would fragment the cross-session reuse win
+and multiply streams (thousands of task sessions); the permission-binding
+security property is fully preserved either way, and session-end / permission
+change is handled by TTL ≤ token-exp + lineage eviction + kill-switch bypass.
+`task_id`/`step_id` are deliberately excluded from the key (they are passed
+only for the audit reason) so intra-task and cross-task identical retrievals
+share one entry; freshness comes from lineage eviction, not key fragmentation.
+
+**Configuration (default OFF):**
+
+| Env var | Default | Meaning |
+| --- | --- | --- |
+| `ACP_SESSION_CACHE_ENABLED` | `false` | Master switch. Off ⇒ correct-but-uncached; the existing E2E suite is unaffected. |
+| `ACP_SESSION_CACHE_TTL_MS` | `60000` | Per-entry TTL before clamping to the token expiry. |
+| `ACP_SESSION_CACHE_MAX_VALUE_BYTES` | `262144` | Oversize entries are skipped (served live), never truncated. |
+| `ACP_SESSION_CACHE_MAX_BYTES` | `67108864` | Bucket size cap (memory storage). |
 
 ## Retrieval API (sketch)
 

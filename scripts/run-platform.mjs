@@ -17,6 +17,15 @@ import { fileURLToPath } from 'node:url';
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 const tokenClients = readFileSync(join(repoRoot, 'deploy', 'dev', 'token-clients.json'), 'utf8');
 
+// Phase 4 item 1: the tenant registry is the single source of truth for the
+// tenant → NATS account map. The NATS accounts block is generated from the
+// same file (scripts/gen-nats-accounts.mjs), so callout minting and the
+// server's account boundary can never drift apart.
+const tenants = JSON.parse(readFileSync(join(repoRoot, 'deploy', 'dev', 'tenants.json'), 'utf8'));
+const tenantAccounts = JSON.stringify(
+  Object.fromEntries(tenants.map(({ tenant, account }) => [tenant, account])),
+);
+
 const base = {
   ...process.env,
   ACP_TOKEN_CLIENTS: tokenClients,
@@ -33,6 +42,8 @@ const base = {
   ACP_ONLINE_EVAL: join(repoRoot, 'deploy', 'dev', 'online-eval.json'),
   // Flush spans quickly so traces are queryable moments after a task runs.
   OTEL_BSP_SCHEDULE_DELAY: '500',
+  // tenant claim → NATS account NAME, derived from deploy/dev/tenants.json.
+  ACP_BUS_TENANT_ACCOUNTS: tenantAccounts,
 };
 
 const services = [
@@ -50,7 +61,19 @@ const services = [
     },
   ],
   ['audit', 'node', ['apps/audit/dist/main.js'], {}],
-  ['registry', 'node', ['apps/registry/dist/main.js'], {}],
+  [
+    'registry',
+    'node',
+    ['apps/registry/dist/main.js'],
+    {
+      // Item 3 (a2a edge): platform-controlled card export allowlist.
+      ACP_A2A_EXPOSURE: join(repoRoot, 'deploy', 'dev', 'a2a-exposure.json'),
+      // Item 3 (SF3): backward-compat seed for the tool-server catalog. The
+      // catalog is consumed only when a tool gateway sets ACP_TOOL_CATALOG_URL
+      // (default OFF), so seeding leaves dev/CI behavior unchanged.
+      ACP_TOOL_CATALOG_SEED: join(repoRoot, 'deploy', 'dev', 'tool-servers.json'),
+    },
+  ],
   ['policy', 'node', ['apps/policy/dist/main.js'], {}],
   ['knowledge', 'node', ['apps/knowledge/dist/main.js'], {}],
   [
@@ -77,7 +100,18 @@ const services = [
       ACP_MODEL_CLASSES: join(repoRoot, 'deploy', 'dev', 'model-classes.json'),
     },
   ],
-  ['gateway', 'node', ['apps/gateway/dist/main.js'], {}],
+  [
+    'gateway',
+    'node',
+    ['apps/gateway/dist/main.js'],
+    {
+      // Item 3 (a2a edge): the gateway's own service identity for reading
+      // signed a2a cards from the registry. The public /.well-known routes
+      // stay 404 without these.
+      ACP_GATEWAY_CLIENT_ID: 'svc-gateway',
+      ACP_GATEWAY_CLIENT_SECRET: 'gateway-dev-secret',
+    },
+  ],
   // Item 6: the online-eval scores service (port 7108) — scores store +
   // enforcement brain (budget/drift/ladder). Boots after the stack is up.
   [
@@ -89,6 +123,9 @@ const services = [
       ACP_EVALUATION_CLIENT_SECRET: 'evaluation-dev-secret',
       ACP_NATS_SERVICE_USER: 'evaluation',
       ACP_NATS_SERVICE_PASSWORD: 'evaluation-dev-password',
+      // Phase 4 item 1: per-tenant budget caps (platform config, never a
+      // request field). Applied for the current period at boot.
+      ACP_TENANT_BUDGETS: join(repoRoot, 'deploy', 'dev', 'tenant-budgets.json'),
     },
   ],
   [
@@ -117,6 +154,21 @@ const services = [
       ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
     },
   ],
+  // Phase 4 item 1: a SECOND-tenant worker for the same agent binary. Its own
+  // token-service client carries tenant globex, so its callout-minted bus
+  // session lands in TENANT_GLOBEX — the E2E isolation proof exercises this
+  // identity. It polls the same agent-{id}@{version} Temporal queue.
+  [
+    'knowledge-agent-globex',
+    'uv',
+    ['run', '--directory', 'python', 'python', '-m', 'knowledge_agent.main'],
+    {
+      ACP_AGENT_CLIENT_ID: 'agent-knowledge-agent-globex',
+      ACP_AGENT_VERSION: '0.1.0',
+      ACP_AGENT_CLIENT_SECRET: 'agent-knowledge-globex-dev-secret',
+      ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+    },
+  ],
   // Mock MCP tool servers (dev/CI stand-ins for enterprise systems) and the
   // TS tool agents. The agents use noRetriever, so they need no NATS creds
   // and no token-service client entries.
@@ -137,6 +189,25 @@ const services = [
     'node',
     ['deploy/mocks/dist/itsm/main.js'],
     { ACP_MOCK_ITSM_PORT: '7303', ACP_MOCK_FIXTURES: join(repoRoot, 'fixtures', 'acme-corp') },
+  ],
+  [
+    'netsec-mock',
+    'node',
+    ['deploy/mocks/dist/netsec/main.js'],
+    { ACP_MOCK_NETSEC_PORT: '7304', ACP_MOCK_FIXTURES: join(repoRoot, 'fixtures', 'acme-corp') },
+  ],
+  // Item 3 (a2a proxy): a mock third-party A2A JSON-RPC remote. The external-echo
+  // proxy agent reaches it with its OWN credential (ACP_PROXY_CREDENTIAL); the
+  // mock rejects any other bearer, so the E2E proves the platform's delegated
+  // token never egresses to it.
+  [
+    'a2a-mock',
+    'node',
+    ['deploy/mocks/dist/a2a/main.js'],
+    {
+      ACP_MOCK_A2A_PORT: '7305',
+      ACP_MOCK_A2A_CREDENTIAL: 'external-echo-remote-dev-credential',
+    },
   ],
   // Item 5: agent tool calls traverse the Tool Gateway PEP; the mocks stay
   // reachable on 7301/7302 as the gateway's upstreams only. Item 0c: each
@@ -180,6 +251,34 @@ const services = [
       // Version-qualifies this worker's task queue (item 4).
       ACP_AGENT_VERSION: '0.1.0',
       ACP_AGENT_CLIENT_SECRET: 'agent-change-dev-secret',
+    },
+  ],
+  [
+    'netsec-agent',
+    'node',
+    ['agents/netsec/dist/main.js'],
+    {
+      ACP_TOOL_SERVER_NETSEC_URL: 'http://localhost:7106/mcp/netsec',
+      ACP_LLM_GATEWAY_URL: 'http://localhost:7107',
+      ACP_AGENT_CLIENT_ID: 'agent-netsec-agent',
+      // Version-qualifies this worker's task queue (item 4).
+      ACP_AGENT_VERSION: '0.1.0',
+      ACP_AGENT_CLIENT_SECRET: 'agent-netsec-dev-secret',
+    },
+  ],
+  // Item 3 (a2a proxy): the external-echo proxy agent. It uses noRetriever, so
+  // the worker needs no NATS creds; it forwards its capability to the mock A2A
+  // remote (7305) with its OWN ACP_PROXY_CREDENTIAL — never the delegated token.
+  [
+    'external-echo-agent',
+    'node',
+    ['agents/external-echo/dist/main.js'],
+    {
+      ACP_PROXY_ENDPOINT: 'http://localhost:7305/a2a',
+      ACP_PROXY_CREDENTIAL: 'external-echo-remote-dev-credential',
+      ACP_AGENT_CLIENT_ID: 'agent-external-echo',
+      // Version-qualifies this worker's task queue (item 4).
+      ACP_AGENT_VERSION: '0.1.0',
     },
   ],
 ];
@@ -233,7 +332,9 @@ process.on('SIGTERM', () => shutdown(0));
 
 // Readiness gate: every HTTP door answers /healthz. The mocks (7301/7302)
 // have one; the agents are Temporal workers with no HTTP door.
-const healthPorts = [7101, 7102, 7103, 7104, 7105, 7106, 7107, 7100, 7108, 7301, 7302, 7303];
+const healthPorts = [
+  7101, 7102, 7103, 7104, 7105, 7106, 7107, 7100, 7108, 7301, 7302, 7303, 7304, 7305,
+];
 const deadline = Date.now() + 120_000;
 for (const port of healthPorts) {
   for (;;) {

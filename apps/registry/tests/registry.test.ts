@@ -1,10 +1,12 @@
 import type {
+  A2AAgentCard,
   AgentCard,
   AgentManifest,
   AuditEvent,
   Capability,
   EvalBaseline,
   LifecycleState,
+  ToolServerRecord,
 } from '@acp/protocol';
 import { JwtVerifier, createLogger, stableStringify } from '@acp/service-kit';
 import type { FastifyInstance } from 'fastify';
@@ -17,6 +19,7 @@ import {
   type JWK,
 } from 'jose';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { verifyA2ACard } from '../src/a2a.js';
 import { buildRegistryApp, REGISTRY_AUDIENCE } from '../src/app.js';
 import { verifyCard } from '../src/signing.js';
 import {
@@ -27,6 +30,7 @@ import {
   type RoutingSet,
   type TransitionOptions,
 } from '../src/store.js';
+import type { PutToolServerResult, ToolServerStore } from '../src/tool-servers.js';
 
 const ISSUER = 'https://token.test.local';
 
@@ -186,8 +190,35 @@ class MemoryStore implements RegistryStore {
   }
 }
 
+/** In-memory tool-server catalog mirroring PgToolServerStore semantics. */
+class MemoryToolServerStore implements ToolServerStore {
+  readonly rows = new Map<string, ToolServerRecord>();
+  clear(): void {
+    this.rows.clear();
+  }
+  migrate(): Promise<void> {
+    return Promise.resolve();
+  }
+  seed(records: ToolServerRecord[]): Promise<void> {
+    for (const r of records) if (!this.rows.has(r.id)) this.rows.set(r.id, r);
+    return Promise.resolve();
+  }
+  put(record: ToolServerRecord): Promise<PutToolServerResult> {
+    const outcome = this.rows.has(record.id) ? 'updated' : 'inserted';
+    this.rows.set(record.id, record);
+    return Promise.resolve({ outcome, record });
+  }
+  get(id: string): Promise<ToolServerRecord | undefined> {
+    return Promise.resolve(this.rows.get(id));
+  }
+  list(): Promise<ToolServerRecord[]> {
+    return Promise.resolve([...this.rows.values()].sort((a, b) => a.id.localeCompare(b.id)));
+  }
+}
+
 let app: FastifyInstance;
 let store: MemoryStore;
+const toolServers = new MemoryToolServerStore();
 let tokenKey: Awaited<ReturnType<typeof generateKeyPair>>['privateKey'];
 let tokenJwk: JWK;
 let registryJwks: JSONWebKeySet;
@@ -196,6 +227,8 @@ const announcements: { verb: string; card: AgentCard }[] = [];
 const suspensions: { agentId: string; suspended: boolean; reason: string }[] = [];
 const auditEvents: AuditEvent[] = [];
 const flips: { op: string; target: string; reason?: string; by?: string }[] = [];
+/** Platform exposure allowlist for the A2A export routes (mutable per test). */
+const a2aExposure = new Set<string>();
 
 beforeAll(async () => {
   const tokenPair = await generateKeyPair('EdDSA');
@@ -246,6 +279,13 @@ beforeAll(async () => {
       ),
       resumeFleet: () => (flips.push({ op: 'resumeFleet', target: 'fleet' }), Promise.resolve()),
     },
+    a2a: {
+      exposure: a2aExposure,
+      edgeBaseUrl: 'http://localhost:7100',
+      providerOrg: 'Agentic Control Plane (test)',
+      tokenUrl: 'http://localhost:7101',
+    },
+    toolServers,
     audit: {
       publish: (e) => {
         auditEvents.push(e);
@@ -258,10 +298,12 @@ beforeAll(async () => {
 
 beforeEach(() => {
   store.clear();
+  toolServers.clear();
   announcements.length = 0;
   suspensions.length = 0;
   auditEvents.length = 0;
   flips.length = 0;
+  a2aExposure.clear();
 });
 
 async function makeToken(scope: string): Promise<string> {
@@ -560,6 +602,37 @@ describe('registration', () => {
     });
     expect(r1Irr.statusCode).toBe(400);
     expect(r1Irr.json<{ error: { message: string } }>().error.message).toContain('R1');
+  });
+
+  it('accepts an r0/r1-only manifest that declares no compensator (netsec-agent shape)', async () => {
+    // Rule 6: R0 declares neither compensator nor irreversible; R1 may declare
+    // a compensator but never needs one. A read-plus-draft agent (the netsec
+    // v0 posture: R0 reads + a side-effect-free R1 draft, zero write surface)
+    // must register without any compensation machinery.
+    const res = await register({
+      manifest: manifest({
+        capabilities: [
+          {
+            name: 'netsec.rule_search',
+            description: 'Search the firewall ruleset.',
+            risk: 'R0',
+            input_schema: { type: 'object' },
+            output_schema: { type: 'object' },
+            examples: [{ input: {} }, { input: {} }, { input: {} }],
+          },
+          {
+            name: 'netsec.rule_draft',
+            description: 'Draft a reviewable rule change; nothing is applied.',
+            risk: 'R1',
+            input_schema: { type: 'object' },
+            output_schema: { type: 'object' },
+            examples: [{ input: {} }, { input: {} }, { input: {} }],
+          },
+        ],
+      }),
+      version: '0.1.0',
+    });
+    expect(res.statusCode).toBe(201);
   });
 
   it('rejects duplicate capability names and a missing version', async () => {
@@ -1005,5 +1078,192 @@ describe('edge cases', () => {
   it('rejects a registration with no manifest at all', async () => {
     const res = await register({ version: '0.1.0' });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('a2a card export routes (exposure allowlist)', () => {
+  async function getA2A(path: string, scope = 'registry:read') {
+    return app.inject({
+      method: 'GET',
+      url: path,
+      headers: { authorization: `Bearer ${await makeToken(scope)}` },
+    });
+  }
+
+  async function registerAndActivateEcho(): Promise<void> {
+    await register({ manifest: manifest({ id: 'external-echo' }), version: '0.1.0' });
+    await transition('external-echo', 'active');
+  }
+
+  it('serves a signed a2a card for an exposed active agent', async () => {
+    a2aExposure.add('external-echo');
+    await registerAndActivateEcho();
+    const res = await getA2A('/v1/agents/external-echo/a2a-card');
+    expect(res.statusCode).toBe(200);
+    const card: A2AAgentCard = res.json();
+    expect(card.protocolVersion).toBe('1.0');
+    expect(card.url).toBe('http://localhost:7100/v1/a2a/agents/external-echo');
+    expect(await verifyA2ACard(card, registryJwks)).toBe(true);
+    // The strict projection leaks nothing internal.
+    const wire = JSON.stringify(card);
+    expect(wire).not.toContain('"tools"');
+    expect(wire).not.toContain('lifecycle_state');
+    expect(wire).not.toContain('card_signature');
+  });
+
+  it('answers an identical 404 for non-exposed and unknown agents (never 403)', async () => {
+    await registerAndActivateEcho(); // registered + active but NOT exposed
+    const nonExposed = await getA2A('/v1/agents/external-echo/a2a-card');
+    const unknown = await getA2A('/v1/agents/no-such-agent/a2a-card');
+    expect(nonExposed.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+    const shape = (body: string): string => body.replace(/external-echo|no-such-agent/g, 'X');
+    expect(shape(nonExposed.body)).toBe(shape(unknown.body));
+  });
+
+  it('404s an exposed agent with no active version', async () => {
+    a2aExposure.add('external-echo');
+    await register({ manifest: manifest({ id: 'external-echo' }), version: '0.1.0' });
+    const res = await getA2A('/v1/agents/external-echo/a2a-card');
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('serves the version-pinned card only for exposed agents', async () => {
+    a2aExposure.add('external-echo');
+    await registerAndActivateEcho();
+    const pinned = await getA2A('/v1/agents/external-echo/versions/0.1.0/a2a-card');
+    expect(pinned.statusCode).toBe(200);
+    const pinnedCard: A2AAgentCard = pinned.json();
+    expect(await verifyA2ACard(pinnedCard, registryJwks)).toBe(true);
+    const missing = await getA2A('/v1/agents/external-echo/versions/9.9.9/a2a-card');
+    expect(missing.statusCode).toBe(404);
+    a2aExposure.clear();
+    const hidden = await getA2A('/v1/agents/external-echo/versions/0.1.0/a2a-card');
+    expect(hidden.statusCode).toBe(404);
+  });
+
+  it('indexes only exposed agents with an active version', async () => {
+    a2aExposure.add('external-echo');
+    a2aExposure.add('never-registered');
+    await registerAndActivateEcho();
+    await register({ manifest: manifest({ id: 'hidden-agent' }), version: '0.1.0' });
+    await transition('hidden-agent', 'active');
+    const res = await getA2A('/v1/a2a-cards');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      agents: [
+        {
+          agent_id: 'external-echo',
+          card_url: 'http://localhost:7100/v1/a2a/agents/external-echo/.well-known/agent.json',
+        },
+      ],
+    });
+  });
+
+  it('requires registry:read on every export route', async () => {
+    a2aExposure.add('external-echo');
+    await registerAndActivateEcho();
+    for (const path of [
+      '/v1/a2a-cards',
+      '/v1/agents/external-echo/a2a-card',
+      '/v1/agents/external-echo/versions/0.1.0/a2a-card',
+    ]) {
+      const res = await getA2A(path, 'registry:write');
+      expect(res.statusCode, path).toBe(403);
+      const unauthed = await app.inject({ method: 'GET', url: path });
+      expect(unauthed.statusCode, path).toBe(401);
+    }
+  });
+});
+
+describe('tool-server catalog (SF3)', () => {
+  function record(overrides: Partial<ToolServerRecord> = {}): ToolServerRecord {
+    return {
+      id: 'cloud-estate',
+      url: 'http://localhost:7301/mcp',
+      version: '1.0.0',
+      owning_team: 'team-platform',
+      wrapped_sor: 'cloud-estate',
+      data_classification: 'internal',
+      auth: {
+        mode: 'credential-ref',
+        credential_ref: 'ACP_TOOL_CRED_CLOUD_ESTATE',
+        header: 'x-acp-broker-credential',
+      },
+      tools: [{ name: 'inventory_search', scope: 'cloud:inventory:read', risk: 'R0' }],
+      rate_limit: { per_minute: 60, burst: 20 },
+      ...overrides,
+    };
+  }
+
+  async function putServer(id: string, body: unknown, scope = 'registry:admin') {
+    return app.inject({
+      method: 'PUT',
+      url: `/v1/tool-servers/${id}`,
+      headers: { authorization: `Bearer ${await makeToken(scope)}` },
+      payload: body as Record<string, unknown>,
+    });
+  }
+
+  it('publishes a record (registry:admin), audits it, and reads it back', async () => {
+    const put = await putServer('cloud-estate', record());
+    expect(put.statusCode).toBe(201);
+    expect(auditEvents.some((e) => e.event_type === 'tool_server.published')).toBe(true);
+
+    const list = await app.inject({
+      method: 'GET',
+      url: '/v1/tool-servers',
+      headers: { authorization: `Bearer ${await makeToken('registry:read')}` },
+    });
+    expect(list.statusCode).toBe(200);
+    const listed: { tool_servers: ToolServerRecord[] } = list.json();
+    expect(listed.tool_servers).toHaveLength(1);
+
+    const get = await app.inject({
+      method: 'GET',
+      url: '/v1/tool-servers/cloud-estate',
+      headers: { authorization: `Bearer ${await makeToken('registry:read')}` },
+    });
+    expect(get.statusCode).toBe(200);
+    const gotten: ToolServerRecord = get.json();
+    expect(gotten.id).toBe('cloud-estate');
+  });
+
+  it('emits tool_server.deprecated when the record is deprecated', async () => {
+    await putServer('cloud-estate', record());
+    auditEvents.length = 0;
+    const dep = await putServer(
+      'cloud-estate',
+      record({ deprecation: { deprecated: true, replaced_by: 'cloud-estate-v2' } }),
+    );
+    expect(dep.statusCode).toBe(200);
+    expect(auditEvents.some((e) => e.event_type === 'tool_server.deprecated')).toBe(true);
+  });
+
+  it('refuses a publish without registry:admin', async () => {
+    expect((await putServer('cloud-estate', record(), 'registry:read')).statusCode).toBe(403);
+  });
+
+  it('refuses a read of the catalog without registry:read', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/tool-servers',
+      headers: { authorization: `Bearer ${await makeToken('registry:write')}` },
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('404s an unknown tool server', async () => {
+    const res = await app.inject({
+      method: 'GET',
+      url: '/v1/tool-servers/nope',
+      headers: { authorization: `Bearer ${await makeToken('registry:read')}` },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('rejects a path/body id mismatch (400) and a malformed record (400)', async () => {
+    expect((await putServer('other-id', record())).statusCode).toBe(400);
+    expect((await putServer('cloud-estate', { id: 'cloud-estate' })).statusCode).toBe(400);
   });
 });

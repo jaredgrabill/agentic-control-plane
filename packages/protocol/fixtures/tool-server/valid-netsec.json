@@ -1,0 +1,30 @@
+{
+  "id": "netsec",
+  "url": "http://localhost:7304/mcp",
+  "version": "0.1.0",
+  "owning_team": "team-netsec",
+  "wrapped_sor": "acme firewall / secgroup / ipam / vuln-scanner estate",
+  "data_classification": "confidential",
+  "auth": {
+    "mode": "credential-ref",
+    "credential_ref": "ACP_TOOL_CRED_NETSEC",
+    "header": "x-acp-broker-credential"
+  },
+  "tools": [
+    {
+      "name": "firewall_rules_search",
+      "description": "Search the firewall ruleset.",
+      "scope": "netsec:firewall:read",
+      "risk": "R0"
+    },
+    { "name": "security_group_get", "scope": "netsec:secgroup:read", "risk": "R0" },
+    { "name": "ipam_lookup", "scope": "netsec:ipam:read", "risk": "R0" },
+    { "name": "vuln_scan_report", "scope": "netsec:vuln:read", "risk": "R0" }
+  ],
+  "rate_limit": { "per_minute": 60, "burst": 20 },
+  "tool_rate_limits": {
+    "vuln_scan_report": { "per_minute": 10, "burst": 2 }
+  },
+  "deprecation": { "deprecated": false },
+  "timeout_ms": 15000
+}

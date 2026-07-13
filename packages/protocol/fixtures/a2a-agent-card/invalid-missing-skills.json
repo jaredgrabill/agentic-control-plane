@@ -1,0 +1,11 @@
+{
+  "protocolVersion": "1.0",
+  "name": "Skill-less",
+  "description": "A card with no skills array — invalid.",
+  "url": "http://localhost:7100/v1/a2a/agents/skill-less",
+  "preferredTransport": "JSONRPC",
+  "version": "0.1.0",
+  "capabilities": {},
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"]
+}

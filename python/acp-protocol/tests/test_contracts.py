@@ -8,11 +8,13 @@ from typing import Any
 
 import pytest
 from acp_protocol import ProtocolValidationError, validate, validation_errors
+from acp_protocol.generated.a2a_agent_card import A2AAgentCard
 from acp_protocol.generated.agent_card import AgentCard
 from acp_protocol.generated.agent_manifest import AgentManifest
 from acp_protocol.generated.audit_event import AuditEvent
 from acp_protocol.generated.eval_report import EvalReport
 from acp_protocol.generated.task_contract import TaskMessage
+from acp_protocol.generated.tool_server import ToolServerRecord
 from pydantic import BaseModel, RootModel, ValidationError
 
 FIXTURES = Path(__file__).resolve().parents[3] / "packages" / "protocol" / "fixtures"
@@ -23,6 +25,8 @@ MODELS: dict[str, type[BaseModel]] = {
     "task-contract": TaskMessage,
     "audit-event": AuditEvent,
     "eval-report": EvalReport,
+    "a2a-agent-card": A2AAgentCard,
+    "tool-server": ToolServerRecord,
 }
 
 

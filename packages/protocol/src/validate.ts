@@ -5,12 +5,15 @@ import addFormatsImport from 'ajv-formats';
 // function, but its types describe the module namespace. Narrow accordingly.
 const addFormats = addFormatsImport as unknown as typeof addFormatsImport.default;
 import {
+  a2aAgentCardSchema,
   agentCardSchema,
   agentManifestSchema,
   auditEventSchema,
   evalReportSchema,
   taskContractSchema,
+  toolServerSchema,
 } from './generated/schemas.js';
+import type { A2AAgentCard } from './generated/a2a-agent-card.js';
 import type { AgentCard, EvalBaseline } from './generated/agent-card.js';
 import type { AgentManifest } from './generated/agent-manifest.js';
 import type { AuditEvent } from './generated/audit-event.js';
@@ -23,6 +26,7 @@ import type {
   TaskRequest,
   TaskResult,
 } from './generated/task-contract.js';
+import type { ToolServerRecord } from './generated/tool-server.js';
 
 const ajv = new Ajv2020({ allErrors: true, strict: true });
 addFormats(ajv);
@@ -31,6 +35,8 @@ ajv.addSchema(agentCardSchema);
 ajv.addSchema(taskContractSchema);
 ajv.addSchema(auditEventSchema);
 ajv.addSchema(evalReportSchema);
+ajv.addSchema(a2aAgentCardSchema);
+ajv.addSchema(toolServerSchema);
 
 export class ProtocolValidationError extends Error {
   constructor(
@@ -94,3 +100,5 @@ export const evalReport = makeParser<EvalReport>(`${BASE}/eval-report.schema.jso
 export const evalBaseline = makeParser<EvalBaseline>(
   `${BASE}/eval-report.schema.json#/$defs/eval_baseline`,
 );
+export const a2aAgentCard = makeParser<A2AAgentCard>(`${BASE}/a2a-agent-card.schema.json`);
+export const toolServerRecord = makeParser<ToolServerRecord>(`${BASE}/tool-server.schema.json`);

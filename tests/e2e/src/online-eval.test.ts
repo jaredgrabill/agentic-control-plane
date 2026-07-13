@@ -168,14 +168,20 @@ async function postScore(body: Record<string, unknown>): Promise<void> {
   expect(res.status, await res.clone().text()).toBe(202);
 }
 
-async function quality(agentId: string): Promise<{
+async function quality(
+  agentId: string,
+  tenant = 'acme',
+): Promise<{
   budget: { state: string; burn_ratio: number };
   frozen: boolean;
   level: string;
   sli: { n_by_source: { probe: number; judge: number } };
 }> {
   const token = await ci('acp:eval', 'eval:read');
-  const res = await fetch(`${EVALUATION_URL}/v1/agents/${agentId}/quality`, {
+  // Phase 4 item 1: quality is per-tenant (REQUIRED param). The knowledge probes
+  // run as acme (the default); the poison-agent ladder scores post as platform,
+  // so its freeze must be read under the same tenant its state was written.
+  const res = await fetch(`${EVALUATION_URL}/v1/agents/${agentId}/quality?tenant=${tenant}`, {
     headers: { authorization: `Bearer ${token}` },
   });
   expect(res.status, await res.clone().text()).toBe(200);
@@ -380,7 +386,7 @@ describe('online evaluation v0', () => {
     );
     expect((floor.details as { page?: boolean }).page).toBe(true);
 
-    const frozen = await quality('poison-agent');
+    const frozen = await quality('poison-agent', 'platform');
     expect(frozen.frozen).toBe(true);
 
     // A deployment is refused by the fail-closed change freeze — the freeze

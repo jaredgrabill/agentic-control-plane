@@ -1,0 +1,4 @@
+{
+  "acme": { "cap_usd": 1000 },
+  "globex": { "cap_usd": 0.5 }
+}

@@ -17,7 +17,11 @@
       "itsm:calendar:read",
       "itsm:change:draft",
       "itsm:change:submit",
-      "itsm:change:withdraw"
+      "itsm:change:withdraw",
+      "netsec:firewall:read",
+      "netsec:secgroup:read",
+      "netsec:ipam:read",
+      "netsec:vuln:read"
     ]
   },
   {
@@ -25,6 +29,22 @@
     "client_secret": "approver-dev-secret",
     "principal": "user:approver.ops",
     "tenant": "acme",
+    "roles": ["tenant-approver"],
+    "scopes": ["approvals:decide", "audit:read"]
+  },
+  {
+    "client_id": "cli-jane-globex",
+    "client_secret": "jane-globex-dev-secret",
+    "principal": "user:jane.globex",
+    "tenant": "globex",
+    "roles": ["tenant-user"],
+    "scopes": ["task:submit", "knowledge:search:read"]
+  },
+  {
+    "client_id": "cli-approver-globex",
+    "client_secret": "approver-globex-dev-secret",
+    "principal": "user:approver.globex",
+    "tenant": "globex",
     "roles": ["tenant-approver"],
     "scopes": ["approvals:decide", "audit:read"]
   },
@@ -69,6 +89,14 @@
     "scopes": ["policy:decide"]
   },
   {
+    "client_id": "svc-gateway",
+    "client_secret": "gateway-dev-secret",
+    "principal": "svc:gateway",
+    "tenant": "platform",
+    "roles": ["platform"],
+    "scopes": ["registry:read"]
+  },
+  {
     "client_id": "svc-knowledge",
     "client_secret": "knowledge-dev-secret",
     "principal": "svc:knowledge",
@@ -89,6 +117,14 @@
     "client_secret": "agent-knowledge-dev-secret",
     "principal": "agent:knowledge-agent@0.1.0",
     "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
+    "client_id": "agent-knowledge-agent-globex",
+    "client_secret": "agent-knowledge-globex-dev-secret",
+    "principal": "agent:knowledge-agent@0.1.0",
+    "tenant": "globex",
     "roles": ["agent"],
     "scopes": []
   },
@@ -128,6 +164,22 @@
     "client_id": "agent-change-agent",
     "client_secret": "agent-change-dev-secret",
     "principal": "agent:change-agent@0.1.0",
+    "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
+    "client_id": "agent-netsec-agent",
+    "client_secret": "agent-netsec-dev-secret",
+    "principal": "agent:netsec-agent@0.1.0",
+    "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
+    "client_id": "agent-external-echo",
+    "client_secret": "agent-external-echo-dev-secret",
+    "principal": "agent:external-echo@0.1.0",
     "tenant": "acme",
     "roles": ["agent"],
     "scopes": []

@@ -1,0 +1,46 @@
+{
+  "protocolVersion": "1.0",
+  "name": "External Echo",
+  "description": "Echo capability proxied to an external A2A remote, governed at the platform boundary.",
+  "url": "http://localhost:7100/v1/a2a/agents/external-echo",
+  "preferredTransport": "JSONRPC",
+  "provider": {
+    "organization": "Agentic Control Plane (dev)",
+    "url": "https://acp.dev"
+  },
+  "version": "0.1.0",
+  "capabilities": {
+    "streaming": false,
+    "pushNotifications": false,
+    "stateTransitionHistory": false
+  },
+  "securitySchemes": {
+    "platform-oauth2": {
+      "type": "oauth2",
+      "flows": {
+        "clientCredentials": {
+          "tokenUrl": "http://localhost:7101/v1/token",
+          "scopes": { "task:submit": "Submit tasks to the platform edge" }
+        }
+      }
+    }
+  },
+  "security": [{ "platform-oauth2": ["task:submit"] }],
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"],
+  "skills": [
+    {
+      "id": "external.echo",
+      "name": "external.echo",
+      "description": "Echoes structured input back, grounded by the external remote.",
+      "tags": ["R0"],
+      "examples": ["{\"message\":\"hello\"}", "{\"message\":\"ping\"}", "{\"message\":\"echo\"}"]
+    }
+  ],
+  "signatures": [
+    {
+      "protected": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRldi1raWQiLCJiNjQiOmZhbHNlLCJjcml0IjpbImI2NCJdfQ",
+      "signature": "c2lnbmF0dXJlLWJ5dGVzLWJhc2U2NHVybA"
+    }
+  ]
+}

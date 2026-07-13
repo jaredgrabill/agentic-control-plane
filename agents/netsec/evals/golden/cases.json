@@ -1,0 +1,127 @@
+{
+  "description": "Golden set for the Network Security agent. Deterministic, extractive handlers over the acme-corp netsec fixtures (pure reads, no store). Coverage abstention is exercised per capability: a service outside the netsec snapshots abstains, never a confident 'no exposure'.",
+  "cases": [
+    {
+      "name": "rule search by service lists the payments rules with the ruleset citation",
+      "capability": "netsec.rule_search",
+      "input": { "service": "payments-api" },
+      "expect": {
+        "must_contain": ["FW-1001", "443", "0.0.0.0/0"],
+        "must_cite_docs": ["netsec/firewall-ruleset"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "rule search by port and direction spans services",
+      "capability": "netsec.rule_search",
+      "input": { "port": 443, "direction": "ingress" },
+      "expect": {
+        "must_contain": ["FW-1001", "FW-1007", "checkout-web"],
+        "must_cite_docs": ["netsec/firewall-ruleset"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "rule search without any filter is a typed needs_input failure",
+      "capability": "netsec.rule_search",
+      "input": {},
+      "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "rule search for a service outside ruleset coverage abstains",
+      "capability": "netsec.rule_search",
+      "input": { "service": "analytics" },
+      "expect": { "abstain": true }
+    },
+    {
+      "name": "exposure analysis flags payments-api as internet exposed",
+      "capability": "netsec.exposure_analysis",
+      "input": { "service": "payments-api" },
+      "expect": {
+        "must_contain": ["internet", "0.0.0.0/0", "sg-payments-01"],
+        "must_cite_docs": ["netsec/security-groups", "netsec/ipam-allocations"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "exposure analysis reports a covered closed service confidently",
+      "capability": "netsec.exposure_analysis",
+      "input": { "service": "ledger-core" },
+      "expect": {
+        "must_contain": ["no internet exposure"],
+        "must_cite_docs": ["netsec/security-groups", "netsec/ipam-allocations"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "exposure analysis for a service absent from the netsec snapshots abstains",
+      "capability": "netsec.exposure_analysis",
+      "input": { "service": "analytics" },
+      "expect": { "abstain": true }
+    },
+    {
+      "name": "adding internet ingress widens exposure and names the overlap",
+      "capability": "netsec.change_impact",
+      "input": {
+        "proposed": {
+          "action": "add",
+          "direction": "ingress",
+          "port": 443,
+          "source_cidr": "0.0.0.0/0",
+          "service": "payments-api"
+        }
+      },
+      "expect": {
+        "must_contain": ["widens", "exposure", "FW-1001"],
+        "must_cite_docs": ["netsec/firewall-ruleset"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "removing an internal egress rule does not widen exposure",
+      "capability": "netsec.change_impact",
+      "input": {
+        "proposed": {
+          "action": "remove",
+          "direction": "egress",
+          "port": 5432,
+          "source_cidr": "10.0.0.0/8",
+          "service": "ledger-core"
+        }
+      },
+      "expect": {
+        "must_contain": ["does not widen"],
+        "must_cite_docs": ["netsec/firewall-ruleset"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "change impact without a proposal is a typed needs_input failure",
+      "capability": "netsec.change_impact",
+      "input": {},
+      "expect": { "error_class": "needs_input" }
+    },
+    {
+      "name": "rule draft produces a cited, reviewable proposal that supersedes the overlap",
+      "capability": "netsec.rule_draft",
+      "input": {
+        "service": "payments-api",
+        "intent": "Restrict the payments admin plane to the corporate network range",
+        "direction": "ingress",
+        "port": 8443,
+        "source_cidr": "10.0.0.0/8"
+      },
+      "expect": {
+        "must_contain": ["draft", "proposed", "not applied", "supersedes FW-1002"],
+        "must_cite_docs": ["netsec/firewall-ruleset"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "rule draft with a too-short intent is a typed needs_input failure",
+      "capability": "netsec.rule_draft",
+      "input": { "service": "payments-api", "intent": "short" },
+      "expect": { "error_class": "needs_input" }
+    }
+  ]
+}

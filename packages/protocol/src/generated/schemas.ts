@@ -1,6 +1,215 @@
 /* Generated from packages/protocol/schemas — DO NOT EDIT. Run `pnpm gen`. */
 
 /* eslint-disable */
+export const a2aAgentCardSchema = {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp.dev/schemas/v1/a2a-agent-card.schema.json",
+  "title": "A2AAgentCard",
+  "description": "A2A v1.0 Agent Card wire document — the EXTERNAL projection of a registry agent card (ADR-0006). Produced only by the Registry's strict allowlist translation (toA2ACard): every exported field is opted IN; internal governance fields (tool bindings, scopes, model classes, data classification, compensators, eval baselines, tenants, lifecycle) are never present. signatures[] carry detached JWS (RFC 7797) by the registry signing key, verifiable against the public JWKS.",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "name",
+    "description",
+    "url",
+    "preferredTransport",
+    "version",
+    "capabilities",
+    "defaultInputModes",
+    "defaultOutputModes",
+    "skills"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A2A protocol version this card conforms to (e.g. 1.0)."
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Public service endpoint for this agent at the platform edge. Documented-inert in v0: card export ships before the inbound execution surface."
+    },
+    "preferredTransport": {
+      "type": "string",
+      "enum": [
+        "JSONRPC"
+      ],
+      "description": "v0 exports declare JSON-RPC only."
+    },
+    "provider": {
+      "type": "object",
+      "required": [
+        "organization"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "organization": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Platform organization constant — never the internal owning team."
+        },
+        "url": {
+          "type": "string",
+          "format": "uri"
+        }
+      }
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?$",
+      "description": "Semver of the exported agent version's capability contract."
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "streaming": {
+          "type": "boolean"
+        },
+        "pushNotifications": {
+          "type": "boolean"
+        },
+        "stateTransitionHistory": {
+          "type": "boolean"
+        }
+      },
+      "description": "A2A optional-feature flags; all false in v0 exports."
+    },
+    "securitySchemes": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object"
+      },
+      "description": "How an EXTERNAL consumer authenticates to the platform edge (e.g. oauth2 client credentials at the platform token endpoint). Never internal scope vocabulary."
+    },
+    "security": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "description": "Security requirements referencing securitySchemes by name."
+    },
+    "defaultInputModes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "defaultOutputModes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string"
+      }
+    },
+    "skills": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/skill"
+      }
+    },
+    "signatures": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/signature"
+      },
+      "description": "Detached JWS signatures (RFC 7797, b64=false) over the JCS-canonicalized card sans signatures, by the registry signing key."
+    }
+  },
+  "$defs": {
+    "skill": {
+      "type": "object",
+      "required": [
+        "id",
+        "name",
+        "description",
+        "tags"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+          "description": "Capability name (the platform's namespaced action, e.g. knowledge.search)."
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Governance hints (e.g. the risk class) — informational for consumers."
+        },
+        "examples": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Example inputs, serialized; drawn from the manifest's discovery examples."
+        },
+        "inputModes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "outputModes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": [
+        "protected",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "protected": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded protected JWS header ({alg, kid, b64:false, crit:[b64]})."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded JWS signature over the detached canonical payload."
+        }
+      }
+    }
+  }
+} as const;
+
 export const agentCardSchema = {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://acp.dev/schemas/v1/agent-card.schema.json",
@@ -461,7 +670,11 @@ export const auditEventSchema = {
         "eval.drift_detected",
         "eval.budget_state_changed",
         "killswitch.activated",
-        "killswitch.cleared"
+        "killswitch.cleared",
+        "task.rejected",
+        "tool_server.published",
+        "tool_server.deprecated",
+        "client.provisioned"
       ]
     },
     "delegation_link": {
@@ -1312,6 +1525,200 @@ export const taskContractSchema = {
     "timestamp": {
       "type": "string",
       "format": "date-time"
+    }
+  }
+} as const;
+
+export const toolServerSchema = {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp.dev/schemas/v1/tool-server.schema.json",
+  "title": "ToolServerRecord",
+  "description": "server.json-style publication record for one governed MCP tool server (tool-integration.md): tools with scopes and risk classes, owning team, wrapped system of record, data classification, rate limits, and deprecation. INTERNAL catalog only — it names scope vocabulary and SoR topology, so it is served on authenticated registry routes and never on the public A2A edge. Secrets are NEVER stored: auth.credential_ref is an env/vault KEY NAME expanded at the tool gateway.",
+  "type": "object",
+  "required": [
+    "id",
+    "url",
+    "version",
+    "owning_team",
+    "wrapped_sor",
+    "data_classification",
+    "auth",
+    "tools",
+    "rate_limit"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?$",
+      "description": "Semver of the published tool contract."
+    },
+    "owning_team": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Accountable human team (no ownerless tool servers)."
+    },
+    "wrapped_sor": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The system of record this server wraps (e.g. the ITSM, the cloud estate)."
+    },
+    "data_classification": {
+      "type": "string",
+      "enum": [
+        "public",
+        "internal",
+        "confidential",
+        "restricted"
+      ]
+    },
+    "auth": {
+      "type": "object",
+      "required": [
+        "mode"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "credential-ref",
+            "token-exchange"
+          ],
+          "description": "credential-ref: the gateway brokers a static credential resolved from credential_ref at startup. token-exchange: RFC 8693 exchange toward audience/scope."
+        },
+        "credential_ref": {
+          "type": "string",
+          "pattern": "^[A-Z][A-Z0-9_]*$",
+          "description": "Env/vault KEY NAME (e.g. ACP_TOOL_CRED_CLOUD_ESTATE) — never the secret value."
+        },
+        "header": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Header the brokered credential is sent in; defaults to x-acp-broker-credential."
+        },
+        "audience": {
+          "type": "string",
+          "minLength": 1
+        },
+        "scope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/tool"
+      },
+      "description": "The allowlist AND scope map: a tool absent here cannot be called through the gateway."
+    },
+    "rate_limit": {
+      "$ref": "#/$defs/rate_limit"
+    },
+    "tool_rate_limits": {
+      "type": "object",
+      "additionalProperties": {
+        "$ref": "#/$defs/rate_limit"
+      },
+      "description": "Per-tool overrides; tools not named fall back to rate_limit."
+    },
+    "deprecation": {
+      "type": "object",
+      "required": [
+        "deprecated"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "deprecated": {
+          "type": "boolean"
+        },
+        "sunset_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "replaced_by": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*$"
+        }
+      }
+    },
+    "timeout_ms": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "required": [
+        "name",
+        "scope",
+        "risk"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "description": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]*(:[a-z][a-z0-9_-]*)+$",
+          "description": "Delegated scope a caller must hold for Cedar to permit the call."
+        },
+        "risk": {
+          "type": "string",
+          "enum": [
+            "R0",
+            "R1",
+            "R2",
+            "R3"
+          ],
+          "description": "Side-effect risk: R0 read, R1 draft, R2 write-gated, R3 write-auto."
+        },
+        "input_schema": {
+          "type": "object",
+          "description": "JSON Schema 2020-12 for the tool input (informational; the gateway validates live)."
+        },
+        "output_schema": {
+          "type": "object",
+          "description": "JSON Schema 2020-12 for the tool output (informational; the gateway validates live)."
+        }
+      }
+    },
+    "rate_limit": {
+      "type": "object",
+      "required": [
+        "per_minute",
+        "burst"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "per_minute": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "burst": {
+          "type": "number",
+          "minimum": 1
+        }
+      }
     }
   }
 } as const;

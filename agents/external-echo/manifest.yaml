@@ -1,0 +1,44 @@
+id: external-echo
+name: External Echo Proxy Agent
+owner: team-platform
+description: >
+  A governed proxy to a remote A2A agent. The orchestrator dispatches to it like
+  any native agent; the adapter forwards the capability to a remote A2A endpoint
+  using its OWN credential and never the platform's delegated token, treats the
+  remote reply as untrusted (schema-validated, provenance tagged external), and
+  maps an A2A input-required to a needs_input step outcome — never an approval.
+  Proxy agents are R0/R1 only by convention: the adapter binds no tools and
+  forwards no token, so a compromised remote has no system-of-record write path.
+capabilities:
+  - name: external.echo
+    description: >
+      Echo a prompt through the remote A2A agent and return its answer. A
+      read-only (R0) round-trip: no persistent side effect on any platform
+      system of record, and the remote's citations are tagged external.
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: false
+      required: [text]
+      properties:
+        text: { type: string, minLength: 1 }
+        directive: { type: string }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: { text: hello from the platform }
+      - input: { text: summarize the weekly change calendar }
+      - input: { text: what is the capital of france }
+models:
+  allowed: [default-tier]
+data_classification: internal
+sla:
+  p95_latency_s: 30
+  quality_slo: 0.9

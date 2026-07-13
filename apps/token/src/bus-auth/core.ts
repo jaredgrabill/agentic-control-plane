@@ -126,18 +126,23 @@ export class BusAuthCore {
       };
     }
 
-    // 5) Kill switch: halted fleet, suspended agent, or denylisted principal
-    //    is refused at connection time (identity revocation at the door).
+    // 5) Kill switch: halted fleet, halted tenant, suspended agent, or
+    //    denylisted principal is refused at connection time (identity
+    //    revocation at the door). The tenant is the VERIFIED claims.tenant —
+    //    a halted tenant gets no new bus session; every other tenant is
+    //    untouched.
     const ks = this.config.killSwitch;
     if (ks !== undefined) {
       const reason =
         ks.fleetHalt() !== undefined
           ? 'fleet halt'
-          : ks.agentSuspension(agentId) !== undefined
-            ? `agent ${agentId} suspended`
-            : ks.principalDenied(claims.sub) !== undefined
-              ? `principal ${claims.sub} denylisted`
-              : undefined;
+          : ks.tenantHalt(claims.tenant) !== undefined
+            ? `tenant ${claims.tenant} halted`
+            : ks.agentSuspension(agentId) !== undefined
+              ? `agent ${agentId} suspended`
+              : ks.principalDenied(claims.sub) !== undefined
+                ? `principal ${claims.sub} denylisted`
+                : undefined;
       if (reason !== undefined) {
         return {
           ok: false,
@@ -168,12 +173,18 @@ export class BusAuthCore {
   private permissionsFor(tenant: string, agentId: string): NatsPermissions {
     return {
       pub: {
-        allow: [
-          `acp.${tenant}.audit.>`,
-          `acp.${tenant}.telemetry.>`,
-          ...this.config.agentSvcSubjects,
-          '_INBOX.>',
-        ],
+        // Agents publish telemetry and call the platform RPC surface; they do
+        // NOT publish audit. Every audit event (task.completed included) is
+        // attested by a PLATFORM service (the orchestrator, actor
+        // svc:orchestrator) over its own account connection — never by an
+        // agent session. Granting agents acp.{tenant}.audit.> let a compromised
+        // agent forge a zero-cost task.completed for its own running task,
+        // which the budget ledger booked (marker-dedup) and then DROPPED the
+        // real cost of → a full within-tenant cap bypass. Withholding audit
+        // here makes the NATS account boundary itself the attestation guard, so
+        // the ledger's trust of the subject tenant is sound. Still strictly
+        // acp.{tenant}.-prefixed and un-widenable — no isolation invariant moves.
+        allow: [`acp.${tenant}.telemetry.>`, ...this.config.agentSvcSubjects, '_INBOX.>'],
       },
       sub: {
         allow: [

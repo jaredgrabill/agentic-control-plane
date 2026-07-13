@@ -2,9 +2,11 @@ import type { NatsConnection } from 'nats';
 import { describe, expect, it } from 'vitest';
 import {
   assertFlaggableRisk,
+  assertTenantId,
   KillSwitchControl,
   KillSwitchWatcher,
   createLogger,
+  tenantOfKillSwitchKey,
 } from '../src/index.js';
 
 /** Minimal fake KV: records puts and replays a scripted watch stream. */
@@ -109,6 +111,87 @@ describe('KillSwitchControl capability and risk flags', () => {
     expect(() => {
       assertFlaggableRisk('R2');
     }).not.toThrow();
+  });
+});
+
+describe('assertTenantId', () => {
+  it('accepts KV-legal tenant ids and rejects everything else', () => {
+    expect(assertTenantId('acme')).toBe('acme');
+    expect(assertTenantId('globex')).toBe('globex');
+    expect(assertTenantId('acme-corp-eu')).toBe('acme-corp-eu');
+    for (const bad of ['a.b', 'a:b', 'a@b', '*', 'acp.>', 'Acme', '', 'a b', 'a/b']) {
+      expect(() => assertTenantId(bad), bad).toThrow(/not valid/);
+    }
+  });
+
+  it('maps kill-switch keys back to tenants (and only tenant keys)', () => {
+    expect(tenantOfKillSwitchKey('killswitch.tenant.globex')).toBe('globex');
+    expect(tenantOfKillSwitchKey('killswitch.fleet')).toBeUndefined();
+    expect(tenantOfKillSwitchKey('killswitch.agent.globex')).toBeUndefined();
+    // A structurally invalid trailing token is never a tenant.
+    expect(tenantOfKillSwitchKey('killswitch.tenant.')).toBeUndefined();
+    expect(tenantOfKillSwitchKey('killswitch.tenant.a.b')).toBeUndefined();
+  });
+});
+
+describe('KillSwitchControl tenant halt', () => {
+  it('writes and clears killswitch.tenant.{tenant}, refusing invalid tenant ids', async () => {
+    const puts: [string, string][] = [];
+    const nc = ncWith({ put: (k: string, v: string) => (puts.push([k, v]), Promise.resolve(1)) });
+    const control = await KillSwitchControl.open(nc);
+
+    await control.haltTenant('globex', 'incident drill', 'user:ops');
+    expect(puts[0]![0]).toBe('killswitch.tenant.globex');
+    expect(JSON.parse(puts[0]![1])).toMatchObject({
+      active: true,
+      reason: 'incident drill',
+      activated_by: 'user:ops',
+    });
+
+    await control.resumeTenant('globex');
+    expect(puts[1]![0]).toBe('killswitch.tenant.globex');
+    expect(JSON.parse(puts[1]![1])).toEqual({ active: false });
+
+    // A crafted tenant can never reach the KV (wildcards, other families).
+    await expect(control.haltTenant('a.b', 'x', 'y')).rejects.toThrow(/not valid/);
+    await expect(control.resumeTenant('fleet.')).rejects.toThrow(/not valid/);
+    expect(puts).toHaveLength(2);
+  });
+});
+
+describe('KillSwitchWatcher tenant halt', () => {
+  it('answers tenantHalt per tenant, active-only, and enumerates active halts', async () => {
+    async function* entries(): AsyncGenerator<Entry> {
+      await Promise.resolve();
+      yield {
+        key: 'killswitch.tenant.globex',
+        operation: 'PUT',
+        string: () => JSON.stringify({ active: true, reason: 'drill' }),
+      };
+      yield {
+        key: 'killswitch.tenant.acme',
+        operation: 'PUT',
+        string: () => JSON.stringify({ active: false }),
+      };
+      yield {
+        key: 'killswitch.fleet',
+        operation: 'PUT',
+        string: () => JSON.stringify({ active: true }),
+      };
+    }
+    const nc = ncWith({ watch: () => Promise.resolve(entries()) });
+    const watcher = await KillSwitchWatcher.start(nc, createLogger('killswitch-test'));
+    await flush();
+
+    expect(watcher.tenantHalt('globex')?.reason).toBe('drill');
+    expect(watcher.tenantHalt('acme')).toBeUndefined();
+    // Blocks exactly one tenant: another tenant is untouched.
+    expect(watcher.tenantHalt('initech')).toBeUndefined();
+    // The fleet key is a different tier — never a tenant halt.
+    expect([...watcher.activeTenantHalts().keys()]).toEqual(['globex']);
+    // An invalid tenant is refused, not silently un-halted.
+    expect(() => watcher.tenantHalt('a.b')).toThrow(/not valid/);
+    watcher.stop();
   });
 });
 

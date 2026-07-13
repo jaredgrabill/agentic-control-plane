@@ -103,7 +103,7 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
   // --- Quality change freeze (item 6, D5) — STEP 1 ---------------------------
   // The freeze wins over everything: it is checked BEFORE candidate validation,
   // and is FAIL-CLOSED (an unreachable eval service refuses the deployment).
-  const freeze = await control.checkQualityFreeze(agent_id);
+  const freeze = await control.checkQualityFreeze(tenant, agent_id);
   if (freeze.frozen) {
     await emit('deployment.failed', {
       deployment_id,
@@ -303,7 +303,7 @@ export async function DeploymentWorkflow(req: DeploymentRequest): Promise<Deploy
   // --- Quality change freeze re-check before promotion (item 6, D5) ----------
   // A freeze that opened DURING the ramp/approval must still stop the promote;
   // fail-closed here too. The candidate keeps serving as canary/shadow.
-  const promoteFreeze = await control.checkQualityFreeze(agent_id);
+  const promoteFreeze = await control.checkQualityFreeze(tenant, agent_id);
   if (promoteFreeze.frozen) {
     return demoteToShadow(
       `change freeze active before promotion (${promoteFreeze.reason ?? 'quality budget'})`,

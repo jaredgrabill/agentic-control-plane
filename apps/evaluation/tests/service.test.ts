@@ -30,6 +30,7 @@ const CONFIG = loadOnlineEvalConfig(
 /** An in-memory scores store exercising the enforcement brain without Postgres. */
 class MemStore {
   rows: ScoreIngest[] = [];
+  /** Keyed `${tenant}/${agent_id}` — mirrors the (tenant, agent_id) PK. */
   state = new Map<string, QualityState>();
 
   insert(ingest: ScoreIngest): Promise<boolean> {
@@ -37,10 +38,10 @@ class MemStore {
     this.rows.push(ingest);
     return Promise.resolve(true);
   }
-  budgetObservations(agentId: string): Promise<BudgetObservation[]> {
+  budgetObservations(tenant: string, agentId: string): Promise<BudgetObservation[]> {
     return Promise.resolve(
       this.rows
-        .filter((r) => r.agent_id === agentId)
+        .filter((r) => r.tenant === tenant && r.agent_id === agentId)
         .map((r) => ({
           source: r.source,
           route: r.route,
@@ -58,9 +59,10 @@ class MemStore {
       n_by_source: { judge: 0, probe: 0, human: 0 },
     });
   }
-  windowJudgeMean(agentId: string): Promise<number | null> {
+  windowJudgeMean(tenant: string, agentId: string): Promise<number | null> {
     const j = this.rows.filter(
       (r) =>
+        r.tenant === tenant &&
         r.agent_id === agentId &&
         r.source === 'judge' &&
         (r.route === 'active' || r.route === 'canary'),
@@ -77,11 +79,11 @@ class MemStore {
   versionRouteQuality(): Promise<{ mean: number | null; n: number }> {
     return Promise.resolve({ mean: null, n: 0 });
   }
-  getQualityState(agentId: string): Promise<QualityState | undefined> {
-    return Promise.resolve(this.state.get(agentId));
+  getQualityState(tenant: string, agentId: string): Promise<QualityState | undefined> {
+    return Promise.resolve(this.state.get(`${tenant}/${agentId}`));
   }
   upsertQualityState(s: QualityState): Promise<void> {
-    this.state.set(s.agent_id, s);
+    this.state.set(`${s.tenant}/${s.agent_id}`, s);
     return Promise.resolve();
   }
 }
@@ -93,7 +95,7 @@ const logger: Logger = {
   debug: vi.fn(),
 } as unknown as Logger;
 
-function harness(overrides?: { meta?: AgentMeta }) {
+function harness(overrides?: { meta?: AgentMeta; claims?: Partial<PlatformClaims> }) {
   const store = new MemStore();
   const audits: AuditEvent[] = [];
   const abortDeployment = vi.fn(() => Promise.resolve());
@@ -106,7 +108,8 @@ function harness(overrides?: { meta?: AgentMeta }) {
         tenant: 'platform',
         roles: ['platform'],
         scope: 'eval:write eval:read',
-      } as PlatformClaims),
+        ...overrides?.claims,
+      }),
   } as unknown as JwtVerifier;
   const app = buildEvalService({
     verifier,
@@ -276,19 +279,82 @@ describe('degradation ladder over ingests', () => {
 });
 
 describe('quality endpoint', () => {
-  it('returns the SLI + budget + freeze view', async () => {
+  it('returns the SLI + budget + freeze view for the named tenant', async () => {
     const { app } = harness();
     const res = await app.inject({
       method: 'GET',
-      url: '/v1/agents/poison-agent/quality',
+      url: '/v1/agents/poison-agent/quality?tenant=acme',
       headers: AUTH,
     });
     expect(res.statusCode).toBe(200);
     const body: { agent_id: string; window_h: number; budget: unknown; frozen: unknown } =
       res.json();
-    expect(body).toMatchObject({ agent_id: 'poison-agent', window_h: 24 });
+    expect(body).toMatchObject({ agent_id: 'poison-agent', tenant: 'acme', window_h: 24 });
     expect(body.budget).toHaveProperty('state');
     expect(body).toHaveProperty('frozen');
+  });
+
+  it('requires the tenant param on both read surfaces (400 when missing)', async () => {
+    const { app } = harness();
+    const quality = await app.inject({
+      method: 'GET',
+      url: '/v1/agents/poison-agent/quality',
+      headers: AUTH,
+    });
+    expect(quality.statusCode).toBe(400);
+    const aggregate = await app.inject({
+      method: 'GET',
+      url: '/v1/scores/aggregate?agent_id=k&agent_version=0.2.0&route=shadow',
+      headers: AUTH,
+    });
+    expect(aggregate.statusCode).toBe(400);
+  });
+
+  it('400s a malformed tenant on the budget route, not 500 (B5)', async () => {
+    // A platform caller naming a malformed tenant (e.g. "foo.bar") must get a
+    // client-error 400, never a 500 from budgetStatus's internal assertTenantId.
+    const { app } = harness();
+    const bad = await app.inject({
+      method: 'GET',
+      url: '/v1/tenants/foo.bar/budget',
+      headers: AUTH,
+    });
+    expect(bad.statusCode).toBe(400);
+    // A well-formed tenant passes the shape gate (here it 404s only because no
+    // budget ledger is wired into this harness) — proving 400 is the format,
+    // not a missing dependency.
+    const wellFormed = await app.inject({
+      method: 'GET',
+      url: '/v1/tenants/globex/budget',
+      headers: AUTH,
+    });
+    expect(wellFormed.statusCode).toBe(404);
+  });
+
+  it('binds the tenant param to the verified claims for non-platform callers', async () => {
+    // A tenant-scoped caller may read ONLY its own tenant's quality.
+    const { app } = harness({
+      claims: { sub: 'user:eve', tenant: 'globex', roles: ['tenant-user'] },
+    });
+    const foreign = await app.inject({
+      method: 'GET',
+      url: '/v1/agents/poison-agent/quality?tenant=acme',
+      headers: AUTH,
+    });
+    expect(foreign.statusCode).toBe(403);
+    const foreignAgg = await app.inject({
+      method: 'GET',
+      url: '/v1/scores/aggregate?tenant=acme&agent_id=k&agent_version=0.2.0&route=shadow',
+      headers: AUTH,
+    });
+    expect(foreignAgg.statusCode).toBe(403);
+
+    const own = await app.inject({
+      method: 'GET',
+      url: '/v1/agents/poison-agent/quality?tenant=globex',
+      headers: AUTH,
+    });
+    expect(own.statusCode).toBe(200);
   });
 
   it('serves the version+route aggregate for the deployment gate', async () => {
@@ -296,7 +362,7 @@ describe('quality endpoint', () => {
     void new HashEmbedder(); // embedding pkg is wired
     const res = await app.inject({
       method: 'GET',
-      url: '/v1/scores/aggregate?agent_id=k&agent_version=0.2.0&route=shadow',
+      url: '/v1/scores/aggregate?tenant=acme&agent_id=k&agent_version=0.2.0&route=shadow',
       headers: AUTH,
     });
     expect(res.statusCode).toBe(200);
@@ -307,10 +373,41 @@ describe('quality endpoint', () => {
     const { app } = harness();
     const res = await app.inject({
       method: 'GET',
-      url: '/v1/scores/aggregate?agent_id=k',
+      url: '/v1/scores/aggregate?tenant=acme&agent_id=k',
       headers: AUTH,
     });
     expect(res.statusCode).toBe(400);
+  });
+
+  it("quality state is tenant-isolated: one tenant's burn never freezes another", async () => {
+    // Drive acme's poison-agent to an exhausted budget via weighted probe
+    // failures, then read the SAME agent under globex: level ok, not frozen.
+    const { app, store } = harness();
+    for (const id of ['t1', 't2']) {
+      await app.inject({
+        method: 'POST',
+        url: '/v1/scores',
+        headers: AUTH,
+        payload: probeFail(id),
+      });
+    }
+    expect(store.state.get('acme/poison-agent')?.level).not.toBe('ok');
+    expect(store.state.get('globex/poison-agent')).toBeUndefined();
+
+    const globexView = await app.inject({
+      method: 'GET',
+      url: '/v1/agents/poison-agent/quality?tenant=globex',
+      headers: AUTH,
+    });
+    expect(globexView.statusCode).toBe(200);
+    expect(globexView.json()).toMatchObject({ level: 'ok', frozen: false });
+
+    const acmeView = await app.inject({
+      method: 'GET',
+      url: '/v1/agents/poison-agent/quality?tenant=acme',
+      headers: AUTH,
+    });
+    expect(acmeView.json<{ frozen: boolean }>().frozen).toBe(true);
   });
 });
 

@@ -1,0 +1,4 @@
+{
+  "description": "PLATFORM-controlled A2A card export allowlist (item 3): only agent ids named here are exportable at the public edge, and only their signed strict projection. Exposure is deploy config on purpose — an agent team cannot self-expose by editing manifest.yaml.",
+  "exposed": ["external-echo"]
+}

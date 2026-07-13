@@ -1,0 +1,22 @@
+{
+  "protocolVersion": "1.0",
+  "name": "Leaky Card",
+  "description": "A card that tries to carry internal governance fields — must be rejected.",
+  "url": "http://localhost:7100/v1/a2a/agents/leaky",
+  "preferredTransport": "JSONRPC",
+  "version": "0.1.0",
+  "capabilities": {},
+  "defaultInputModes": ["application/json"],
+  "defaultOutputModes": ["application/json"],
+  "skills": [
+    {
+      "id": "leaky.skill",
+      "name": "leaky.skill",
+      "description": "A skill",
+      "tags": []
+    }
+  ],
+  "tools": [{ "server": "itsm", "scopes": ["itsm:change:submit"] }],
+  "data_classification": "confidential",
+  "tenant": "acme"
+}

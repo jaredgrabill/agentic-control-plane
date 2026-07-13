@@ -127,6 +127,8 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
   /** Fetches the paired judged-quality means for a deployment gate (item 6, D8). */
   async function fetchGateQuality(input: {
     kind: 'shadow' | 'canary';
+    /** Phase 4 item 1: the aggregate is per-tenant — the deployment's tenant. */
+    tenant: string;
     agentId?: string;
     candidateVersion: string;
     incumbentVersion?: string;
@@ -148,7 +150,8 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
       ): Promise<{ mean: number | null; n: number }> => {
         const res = await doFetch(
           `${deps.evaluationUrl ?? ''}/v1/scores/aggregate` +
-            `?agent_id=${encodeURIComponent(input.agentId ?? '')}` +
+            `?tenant=${encodeURIComponent(input.tenant)}` +
+            `&agent_id=${encodeURIComponent(input.agentId ?? '')}` +
             `&agent_version=${encodeURIComponent(version)}&route=${route}` +
             `&since=${encodeURIComponent(input.since)}`,
           { headers: { authorization: `Bearer ${token}` } },
@@ -551,12 +554,14 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
     },
 
     async checkQualityFreeze(
+      tenant,
       agentId,
     ): Promise<{ frozen: boolean; reason?: string; burn_ratio?: number }> {
       try {
         const token = await serviceToken('acp:eval', 'eval:read');
         const res = await doFetch(
-          `${deps.evaluationUrl ?? ''}/v1/agents/${encodeURIComponent(agentId)}/quality`,
+          `${deps.evaluationUrl ?? ''}/v1/agents/${encodeURIComponent(agentId)}/quality` +
+            `?tenant=${encodeURIComponent(tenant)}`,
           { headers: { authorization: `Bearer ${token}` } },
         );
         if (!res.ok) {

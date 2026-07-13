@@ -29,6 +29,8 @@ export const DEFAULT_MAX_TASK_AGE_SECONDS = 86_400;
  */
 export interface KillSwitchLike {
   fleetHalt(): unknown;
+  /** Per-tenant halt (Phase 4 item 1) — a fleet halt scoped to one tenant. */
+  tenantHalt(tenant: string): unknown;
   agentSuspension(agentId: string): unknown;
   principalDenied(sub: string): unknown;
   /** Tier-2 named-capability flag (item 5) — blocks even a compensator. */

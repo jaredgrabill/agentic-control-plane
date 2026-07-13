@@ -11,6 +11,7 @@ const logger = createLogger('knowledge-test');
 
 const HIT: SearchHit = {
   lineage_id: '0197a3b0-6c1e-7d3a-8f4b-2f9c1d2e3f42',
+  source_id: 'policy-docs',
   doc_id: 'policy/change-management',
   doc_version: '3.2.0',
   title: 'Change Management Policy',

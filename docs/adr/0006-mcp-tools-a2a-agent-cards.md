@@ -1,7 +1,7 @@
 # ADR-0006: MCP for Tool Access; A2A-Compatible Agent Cards for Discovery
 
-- **Status:** Proposed
-- **Date:** 2026-07-10
+- **Status:** Accepted
+- **Date:** 2026-07-10 (accepted 2026-07-13, Phase 4 item 3)
 - **Deciders:** platform architecture group
 
 ## Context
@@ -60,3 +60,28 @@ standardizing at protocol boundaries, not framework choice
   — pinned versions per release, upgrades via ADR-noted platform releases.
 - Revisit if: A2A discovery/registry standardization matures to where our
   registry should *be* an A2A registry rather than export to one.
+
+## Implementation (Phase 4 item 3)
+
+- **Signed A2A card EXPORT only.** The registry translates a card through a
+  strict opt-in allowlist projection (`apps/registry/src/a2a.ts`) — never
+  exporting `tools`, scopes, `models`, `data_classification`, saga wiring,
+  `eval_baseline`, `tenant`, or `sla` — and re-signs it as a detached JWS with
+  the registry key (the sole signer). The gateway serves it unauthenticated at
+  `/.well-known/agent.json` (index) and `/v1/a2a/agents/:id/.well-known/agent.json`;
+  a non-exposed or unknown agent answers an identical 404. Exposure is a
+  platform allowlist (`deploy/dev/a2a-exposure.json`), never agent-authored.
+  The card `url` is documented-inert: the inbound A2A EXECUTION endpoint is out
+  of scope and stays closed until separately designed.
+- **External agents onboard as proxy registry records.** `@acp/a2a-proxy` is a
+  thin adapter that IS an `@acp/agent-sdk` `Agent`, so the orchestrator PEP
+  gates it byte-for-byte like a native agent. It authenticates to the remote
+  with its OWN `ACP_PROXY_CREDENTIAL`; the broker `delegated_token` never
+  egresses. Remote replies are untrusted (output schema-validated by the SDK,
+  first-party lineage stripped, remote citations dropped, remote usage not
+  booked). A2A `input-required` maps to a `needs_input` step outcome, never an
+  approval grant. See [messaging-and-discovery.md](../architecture/messaging-and-discovery.md).
+- **server.json tool-server catalog** lives in the registry, opt-in behind
+  `ACP_TOOL_CATALOG_URL` (default OFF, static-file fallback). Secrets are never
+  stored — `auth.credential_ref` is an env/vault key name expanded at the tool
+  gateway. See [tool-integration.md](../standards/tool-integration.md).

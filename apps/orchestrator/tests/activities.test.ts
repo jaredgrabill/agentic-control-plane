@@ -820,16 +820,21 @@ describe('probe activities (item 6)', () => {
 });
 
 describe('checkQualityFreeze (item 6)', () => {
-  it('reads the eval quality endpoint and returns frozen when the budget is frozen', async () => {
+  it('reads the eval quality endpoint PER TENANT and returns frozen when the budget is frozen', async () => {
+    const urls: string[] = [];
     const fetchImpl = vi.fn((url: string | URL) => {
       const s = String(url);
+      urls.push(s);
       if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
       return jsonResponse({ frozen: true, budget: { burn_ratio: 1.4, state: 'exhausted' } });
     }) as unknown as typeof fetch;
-    const r = await makeActivities(fetchImpl).checkQualityFreeze('knowledge-agent');
+    const r = await makeActivities(fetchImpl).checkQualityFreeze('acme', 'knowledge-agent');
     expect(r.frozen).toBe(true);
     expect(r.reason).toBe('change_freeze');
     expect(r.burn_ratio).toBe(1.4);
+    // Phase 4 item 1: the freeze is read for the DEPLOYMENT's tenant.
+    const qualityUrl = urls.find((u) => u.includes('/quality'));
+    expect(qualityUrl).toContain('tenant=acme');
   });
 
   it('returns not-frozen when the budget is healthy', async () => {
@@ -838,7 +843,7 @@ describe('checkQualityFreeze (item 6)', () => {
         ? jsonResponse({ access_token: 't' })
         : jsonResponse({ frozen: false, budget: { burn_ratio: 0, state: 'ok' } }),
     ) as unknown as typeof fetch;
-    const r = await makeActivities(fetchImpl).checkQualityFreeze('knowledge-agent');
+    const r = await makeActivities(fetchImpl).checkQualityFreeze('acme', 'knowledge-agent');
     expect(r.frozen).toBe(false);
   });
 
@@ -848,7 +853,7 @@ describe('checkQualityFreeze (item 6)', () => {
         ? jsonResponse({ access_token: 't' })
         : Promise.reject(new Error('eval down')),
     ) as unknown as typeof fetch;
-    const r = await makeActivities(fetchImpl).checkQualityFreeze('knowledge-agent');
+    const r = await makeActivities(fetchImpl).checkQualityFreeze('acme', 'knowledge-agent');
     expect(r.frozen).toBe(true);
     expect(r.reason).toBe('freeze_check_unavailable');
   });
@@ -859,7 +864,7 @@ describe('checkQualityFreeze (item 6)', () => {
         ? jsonResponse({ access_token: 't' })
         : jsonResponse({ frozen: true }),
     ) as unknown as typeof fetch;
-    const r = await makeActivities(fetchImpl).checkQualityFreeze('knowledge-agent');
+    const r = await makeActivities(fetchImpl).checkQualityFreeze('acme', 'knowledge-agent');
     expect(r.frozen).toBe(true);
     expect(r.burn_ratio).toBeUndefined();
   });
@@ -870,7 +875,7 @@ describe('checkQualityFreeze (item 6)', () => {
         ? jsonResponse({ access_token: 't' })
         : jsonResponse({}, 500),
     ) as unknown as typeof fetch;
-    const r = await makeActivities(fetchImpl).checkQualityFreeze('knowledge-agent');
+    const r = await makeActivities(fetchImpl).checkQualityFreeze('acme', 'knowledge-agent');
     expect(r.frozen).toBe(true);
     expect(r.reason).toBe('freeze_check_unavailable');
   });
@@ -883,6 +888,8 @@ describe('evaluateGate quality fold (item 6)', () => {
       if (s.endsWith('/v1/token')) return jsonResponse({ access_token: 't' });
       if (s.includes('/v1/events')) return jsonResponse({ events: [] });
       if (s.includes('/v1/scores/aggregate')) {
+        // Phase 4 item 1: the aggregate is read for the deployment's tenant.
+        expect(new URL(s).searchParams.get('tenant')).toBe('acme');
         // Candidate (shadow route) low, incumbent (active) high → breach.
         const route = new URL(s).searchParams.get('route');
         return route === 'shadow'

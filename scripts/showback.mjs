@@ -5,11 +5,19 @@
  * total cost, task count, cost per task, per-capability breakdown, and how
  * many tasks were fallback-priced. No dashboards, no OTel — just the numbers.
  *
- *   node scripts/showback.mjs <tenant> [--since <ISO-8601>]
+ *   node scripts/showback.mjs <tenant> [--since <ISO-8601>] [--json]
  *
- * Precedent: kill-switch.mjs (env + client_credentials). The token is minted
- * for the audit audience (aud acp:audit, scope audit:read); the audit service
- * enforces both.
+ * Phase 4 item 1: `--json` emits a machine-readable chargeback export, and
+ * both outputs include budget_status — the LIVE per-tenant budget row (cap /
+ * committed / reserved for the current period) read from the evaluation
+ * service. Absent cap = uncapped; an unreachable eval service reports
+ * budget_status unavailable (the audit-derived rollup still prints).
+ *
+ * Precedent: kill-switch.mjs (env + client_credentials). The tokens are
+ * minted per audience (aud acp:audit scope audit:read; aud acp:eval scope
+ * eval:read); each service enforces both. The svc-ci client is platform-role,
+ * so naming a tenant here falls under the platform exemption — a
+ * tenant-scoped client could only ever export its own tenant.
  */
 import console from 'node:console';
 import process from 'node:process';
@@ -17,10 +25,11 @@ import process from 'node:process';
 const [tenant, ...rest] = process.argv.slice(2);
 const sinceIdx = rest.indexOf('--since');
 const since = sinceIdx >= 0 ? rest[sinceIdx + 1] : undefined;
+const asJson = rest.includes('--json');
 
 if (tenant === undefined || tenant === '' || (sinceIdx >= 0 && since === undefined)) {
   console.error(
-    'usage: node scripts/showback.mjs <tenant> [--since <ISO-8601>]\n' +
+    'usage: node scripts/showback.mjs <tenant> [--since <ISO-8601>] [--json]\n' +
       'Aggregates task.completed cost_usd from the audit stream for one tenant.',
   );
   process.exit(2);
@@ -98,7 +107,61 @@ for (const event of events) {
   }
 }
 
+// Live budget row (cap / committed / reserved) from the evaluation service —
+// best effort: the audit-derived rollup must not fail with the eval service.
+const evaluationUrl = process.env.ACP_EVALUATION_URL ?? 'http://localhost:7108';
+let budgetStatus = null;
+try {
+  const evalTokenRes = await fetch(`${tokenUrl}/v1/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret,
+      audience: 'acp:eval',
+      scope: 'eval:read',
+    }),
+  });
+  if (evalTokenRes.ok) {
+    const { access_token: evalToken } = await evalTokenRes.json();
+    const budgetRes = await fetch(
+      `${evaluationUrl}/v1/tenants/${encodeURIComponent(tenant)}/budget`,
+      { headers: { authorization: `Bearer ${evalToken}` } },
+    );
+    if (budgetRes.ok) budgetStatus = await budgetRes.json();
+  }
+} catch {
+  // eval service unreachable — budget_status stays null (reported below)
+}
+
 const usd = (micros) => `$${(micros / 1_000_000).toFixed(6)}`;
+
+if (asJson) {
+  const perCapabilityUsd = {};
+  for (const [capability, micros] of perCapability) {
+    perCapabilityUsd[capability] = micros / 1_000_000;
+  }
+  console.log(
+    JSON.stringify(
+      {
+        tenant,
+        ...(since === undefined ? {} : { since }),
+        tasks_completed: tasks,
+        priced_tasks: priced,
+        unpriced_tasks: unpriced,
+        fallback_priced_tasks: fallbackTasks,
+        total_cost_usd: totalMicros / 1_000_000,
+        cost_per_priced_task_usd: priced > 0 ? totalMicros / priced / 1_000_000 : 0,
+        per_capability_usd: perCapabilityUsd,
+        budget_status: budgetStatus,
+      },
+      null,
+      2,
+    ),
+  );
+  process.exit(0);
+}
 
 console.log(`Showback — tenant ${tenant}${since !== undefined ? ` since ${since}` : ''}`);
 console.log('-'.repeat(52));
@@ -117,4 +180,17 @@ if (perCapability.size > 0) {
   for (const [capability, micros] of rows) {
     console.log(`  ${capability.padEnd(32)} ${usd(micros)}`);
   }
+}
+
+console.log('\nbudget status (current period):');
+if (budgetStatus === null) {
+  console.log('  unavailable (evaluation service unreachable)');
+} else if (budgetStatus.capped !== true) {
+  console.log('  uncapped (no budget cap configured for this tenant)');
+} else {
+  console.log(`  period start:        ${budgetStatus.period_start}`);
+  console.log(`  cap:                 $${budgetStatus.cap_usd.toFixed(6)}`);
+  console.log(`  committed:           $${budgetStatus.committed_usd.toFixed(6)}`);
+  console.log(`  reserved (in-flight): $${budgetStatus.reserved_usd.toFixed(6)}`);
+  console.log(`  remaining:           $${budgetStatus.remaining_usd.toFixed(6)}`);
 }

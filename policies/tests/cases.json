@@ -813,6 +813,135 @@
       }
     },
     {
+      "name": "netsec agent calls firewall_rules_search through the gateway PEP (R0 read)",
+      "expect": "allow",
+      "determined_by": "allow-tool-netsec-firewall-rules-search",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:netsec-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:netsec:firewall_rules_search",
+        "resource": { "type": "Service", "id": "svc:netsec", "attrs": {} },
+        "context": { "scopes": ["netsec:firewall:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "netsec agent calls security_group_get through the gateway PEP (R0 read)",
+      "expect": "allow",
+      "determined_by": "allow-tool-netsec-security-group-get",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:netsec-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:netsec:security_group_get",
+        "resource": { "type": "Service", "id": "svc:netsec", "attrs": {} },
+        "context": { "scopes": ["netsec:secgroup:read", "netsec:ipam:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "netsec agent calls ipam_lookup through the gateway PEP (R0 read)",
+      "expect": "allow",
+      "determined_by": "allow-tool-netsec-ipam-lookup",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:netsec-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:netsec:ipam_lookup",
+        "resource": { "type": "Service", "id": "svc:netsec", "attrs": {} },
+        "context": { "scopes": ["netsec:secgroup:read", "netsec:ipam:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "netsec agent calls vuln_scan_report through the gateway PEP (R0 read)",
+      "expect": "allow",
+      "determined_by": "allow-tool-netsec-vuln-scan-report",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:netsec-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:netsec:vuln_scan_report",
+        "resource": { "type": "Service", "id": "svc:netsec", "attrs": {} },
+        "context": { "scopes": ["netsec:vuln:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "netsec scopes open no other server — an itsm tool call with netsec scopes is denied",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:netsec-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_get",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": {
+          "scopes": ["netsec:firewall:read", "netsec:secgroup:read"],
+          "tenant": "acme"
+        }
+      }
+    },
+    {
+      "name": "netsec agent with an empty delegated scope set cannot call firewall_rules_search",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:netsec-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:netsec:firewall_rules_search",
+        "resource": { "type": "Service", "id": "svc:netsec", "attrs": {} },
+        "context": { "scopes": [], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "netsec firewall_rules_search cross-tenant is denied",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:netsec-agent@0.1.0",
+          "attrs": { "tenant": "globex" }
+        },
+        "action": "tool:netsec:firewall_rules_search",
+        "resource": { "type": "Service", "id": "svc:netsec", "attrs": {} },
+        "context": { "scopes": ["netsec:firewall:read"], "tenant": "acme" }
+      }
+    },
+    {
+      "name": "no netsec write action is modeled — tool:netsec:rule_apply falls to default deny",
+      "expect": "deny",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:netsec-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:netsec:rule_apply",
+        "resource": { "type": "Service", "id": "svc:netsec", "attrs": {} },
+        "context": {
+          "scopes": [
+            "netsec:firewall:read",
+            "netsec:secgroup:read",
+            "netsec:ipam:read",
+            "netsec:vuln:read"
+          ],
+          "tenant": "acme",
+          "approval": { "granted": true, "capability": "netsec.rule_apply" },
+          "compensation": { "active": false }
+        }
+      }
+    },
+    {
       "name": "an unmodeled action falls to default deny",
       "expect": "deny",
       "request": {

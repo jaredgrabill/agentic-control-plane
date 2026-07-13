@@ -16,6 +16,9 @@ export default defineConfig({
         'src/service/store.ts',
         'src/service/actions.ts',
         'src/service/token.ts',
+        // pg/NATS IO adapters for the budget ledger; the decision logic they
+        // defer to (budget.ts) is unit-tested, the adapters run in E2E.
+        'src/service/budget-ledger.ts',
       ],
       thresholds: { lines: 85, functions: 85, branches: 85, statements: 85 },
     },

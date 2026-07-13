@@ -1,0 +1,43 @@
+{
+  "document": {
+    "doc_id": "netsec/ipam-allocations",
+    "version": "2026-07-10",
+    "effective_date": "2026-07-10",
+    "url": "https://netsec.acme.example/ipam/2026-07-10",
+    "lineage_id": "01981c00-0000-7000-8000-0000000000d3"
+  },
+  "as_of": "2026-07-10",
+  "tenant": "acme",
+  "allocations": [
+    {
+      "cidr": "198.51.100.0/28",
+      "service": "payments-api",
+      "zone": "public",
+      "ips": ["198.51.100.4", "198.51.100.5"]
+    },
+    {
+      "cidr": "10.20.1.0/24",
+      "service": "payments-api",
+      "zone": "private",
+      "ips": ["10.20.1.11", "10.20.1.12"]
+    },
+    {
+      "cidr": "10.20.2.0/24",
+      "service": "ledger-core",
+      "zone": "private",
+      "ips": ["10.20.2.21", "10.20.2.22"]
+    },
+    {
+      "cidr": "198.51.100.16/28",
+      "service": "checkout-web",
+      "zone": "public",
+      "ips": ["198.51.100.20"]
+    },
+    {
+      "cidr": "10.20.3.0/24",
+      "service": "partner-gateway",
+      "zone": "private",
+      "ips": ["10.20.3.31"]
+    }
+  ]
+}

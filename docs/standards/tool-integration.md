@@ -134,3 +134,22 @@ Per [testing.md](testing.md):
   oversized inputs — in CI, not just annual pentests.
 - Load: rate-limit behavior verified (the gateway trusts the declared
   limits; wrong declarations melt fragile enterprise systems).
+
+## Tool-Server Catalog (server.json)
+
+The static `tool-servers.json` is superseded by a registry-backed **catalog** of
+`server.json`-style records (`ToolServerRecord`): tools with scopes and risk,
+owning team, wrapped system of record, data classification, rate limits, and
+deprecation. It is served on authenticated registry routes only — `GET
+/v1/tool-servers(+/:id)` require `registry:read`, `PUT /v1/tool-servers/:id`
+requires `registry:admin` and audits `tool_server.published`/`.deprecated`. The
+catalog is **INTERNAL** (it names scope vocabulary, SoR topology, and credential
+key names) and is NEVER served on the public A2A edge.
+
+**Secrets are never stored.** `auth.credential_ref` holds an env/vault KEY NAME
+(e.g. `ACP_TOOL_CRED_CLOUD_ESTATE`); the tool gateway expands it at call time.
+Cutover is opt-in: the tool gateway loads the catalog only when
+`ACP_TOOL_CATALOG_URL` is set, otherwise it keeps loading the static file, so
+dev/CI behavior is unchanged until the flag is flipped after a green parity
+snapshot. A backward-compat seed converts the legacy static file into records on
+first registry boot.

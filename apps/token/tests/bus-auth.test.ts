@@ -15,9 +15,15 @@ let issuerPublic: string;
 const account = accountFromSeed(ISSUER_SEED);
 
 // Toggleable kill-switch stub.
-const ks = { fleet: false, agents: new Set<string>(), principals: new Set<string>() };
+const ks = {
+  fleet: false,
+  tenants: new Set<string>(),
+  agents: new Set<string>(),
+  principals: new Set<string>(),
+};
 const killSwitch = {
   fleetHalt: () => (ks.fleet ? { active: true } : undefined),
+  tenantHalt: (tenant: string) => (ks.tenants.has(tenant) ? { active: true } : undefined),
   agentSuspension: (id: string) => (ks.agents.has(id) ? { active: true } : undefined),
   principalDenied: (sub: string) => (ks.principals.has(sub) ? { active: true } : undefined),
   capabilitySuspension: () => undefined,
@@ -40,6 +46,7 @@ beforeAll(async () => {
 
 function reset() {
   ks.fleet = false;
+  ks.tenants.clear();
   ks.agents.clear();
   ks.principals.clear();
 }
@@ -93,8 +100,10 @@ describe('BusAuthCore mint (happy path)', () => {
     };
     expect(nats.type).toBe('user');
     expect(nats.version).toBe(2);
+    // Agents publish telemetry + the platform RPC surface, NOT audit: a minted
+    // session must NOT be able to attest audit events (see the self-forgery
+    // regression below and budget.ts). Order is the template's.
     expect(nats.pub.allow).toEqual([
-      'acp.acme.audit.>',
       'acp.acme.telemetry.>',
       'acp.platform.svc.knowledge.>',
       '_INBOX.>',
@@ -105,6 +114,26 @@ describe('BusAuthCore mint (happy path)', () => {
       'acp.platform.control.>',
       '_INBOX.>',
     ]);
+  });
+
+  it('grants NO audit publish — an agent cannot forge task.completed (B1)', async () => {
+    // The within-tenant budget cap depends on only the PLATFORM attesting
+    // task.completed. A minted agent session must have no audit publish grant
+    // at all — not the tenant audit prefix, not the specific completion
+    // subject — so the NATS account boundary itself refuses the forgery.
+    reset();
+    const decision = await core.evaluate({ authToken: await busToken(), userNkey: USER_NKEY });
+    expect(decision.ok).toBe(true);
+    if (!decision.ok) return;
+    const pub = (decodeJwt(decision.userJwt).nats as { pub: { allow: string[] } }).pub.allow;
+    expect(pub).not.toContain('acp.acme.audit.>');
+    expect(pub.some((s) => s.startsWith('acp.acme.audit'))).toBe(false);
+    // No subject in the grant matches acp.acme.audit.task.completed.
+    const matches = (subj: string, pat: string): boolean => {
+      if (pat.endsWith('.>')) return subj.startsWith(pat.slice(0, -1));
+      return subj === pat;
+    };
+    expect(pub.some((p) => matches('acp.acme.audit.task.completed', p))).toBe(false);
   });
 });
 
@@ -194,6 +223,30 @@ describe('BusAuthCore deny matrix (fail closed)', () => {
     const halted = await core.evaluate({ authToken: await busToken(), userNkey: USER_NKEY });
     expect(halted.ok).toBe(false);
     if (!halted.ok) expect(halted.error).toContain('fleet halt');
+  });
+
+  it('refuses a halted tenant by VERIFIED claims.tenant; other tenants unaffected', async () => {
+    reset();
+    ks.tenants.add('acme');
+    const halted = await core.evaluate({ authToken: await busToken(), userNkey: USER_NKEY });
+    expect(halted.ok).toBe(false);
+    if (!halted.ok) {
+      expect(halted.error).toContain('tenant acme halted');
+      expect(halted.principal).toBe('agent:cloud-agent@0.1.0');
+      expect(halted.tenant).toBe('acme');
+    }
+
+    // A halt on some OTHER tenant leaves this tenant's sessions untouched —
+    // the check is keyed by the verified token tenant, nothing else.
+    reset();
+    ks.tenants.add('globex');
+    const untouched = await core.evaluate({ authToken: await busToken(), userNkey: USER_NKEY });
+    expect(untouched.ok).toBe(true);
+
+    // A fleet halt still refuses everyone (tenant tier narrows, never widens).
+    ks.fleet = true;
+    const fleetHalted = await core.evaluate({ authToken: await busToken(), userNkey: USER_NKEY });
+    expect(fleetHalted.ok).toBe(false);
   });
 });
 

@@ -1,0 +1,16 @@
+{
+  "schema": "acp-eval-baseline/v1",
+  "agent_id": "netsec-agent",
+  "agent_version": "0.1.0",
+  "metrics": {
+    "pass_rate": 1,
+    "citation_precision": 1,
+    "abstention_accuracy": 1
+  },
+  "suite": {
+    "digest": "sha256:38ff03aa21098876114e663dd7a9424f2c4acf055f3c0faa5ecc3b250c4de11d",
+    "case_count": 12
+  },
+  "harness": "acp-agent-sdk-ts@0.1.0",
+  "recorded_at": "2026-07-12T00:00:00.000Z"
+}

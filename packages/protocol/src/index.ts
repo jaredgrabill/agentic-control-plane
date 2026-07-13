@@ -3,6 +3,7 @@ export { subjects } from './subjects.js';
 export type { TaskVerb, AgentVerb, RegistryVerb, ControlVerb, SvcName } from './subjects.js';
 export {
   ProtocolValidationError,
+  a2aAgentCard,
   agentCard,
   agentManifest,
   auditEvent,
@@ -14,4 +15,5 @@ export {
   plan,
   evalReport,
   evalBaseline,
+  toolServerRecord,
 } from './validate.js';

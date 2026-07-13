@@ -14,6 +14,40 @@ const agentKey = (agentId: string): string => `killswitch.agent.${agentId}`;
 const capabilityKey = (name: string): string => `killswitch.capability.${name}`;
 /** Tier-2 risk-class flag key. Class ∈ {R1,R2,R3} (R0 is refused at the flip surface). */
 const riskKey = (riskClass: string): string => `killswitch.risk.${riskClass}`;
+/**
+ * Per-tenant halt key family (Phase 4 item 1): a fleet halt scoped to ONE
+ * tenant. Tenant ids are `[a-z0-9-]+` (KV-legal — no `.`/`:`/`@`), so unlike
+ * the principal key no encoding is needed and the tenant reads back verbatim
+ * from the key. Covered by the watcher's `killswitch.>` prefix.
+ */
+export const KILLSWITCH_TENANT_PREFIX = 'killswitch.tenant.';
+const tenantKey = (tenant: string): string =>
+  `${KILLSWITCH_TENANT_PREFIX}${assertTenantId(tenant)}`;
+
+const TENANT_ID_RE = /^[a-z0-9-]+$/;
+
+/**
+ * Guards every tenant-keyed kill-switch write/read: only `[a-z0-9-]+` is a
+ * tenant id (the same alphabet the NATS subject builders enforce), so a
+ * crafted "tenant" can never smuggle a KV wildcard, another key family, or an
+ * encoding ambiguity into the control bucket. Returns the id for inline use.
+ */
+export function assertTenantId(tenant: string): string {
+  if (!TENANT_ID_RE.test(tenant)) {
+    throw new Error(`tenant id ${JSON.stringify(tenant)} is not valid — expected /^[a-z0-9-]+$/`);
+  }
+  return tenant;
+}
+
+/**
+ * The tenant a `killswitch.tenant.{tenant}` key targets, or undefined for any
+ * other key (the fleet canceller uses this to map flips to halt predicates).
+ */
+export function tenantOfKillSwitchKey(key: string): string | undefined {
+  if (!key.startsWith(KILLSWITCH_TENANT_PREFIX)) return undefined;
+  const tenant = key.slice(KILLSWITCH_TENANT_PREFIX.length);
+  return TENANT_ID_RE.test(tenant) ? tenant : undefined;
+}
 
 /** Risk rank: a flag on class C blocks every executing risk with rank ≥ rank(C). */
 const RISK_RANK: Record<string, number> = { R0: 0, R1: 1, R2: 2, R3: 3 };
@@ -107,6 +141,33 @@ export class KillSwitchWatcher {
   fleetHalt(): KillSwitchState | undefined {
     const s = this.state.get(FLEET_KEY);
     return s?.active === true ? s : undefined;
+  }
+
+  /**
+   * Whether a single tenant is halted (Phase 4 item 1): a fleet halt scoped to
+   * one tenant — gates NEW intake and NEW bus sessions and drives the
+   * auto-canceller for that tenant only; monotonic and compensator-exempt
+   * exactly like the fleet tier. The tenant is validated so an unexpected
+   * caller value can never read a foreign key family.
+   */
+  tenantHalt(tenant: string): KillSwitchState | undefined {
+    const s = this.state.get(tenantKey(tenant));
+    return s?.active === true ? s : undefined;
+  }
+
+  /**
+   * Every tenant with an ACTIVE tenant halt, keyed by tenant id. The fleet
+   * auto-canceller reads this at startup (restart survival — onFlip does not
+   * replay history) and on each sweep to decide which tenants a halt covers.
+   */
+  activeTenantHalts(): Map<string, KillSwitchState> {
+    const halts = new Map<string, KillSwitchState>();
+    for (const [key, state] of this.state) {
+      if (!state.active) continue;
+      const tenant = tenantOfKillSwitchKey(key);
+      if (tenant !== undefined) halts.set(tenant, state);
+    }
+    return halts;
   }
 
   agentSuspension(agentId: string): KillSwitchState | undefined {
@@ -205,6 +266,29 @@ export class KillSwitchControl {
 
   async resumeFleet(): Promise<void> {
     await this.kv.put(FLEET_KEY, JSON.stringify({ active: false }));
+  }
+
+  /**
+   * Per-tenant halt (Phase 4 item 1): a fleet halt scoped to exactly one
+   * tenant. Platform-admin CLI only — there is no self-serve write surface,
+   * and enforcement always matches this key against a VERIFIED tenant
+   * (claims.tenant at the callout/gateway, the parsed workflow-id tenant at
+   * the canceller), never a caller-supplied parameter.
+   */
+  async haltTenant(tenant: string, reason: string, activatedBy: string): Promise<void> {
+    await this.kv.put(
+      tenantKey(tenant),
+      JSON.stringify({
+        active: true,
+        reason,
+        activated_by: activatedBy,
+        activated_at: new Date().toISOString(),
+      } satisfies KillSwitchState),
+    );
+  }
+
+  async resumeTenant(tenant: string): Promise<void> {
+    await this.kv.put(tenantKey(tenant), JSON.stringify({ active: false }));
   }
 
   /** Tier-2: suspend a single capability by name (surgical — blocks even compensators). */

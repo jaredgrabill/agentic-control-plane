@@ -5,19 +5,31 @@
  * the Temporal client, the item-2 cancel semantics, and the task.cancel_requested
  * audit.
  *
- * On a fleet halt it sweeps the RUNNING TaskWorkflows and, for each, emits a
- * task.cancel_requested (actor svc:gateway, trigger fleet_killswitch) and
- * requests cooperative cancellation. Each cancelled TaskWorkflow then runs its
- * own drain-then-unwind (compensators are exempt from the fleet halt, which is
- * what makes the unwind executable under the halt) and returns an honest
- * `cancelled` result.
+ * Phase 4 item 1 generalizes it to per-tenant halts: `killswitch.tenant.{t}`
+ * is a fleet halt scoped to ONE tenant, so the sweep now cancels a running
+ * TaskWorkflow iff ANY active halt covers its tenant — the fleet halt covers
+ * every tenant, a tenant halt covers exactly the tenant parsed back out of the
+ * workflow id (`task-{tenant}-{taskId}`, the gateway's own id scheme — never a
+ * caller-supplied parameter).
  *
- * The sweep repeats every 15s WHILE the halt is active — it catches the
+ * On a halt it sweeps the RUNNING TaskWorkflows and, for each covered one,
+ * emits a task.cancel_requested (actor svc:gateway, trigger fleet_killswitch or
+ * tenant_killswitch) and requests cooperative cancellation. Each cancelled
+ * TaskWorkflow then runs its own drain-then-unwind (compensators are exempt
+ * from the halt, which is what makes the unwind executable under it) and
+ * returns an honest `cancelled` result.
+ *
+ * The sweep repeats every 15s WHILE any halt is active — it catches the
  * intake/flip race (a task that started between two sweeps) and survives a
  * gateway restart mid-halt (the startup check re-arms it). An in-memory
- * per-episode set dedups the audit within one process; a second replica may
- * re-emit a cancel for the same task (idempotent — Temporal cancel is a no-op on
- * an already-cancelling workflow), a documented multi-replica residual.
+ * PER-HALT-KEY dedup set bounds the audit within one process and one halt
+ * episode: clearing a tenant halt resets only that tenant's episode (a fleet
+ * episode in flight keeps its own dedup), and a re-halt re-cancels tasks that
+ * survived a prior one. A second replica may re-emit a cancel for the same
+ * task (idempotent — Temporal cancel is a no-op on an already-cancelling
+ * workflow), a documented multi-replica residual; likewise a task cancelled
+ * under a fleet halt may get one extra idempotent cancel from a still-active
+ * tenant halt after the fleet halt clears.
  *
  * DeploymentWorkflows are deliberately NOT swept (the query targets TaskWorkflow
  * only) — killing a controlled rollout loses ramp state; the runbook says abort
@@ -26,17 +38,19 @@
 
 import { randomUUID } from 'node:crypto';
 import type { AuditEvent } from '@acp/protocol';
-import type { KillSwitchState, Logger } from '@acp/service-kit';
+import { tenantOfKillSwitchKey, type KillSwitchState, type Logger } from '@acp/service-kit';
 
 const FLEET_KEY = 'killswitch.fleet';
 export const FLEET_SWEEP_INTERVAL_MS = 15_000;
-/** The standard-visibility query selecting the workflows a fleet halt cancels. */
+/** The standard-visibility query selecting the workflows a halt sweep inspects. */
 export const RUNNING_TASKS_QUERY = "WorkflowType = 'TaskWorkflow' AND ExecutionStatus = 'Running'";
 
 /** The kill-switch read side the canceller subscribes to (service-kit KillSwitchWatcher). */
 export interface FleetWatcher {
   onFlip(listener: (key: string, state: KillSwitchState | undefined) => void): void;
   fleetHalt(): KillSwitchState | undefined;
+  /** Every tenant with an ACTIVE per-tenant halt, keyed by tenant id. */
+  activeTenantHalts(): Map<string, KillSwitchState>;
 }
 
 /** The Temporal client seam: list running TaskWorkflows and cancel one by id. */
@@ -83,12 +97,23 @@ export function parseTaskWorkflowId(
   return { tenant, taskId };
 }
 
+/** An active halt paired with the KV key and audit trigger it enforces under. */
+interface CoveringHalt {
+  key: string;
+  state: KillSwitchState;
+  trigger: 'fleet_killswitch' | 'tenant_killswitch';
+}
+
 export class FleetCanceller {
   private sweeping = false;
   private stopped = false;
   private timer: ReturnType<typeof setInterval> | undefined;
-  /** Task workflow ids cancelled in the CURRENT halt episode (audit dedup). */
-  private cancelledThisEpisode = new Set<string>();
+  /**
+   * Task workflow ids cancelled under each halt key's CURRENT episode (audit
+   * dedup). Per-halt-key so clearing a tenant halt never resets a fleet
+   * episode (and vice versa); a key's set is dropped when its halt clears.
+   */
+  private cancelledByHaltKey = new Map<string, Set<string>>();
   private readonly intervalMs: number;
 
   constructor(private readonly deps: FleetCancellerDeps) {
@@ -96,17 +121,24 @@ export class FleetCanceller {
   }
 
   /**
-   * Subscribes to fleet flips and, if the halt is ALREADY active at startup
-   * (restart survival — the onFlip listener does not replay history), begins
-   * sweeping immediately.
+   * Subscribes to fleet + tenant halt flips and, if any halt is ALREADY active
+   * at startup (restart survival — the onFlip listener does not replay
+   * history), begins sweeping immediately.
    */
   start(): void {
     this.deps.watcher.onFlip((key, state) => {
-      if (key !== FLEET_KEY) return;
-      if (state?.active === true) this.beginSweeping();
-      else this.stopSweeping();
+      if (key !== FLEET_KEY && tenantOfKillSwitchKey(key) === undefined) return;
+      if (state?.active === true) {
+        // Fresh episode FOR THIS KEY: a re-halt re-cancels tasks that started
+        // (or survived) under a prior episode of the same key.
+        this.cancelledByHaltKey.delete(key);
+        this.beginSweeping();
+      } else {
+        this.cancelledByHaltKey.delete(key);
+        if (!this.anyHaltActive()) this.stopSweeping();
+      }
     });
-    if (this.deps.watcher.fleetHalt() !== undefined) this.beginSweeping();
+    if (this.anyHaltActive()) this.beginSweeping();
   }
 
   stop(): void {
@@ -114,12 +146,22 @@ export class FleetCanceller {
     this.stopSweeping();
   }
 
+  private anyHaltActive(): boolean {
+    return (
+      this.deps.watcher.fleetHalt() !== undefined || this.deps.watcher.activeTenantHalts().size > 0
+    );
+  }
+
   private beginSweeping(): void {
-    if (this.sweeping || this.stopped) return;
+    if (this.stopped) return;
+    if (this.sweeping) {
+      // Already sweeping (another halt is active) — the next tick picks the
+      // new halt up from the watcher; nothing to re-arm.
+      void this.sweepOnce();
+      return;
+    }
     this.sweeping = true;
-    // Fresh episode: a new halt re-cancels tasks that started under a prior one.
-    this.cancelledThisEpisode = new Set();
-    this.deps.logger.warn('fleet halt active — auto-cancelling in-flight TaskWorkflows');
+    this.deps.logger.warn('kill-switch halt active — auto-cancelling covered TaskWorkflows');
     // Sweep immediately, then on the interval while active.
     void this.sweepOnce();
     this.timer = setInterval(() => {
@@ -136,48 +178,87 @@ export class FleetCanceller {
       clearInterval(this.timer);
       this.timer = undefined;
     }
-    this.deps.logger.info('fleet halt cleared — auto-canceller idle');
+    this.deps.logger.info('all halts cleared — auto-canceller idle');
   }
 
   /**
-   * One sweep: list running TaskWorkflows, and for each not yet cancelled this
-   * episode, emit task.cancel_requested then request cancellation. Idempotent —
-   * a terminal or already-cancelling workflow is skipped. Never throws; a listing
-   * or cancel error is logged and the sweep continues (the next tick retries).
+   * The first active halt covering a task's tenant: the fleet halt (covers
+   * everyone) wins over a tenant halt so the broader reason is the audited
+   * trigger. Returns undefined when no active halt covers the tenant.
+   */
+  private coveringHalt(
+    tenant: string,
+    fleet: KillSwitchState | undefined,
+    tenants: Map<string, KillSwitchState>,
+  ): CoveringHalt | undefined {
+    if (fleet !== undefined) {
+      return { key: FLEET_KEY, state: fleet, trigger: 'fleet_killswitch' };
+    }
+    const tenantHalt = tenants.get(tenant);
+    if (tenantHalt !== undefined) {
+      return {
+        key: `killswitch.tenant.${tenant}`,
+        state: tenantHalt,
+        trigger: 'tenant_killswitch',
+      };
+    }
+    return undefined;
+  }
+
+  /**
+   * One sweep: list running TaskWorkflows, and for each covered by an active
+   * halt and not yet cancelled under that halt's episode, emit
+   * task.cancel_requested then request cancellation. Idempotent — a terminal
+   * or already-cancelling workflow is skipped. Never throws; a listing or
+   * cancel error is logged and the sweep continues (the next tick retries).
    */
   async sweepOnce(): Promise<void> {
-    const halt = this.deps.watcher.fleetHalt();
-    if (halt === undefined) {
-      // The halt cleared between the trigger and this sweep — stand down.
+    const fleet = this.deps.watcher.fleetHalt();
+    const tenants = this.deps.watcher.activeTenantHalts();
+    if (fleet === undefined && tenants.size === 0) {
+      // Every halt cleared between the trigger and this sweep — stand down.
       this.stopSweeping();
       return;
     }
     try {
       for await (const workflowId of this.deps.client.listRunningTaskWorkflowIds()) {
-        if (this.cancelledThisEpisode.has(workflowId)) continue;
         const parsed = parseTaskWorkflowId(workflowId);
         if (parsed === undefined) continue; // not a TaskWorkflow id we own
-        this.cancelledThisEpisode.add(workflowId);
+        const halt = this.coveringHalt(parsed.tenant, fleet, tenants);
+        if (halt === undefined) continue; // no active halt covers this tenant
+        let episode = this.cancelledByHaltKey.get(halt.key);
+        if (episode === undefined) {
+          episode = new Set();
+          this.cancelledByHaltKey.set(halt.key, episode);
+        }
+        if (episode.has(workflowId)) continue;
+        episode.add(workflowId);
         try {
           await this.emitCancelRequested(parsed.tenant, parsed.taskId, halt);
           const outcome = await this.deps.client.cancel(workflowId);
           this.deps.logger.info(
-            { workflowId, tenant: parsed.tenant, task_id: parsed.taskId, outcome },
-            'fleet auto-cancel requested',
+            {
+              workflowId,
+              tenant: parsed.tenant,
+              task_id: parsed.taskId,
+              trigger: halt.trigger,
+              outcome,
+            },
+            'kill-switch auto-cancel requested',
           );
         } catch (err) {
           this.deps.logger.error(
             { workflowId, err },
-            'fleet auto-cancel failed for a task (will retry next sweep)',
+            'kill-switch auto-cancel failed for a task (will retry next sweep)',
           );
           // Allow a retry next sweep: the audit + cancel did not complete.
-          this.cancelledThisEpisode.delete(workflowId);
+          episode.delete(workflowId);
         }
       }
     } catch (err) {
       this.deps.logger.error(
         { err },
-        'fleet auto-cancel sweep listing failed — retrying next tick',
+        'kill-switch auto-cancel sweep listing failed — retrying next tick',
       );
     }
   }
@@ -185,7 +266,7 @@ export class FleetCanceller {
   private async emitCancelRequested(
     tenant: string,
     taskId: string,
-    halt: KillSwitchState,
+    halt: CoveringHalt,
   ): Promise<void> {
     await this.deps.audit.publish({
       event_id: randomUUID(),
@@ -196,9 +277,9 @@ export class FleetCanceller {
       action: { name: 'task.cancel_requested' },
       reason: { task_id: taskId },
       details: {
-        trigger: 'fleet_killswitch',
-        ...(halt.activated_by === undefined ? {} : { activated_by: halt.activated_by }),
-        ...(halt.reason === undefined ? {} : { reason: halt.reason }),
+        trigger: halt.trigger,
+        ...(halt.state.activated_by === undefined ? {} : { activated_by: halt.state.activated_by }),
+        ...(halt.state.reason === undefined ? {} : { reason: halt.state.reason }),
       },
     });
   }

@@ -1,8 +1,15 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ToolServerRecord } from '@acp/protocol';
 import { afterAll, describe, expect, it } from 'vitest';
-import { expand, loadToolServerConfig, parseToolServerConfig } from '../src/config.js';
+import {
+  expand,
+  loadToolServerCatalog,
+  loadToolServerConfig,
+  parseToolServerConfig,
+  recordToEntry,
+} from '../src/config.js';
 
 const SAMPLE = {
   schema: 'acp-tool-servers/v1',
@@ -173,5 +180,138 @@ describe('expand', () => {
     expect(expand('${X:-fallback}', { X: '' }, 't')).toBe('fallback');
     expect(expand('no vars', {}, 't')).toBe('no vars');
     expect(() => expand('${X}', {}, 't')).toThrow(/X is not set/);
+  });
+});
+
+describe('tool-server catalog loader (SF3)', () => {
+  const CRED_ENV = { ACP_TOOL_CRED_CLOUD_ESTATE: 'cloud-estate-secret' };
+
+  const cloudRecord: ToolServerRecord = {
+    id: 'cloud-estate',
+    url: 'http://localhost:7301/mcp',
+    version: '1.0.0',
+    owning_team: 'team-platform',
+    wrapped_sor: 'cloud-estate',
+    data_classification: 'internal',
+    auth: {
+      mode: 'credential-ref',
+      credential_ref: 'ACP_TOOL_CRED_CLOUD_ESTATE',
+      header: 'x-acp-broker-credential',
+    },
+    tools: [
+      { name: 'inventory_search', scope: 'cloud:inventory:read', risk: 'R0' },
+      { name: 'cost_report', scope: 'cloud:cost:read', risk: 'R0' },
+    ],
+    rate_limit: { per_minute: 60, burst: 20 },
+    timeout_ms: 15000,
+  };
+
+  it('maps a credential-ref record to a static-headers entry, expanding the secret from env', () => {
+    const entry = recordToEntry(cloudRecord, CRED_ENV);
+    expect(entry.auth).toEqual({
+      mode: 'static-headers',
+      headers: { 'x-acp-broker-credential': 'cloud-estate-secret' },
+    });
+    expect(entry.tools.inventory_search).toEqual({ scope: 'cloud:inventory:read', risk: 'R0' });
+  });
+
+  it('is round-trip identical to the static config for gateway-read fields', () => {
+    // The static cloud-estate entry parsed with the SAME broker secret must
+    // equal the entry the catalog record yields — the seed→publish→load path
+    // is lossless for everything the gateway core reads (parity snapshot).
+    const staticEntry = parseToolServerConfig(
+      text({
+        schema: 'acp-tool-servers/v1',
+        servers: [
+          {
+            id: 'cloud-estate',
+            url: 'http://localhost:7301/mcp',
+            auth: {
+              mode: 'static-headers',
+              headers: { 'x-acp-broker-credential': '${ACP_TOOL_CRED_CLOUD_ESTATE}' },
+            },
+            tools: {
+              inventory_search: { scope: 'cloud:inventory:read', risk: 'R0' },
+              cost_report: { scope: 'cloud:cost:read', risk: 'R0' },
+            },
+            rate_limit: { per_minute: 60, burst: 20 },
+            timeout_ms: 15000,
+          },
+        ],
+      }),
+      CRED_ENV,
+    ).servers.get('cloud-estate');
+    expect(recordToEntry(cloudRecord, CRED_ENV)).toEqual(staticEntry);
+  });
+
+  it('maps a token-exchange record faithfully', () => {
+    const entry = recordToEntry(
+      {
+        ...cloudRecord,
+        id: 'knowledge',
+        wrapped_sor: 'knowledge',
+        auth: {
+          mode: 'token-exchange' as const,
+          audience: 'acp:knowledge',
+          scope: ['knowledge:search:read'],
+        },
+        tools: [{ name: 'knowledge_search', scope: 'knowledge:search:read', risk: 'R0' as const }],
+      },
+      CRED_ENV,
+    );
+    expect(entry.auth).toEqual({
+      mode: 'token-exchange',
+      audience: 'acp:knowledge',
+      scope: ['knowledge:search:read'],
+    });
+  });
+
+  it('loads a catalog over a stub fetch and builds the server map', async () => {
+    const fetchImpl = ((url: string, init: RequestInit) => {
+      expect(url).toContain('/v1/tool-servers');
+      expect((init.headers as Record<string, string>).authorization).toBe('Bearer tok');
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ tool_servers: [cloudRecord] }),
+      } as unknown as Response);
+    }) as unknown as typeof fetch;
+    const config = await loadToolServerCatalog({
+      registryUrl: 'http://registry',
+      token: 'tok',
+      env: CRED_ENV,
+      fetchImpl,
+    });
+    expect([...config.servers.keys()]).toEqual(['cloud-estate']);
+  });
+
+  it('throws when the registry rejects the catalog read', async () => {
+    const fetchImpl = (() =>
+      Promise.resolve({ ok: false, status: 403 } as Response)) as unknown as typeof fetch;
+    await expect(
+      loadToolServerCatalog({
+        registryUrl: 'http://registry',
+        token: 't',
+        env: CRED_ENV,
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/registry:read/);
+  });
+
+  it('refuses an empty catalog', async () => {
+    const fetchImpl = (() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ tool_servers: [] }),
+      } as unknown as Response)) as unknown as typeof fetch;
+    await expect(
+      loadToolServerCatalog({
+        registryUrl: 'http://registry',
+        token: 't',
+        env: CRED_ENV,
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/empty/);
   });
 });

@@ -48,7 +48,11 @@ export type EventType =
   | 'eval.drift_detected'
   | 'eval.budget_state_changed'
   | 'killswitch.activated'
-  | 'killswitch.cleared';
+  | 'killswitch.cleared'
+  | 'task.rejected'
+  | 'tool_server.published'
+  | 'tool_server.deprecated'
+  | 'client.provisioned';
 export type Digest = string;
 
 /**

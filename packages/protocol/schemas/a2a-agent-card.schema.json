@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://acp.dev/schemas/v1/a2a-agent-card.schema.json",
+  "title": "A2AAgentCard",
+  "description": "A2A v1.0 Agent Card wire document — the EXTERNAL projection of a registry agent card (ADR-0006). Produced only by the Registry's strict allowlist translation (toA2ACard): every exported field is opted IN; internal governance fields (tool bindings, scopes, model classes, data classification, compensators, eval baselines, tenants, lifecycle) are never present. signatures[] carry detached JWS (RFC 7797) by the registry signing key, verifiable against the public JWKS.",
+  "type": "object",
+  "required": [
+    "protocolVersion",
+    "name",
+    "description",
+    "url",
+    "preferredTransport",
+    "version",
+    "capabilities",
+    "defaultInputModes",
+    "defaultOutputModes",
+    "skills"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "protocolVersion": {
+      "type": "string",
+      "minLength": 1,
+      "description": "A2A protocol version this card conforms to (e.g. 1.0)."
+    },
+    "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "description": { "type": "string", "minLength": 1 },
+    "url": {
+      "type": "string",
+      "format": "uri",
+      "description": "Public service endpoint for this agent at the platform edge. Documented-inert in v0: card export ships before the inbound execution surface."
+    },
+    "preferredTransport": {
+      "type": "string",
+      "enum": ["JSONRPC"],
+      "description": "v0 exports declare JSON-RPC only."
+    },
+    "provider": {
+      "type": "object",
+      "required": ["organization"],
+      "additionalProperties": false,
+      "properties": {
+        "organization": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Platform organization constant — never the internal owning team."
+        },
+        "url": { "type": "string", "format": "uri" }
+      }
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?$",
+      "description": "Semver of the exported agent version's capability contract."
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "streaming": { "type": "boolean" },
+        "pushNotifications": { "type": "boolean" },
+        "stateTransitionHistory": { "type": "boolean" }
+      },
+      "description": "A2A optional-feature flags; all false in v0 exports."
+    },
+    "securitySchemes": {
+      "type": "object",
+      "additionalProperties": { "type": "object" },
+      "description": "How an EXTERNAL consumer authenticates to the platform edge (e.g. oauth2 client credentials at the platform token endpoint). Never internal scope vocabulary."
+    },
+    "security": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": { "type": "array", "items": { "type": "string" } }
+      },
+      "description": "Security requirements referencing securitySchemes by name."
+    },
+    "defaultInputModes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "defaultOutputModes": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string" }
+    },
+    "skills": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/skill" }
+    },
+    "signatures": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/signature" },
+      "description": "Detached JWS signatures (RFC 7797, b64=false) over the JCS-canonicalized card sans signatures, by the registry signing key."
+    }
+  },
+  "$defs": {
+    "skill": {
+      "type": "object",
+      "required": ["id", "name", "description", "tags"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*\\.[a-z][a-z0-9_]*$",
+          "description": "Capability name (the platform's namespaced action, e.g. knowledge.search)."
+        },
+        "name": { "type": "string", "minLength": 1 },
+        "description": { "type": "string", "minLength": 1 },
+        "tags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Governance hints (e.g. the risk class) — informational for consumers."
+        },
+        "examples": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Example inputs, serialized; drawn from the manifest's discovery examples."
+        },
+        "inputModes": { "type": "array", "items": { "type": "string" } },
+        "outputModes": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "required": ["protected", "signature"],
+      "additionalProperties": false,
+      "properties": {
+        "protected": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded protected JWS header ({alg, kid, b64:false, crit:[b64]})."
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Base64url-encoded JWS signature over the detached canonical payload."
+        }
+      }
+    }
+  }
+}

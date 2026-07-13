@@ -188,6 +188,24 @@
       "file": "eval-report/invalid-metric-out-of-range.json",
       "schema": "eval-report",
       "valid": false
-    }
+    },
+    { "file": "a2a-agent-card/valid-echo.json", "schema": "a2a-agent-card", "valid": true },
+    {
+      "file": "a2a-agent-card/invalid-internal-fields.json",
+      "schema": "a2a-agent-card",
+      "valid": false
+    },
+    {
+      "file": "a2a-agent-card/invalid-missing-skills.json",
+      "schema": "a2a-agent-card",
+      "valid": false
+    },
+    { "file": "tool-server/valid-netsec.json", "schema": "tool-server", "valid": true },
+    {
+      "file": "tool-server/invalid-inline-secret.json",
+      "schema": "tool-server",
+      "valid": false
+    },
+    { "file": "tool-server/invalid-missing-risk.json", "schema": "tool-server", "valid": false }
   ]
 }

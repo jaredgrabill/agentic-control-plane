@@ -4,11 +4,13 @@ import {
   agentManifest,
   evalBaseline,
   ProtocolValidationError,
+  toolServerRecord,
   type AgentCard,
   type AgentManifest,
   type AuditEvent,
   type EvalBaseline,
   type LifecycleState,
+  type ToolServerRecord,
 } from '@acp/protocol';
 import {
   AuthError,
@@ -21,8 +23,10 @@ import {
 } from '@acp/service-kit';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { JSONWebKeySet, CryptoKey } from 'jose';
+import { signA2ACard, toA2ACard, type A2ACardOptions } from './a2a.js';
 import { signCard } from './signing.js';
 import { InvariantViolation, type AgentFilter, type RegistryStore } from './store.js';
+import type { ToolServerStore } from './tool-servers.js';
 
 export const REGISTRY_AUDIENCE = 'acp:registry';
 
@@ -53,6 +57,22 @@ export interface KillSwitchControlLike {
   resumeFleet(): Promise<void>;
 }
 
+/**
+ * A2A export configuration (item 3, SF1). Exposure is PLATFORM-controlled
+ * (deploy config), never agent-authored: an agent cannot self-expose by
+ * editing its manifest. An empty set exports nothing — the secure default.
+ */
+export interface A2AExportConfig {
+  exposure: Set<string>;
+  /** Public platform edge base URL (the gateway). */
+  edgeBaseUrl: string;
+  /** Platform organization constant shown as the card provider. */
+  providerOrg: string;
+  providerUrl?: string | undefined;
+  /** Public token endpoint external consumers authenticate at. */
+  tokenUrl: string;
+}
+
 export interface RegistryDeps {
   verifier: JwtVerifier;
   store: RegistryStore;
@@ -61,6 +81,10 @@ export interface RegistryDeps {
   announcer: RegistryAnnouncer;
   /** Tier-2/3 kill-switch flip surface (capability/risk/fleet flags). */
   control: KillSwitchControlLike;
+  /** A2A card export: allowlist + projection options. */
+  a2a: A2AExportConfig;
+  /** MCP tool-server catalog (SF3). Authed-internal reads + admin publish. */
+  toolServers: ToolServerStore;
   audit: AuditSink;
   logger: Logger;
   now?: () => Date;
@@ -333,6 +357,66 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
     return reply.send(card);
   });
 
+  // --- A2A card export (SF1). Authed-internal (registry:read): the gateway
+  // fetches these and serves the public edge. Exposure is the PLATFORM
+  // allowlist above; a non-exposed agent and an unknown agent answer an
+  // IDENTICAL 404 — a 403 would confirm existence to a snoop. Cards are
+  // translated by the strict allowlist projection and re-signed with the
+  // registry key (the sole signer); the internal JWS never ships.
+
+  const a2aOptions: A2ACardOptions = {
+    edgeBaseUrl: deps.a2a.edgeBaseUrl,
+    providerOrg: deps.a2a.providerOrg,
+    providerUrl: deps.a2a.providerUrl,
+    tokenUrl: deps.a2a.tokenUrl,
+  };
+  const a2aNotFound = (reply: FastifyReply, agentId: string): FastifyReply =>
+    reply.status(404).send({
+      error: { message: `no a2a card for agent ${agentId}`, status: 404 },
+    });
+
+  // Index of exposed agents with an ACTIVE version — the catalog the gateway
+  // serves at /.well-known/agent.json. Card URLs point at the public edge.
+  app.get('/v1/a2a-cards', async (request) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:read');
+    const agents: { agent_id: string; card_url: string }[] = [];
+    for (const agentId of [...deps.a2a.exposure].sort()) {
+      const versions = await deps.store.listVersions(agentId);
+      if (!versions.some((v) => v.lifecycle_state === 'active')) continue;
+      agents.push({
+        agent_id: agentId,
+        card_url: `${deps.a2a.edgeBaseUrl.replace(/\/$/, '')}/v1/a2a/agents/${agentId}/.well-known/agent.json`,
+      });
+    }
+    return { agents };
+  });
+
+  // Per-agent card: resolves the ACTIVE version (an agent with no active
+  // version exports nothing — same 404).
+  app.get('/v1/agents/:agent_id/a2a-card', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:read');
+    const { agent_id } = request.params as { agent_id: string };
+    if (!deps.a2a.exposure.has(agent_id)) return a2aNotFound(reply, agent_id);
+    const versions = await deps.store.listVersions(agent_id);
+    const active = versions.find((v) => v.lifecycle_state === 'active');
+    if (active === undefined) return a2aNotFound(reply, agent_id);
+    return reply.send(await signA2ACard(deps.signingKey, toA2ACard(active, a2aOptions)));
+  });
+
+  // Version-pinned card export (still exposure-gated; the same 404 shape for
+  // non-exposed, unknown agent, and unknown version).
+  app.get('/v1/agents/:agent_id/versions/:version/a2a-card', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:read');
+    const { agent_id, version } = request.params as { agent_id: string; version: string };
+    if (!deps.a2a.exposure.has(agent_id)) return a2aNotFound(reply, agent_id);
+    const card = await deps.store.getVersion(agent_id, version);
+    if (card === undefined) return a2aNotFound(reply, agent_id);
+    return reply.send(await signA2ACard(deps.signingKey, toA2ACard(card, a2aOptions)));
+  });
+
   // Version-aware routing view for a capability (the Deployment Controller's
   // resolveRoute reads this): the incumbent active card and any candidate.
   app.get('/v1/routing', async (request, reply) => {
@@ -343,6 +427,59 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
       throw new AuthError('capability query parameter is required', 400);
     }
     return reply.send(await deps.store.routingSet(query.capability));
+  });
+
+  // --- MCP tool-server catalog (SF3). INTERNAL only: these records name scope
+  // vocabulary, SoR topology, and credential KEY NAMES, so reads require
+  // registry:read and publishes require registry:admin. The catalog is NEVER
+  // served on the public A2A edge. Secrets are never stored — auth.credential_ref
+  // is an env/vault key name the tool gateway expands at call time.
+
+  app.get('/v1/tool-servers', async (request) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:read');
+    return { tool_servers: await deps.toolServers.list() };
+  });
+
+  app.get('/v1/tool-servers/:id', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:read');
+    const { id } = request.params as { id: string };
+    const record = await deps.toolServers.get(id);
+    if (record === undefined) {
+      return reply
+        .status(404)
+        .send({ error: { message: `no tool server with id ${id}`, status: 404 } });
+    }
+    return reply.send(record);
+  });
+
+  app.put('/v1/tool-servers/:id', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:admin');
+    const { id } = request.params as { id: string };
+    let record: ToolServerRecord;
+    try {
+      record = toolServerRecord.parse(request.body);
+    } catch (err) {
+      if (err instanceof ProtocolValidationError) throw new AuthError(err.message, 400);
+      throw err;
+    }
+    if (record.id !== id) {
+      throw new AuthError(`tool server record id ${record.id} does not match path ${id}`, 400);
+    }
+    const result = await deps.toolServers.put(record);
+    const deprecated = record.deprecation?.deprecated === true;
+    await deps.audit.publish({
+      event_id: randomUUID(),
+      occurred_at: now().toISOString(),
+      tenant: 'platform',
+      event_type: deprecated ? 'tool_server.deprecated' : 'tool_server.published',
+      actor: { principal: claims.sub, delegation_chain: delegationChain(claims) },
+      action: { name: deprecated ? 'tool_server.deprecated' : 'tool_server.published' },
+      details: { tool_server: id, version: record.version, outcome: result.outcome },
+    });
+    return reply.status(result.outcome === 'inserted' ? 201 : 200).send(record);
   });
 
   app.put('/v1/agents/:agent_id/baseline', async (request, reply) => {
