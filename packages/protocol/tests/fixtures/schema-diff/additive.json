@@ -1,0 +1,30 @@
+{
+  "schemas": {
+    "widget.schema.json": {
+      "$id": "https://acp.dev/schemas/v1/widget.schema.json",
+      "title": "Widget",
+      "type": "object",
+      "required": ["id", "kind"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": {
+          "type": "string",
+          "enum": ["alpha", "beta", "gamma", "delta"]
+        },
+        "label": { "type": "string" },
+        "count": { "type": "integer", "minimum": 0 },
+        "note": { "type": "string" }
+      }
+    }
+  },
+  "subjects": {
+    "version": 1,
+    "entities": {
+      "widget": {
+        "template": "acp.{tenant}.widget.{id}.{verb}",
+        "verbs": ["created", "updated", "deleted"]
+      }
+    }
+  }
+}
