@@ -81,7 +81,7 @@ describe('scenario 3 — policy exposure audit', () => {
       {
         question:
           'What does our information security policy require for internet-exposed ' +
-          'services running images with critical CVEs?',
+          'services with critical vulnerabilities?',
       },
     ]);
 

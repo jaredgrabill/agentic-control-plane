@@ -78,11 +78,7 @@ describe('scenario 1 — change-risk brief', () => {
       { service: 'payments-api' },
       { service: 'payments-api', env: 'prod' },
       { repo: 'acme/payments-service' },
-      {
-        question:
-          'What do our change-freeze policy and TLS configuration standard require ' +
-          'for a payments-api TLS upgrade tonight?',
-      },
+      { question: 'What does our policy say about change freezes?' },
       {
         title: 'Upgrade payments-api TLS configuration',
         service: 'payments-api',
