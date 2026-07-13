@@ -154,6 +154,8 @@ describe('scenario 1 — change-risk brief', () => {
 
     // Every leg's policy decision is an allow (four R0 reads + one R1 draft).
     const decisions = events.filter((e) => e.event_type === 'policy.decision');
+    // Guard against a vacuous pass: the five legs must each have decided.
+    expect(decisions.length).toBeGreaterThanOrEqual(5);
     for (const d of decisions) expect(d.reason?.policy?.decision).toBe('allow');
 
     // The five sub-questions were dispatched to the five distinct agents.

@@ -14,10 +14,11 @@ import { type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import type { AuditEvent } from '@acp/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { registerAndActivate, repoRoot, startPlatform, stopPlatform } from './support/platform.js';
+import { repoRoot, startPlatform, stopPlatform } from './support/platform.js';
 import {
   auditEvents,
   ciToken,
+  ensureRegisteredActive,
   pollAudit,
   submitSequence,
   waitForResult,
@@ -38,19 +39,22 @@ afterAll(() => {
 describe('scenario 2 — cost-spike forensics chain', () => {
   it('registers and activates the cloud, code, and change agents', async () => {
     const writeToken = await ciToken('acp:registry', 'registry:write registry:admin');
-    await registerAndActivate(
+    // ensureRegisteredActive (409-tolerant) not registerAndActivate: the change
+    // agent's manifest changed on this branch, so a persistent local registry
+    // carrying a stale card 409s on re-register. Matches the sibling scenarios.
+    await ensureRegisteredActive(
       join(repoRoot, 'agents', 'cloud', 'manifest.yaml'),
       'cloud-agent',
       writeToken,
       'scenario 2 cost forensics',
     );
-    await registerAndActivate(
+    await ensureRegisteredActive(
       join(repoRoot, 'agents', 'code', 'manifest.yaml'),
       'code-agent',
       writeToken,
       'scenario 2 cost forensics',
     );
-    await registerAndActivate(
+    await ensureRegisteredActive(
       join(repoRoot, 'agents', 'change', 'manifest.yaml'),
       'change-agent',
       writeToken,
