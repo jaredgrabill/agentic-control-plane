@@ -21,6 +21,7 @@ import {
 } from '@acp/service-kit';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { JSONWebKeySet, CryptoKey } from 'jose';
+import { signA2ACard, toA2ACard, type A2ACardOptions } from './a2a.js';
 import { signCard } from './signing.js';
 import { InvariantViolation, type AgentFilter, type RegistryStore } from './store.js';
 
@@ -53,6 +54,22 @@ export interface KillSwitchControlLike {
   resumeFleet(): Promise<void>;
 }
 
+/**
+ * A2A export configuration (item 3, SF1). Exposure is PLATFORM-controlled
+ * (deploy config), never agent-authored: an agent cannot self-expose by
+ * editing its manifest. An empty set exports nothing — the secure default.
+ */
+export interface A2AExportConfig {
+  exposure: Set<string>;
+  /** Public platform edge base URL (the gateway). */
+  edgeBaseUrl: string;
+  /** Platform organization constant shown as the card provider. */
+  providerOrg: string;
+  providerUrl?: string | undefined;
+  /** Public token endpoint external consumers authenticate at. */
+  tokenUrl: string;
+}
+
 export interface RegistryDeps {
   verifier: JwtVerifier;
   store: RegistryStore;
@@ -61,6 +78,8 @@ export interface RegistryDeps {
   announcer: RegistryAnnouncer;
   /** Tier-2/3 kill-switch flip surface (capability/risk/fleet flags). */
   control: KillSwitchControlLike;
+  /** A2A card export: allowlist + projection options. */
+  a2a: A2AExportConfig;
   audit: AuditSink;
   logger: Logger;
   now?: () => Date;
@@ -331,6 +350,66 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
       });
     }
     return reply.send(card);
+  });
+
+  // --- A2A card export (SF1). Authed-internal (registry:read): the gateway
+  // fetches these and serves the public edge. Exposure is the PLATFORM
+  // allowlist above; a non-exposed agent and an unknown agent answer an
+  // IDENTICAL 404 — a 403 would confirm existence to a snoop. Cards are
+  // translated by the strict allowlist projection and re-signed with the
+  // registry key (the sole signer); the internal JWS never ships.
+
+  const a2aOptions: A2ACardOptions = {
+    edgeBaseUrl: deps.a2a.edgeBaseUrl,
+    providerOrg: deps.a2a.providerOrg,
+    providerUrl: deps.a2a.providerUrl,
+    tokenUrl: deps.a2a.tokenUrl,
+  };
+  const a2aNotFound = (reply: FastifyReply, agentId: string): FastifyReply =>
+    reply.status(404).send({
+      error: { message: `no a2a card for agent ${agentId}`, status: 404 },
+    });
+
+  // Index of exposed agents with an ACTIVE version — the catalog the gateway
+  // serves at /.well-known/agent.json. Card URLs point at the public edge.
+  app.get('/v1/a2a-cards', async (request) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:read');
+    const agents: { agent_id: string; card_url: string }[] = [];
+    for (const agentId of [...deps.a2a.exposure].sort()) {
+      const versions = await deps.store.listVersions(agentId);
+      if (!versions.some((v) => v.lifecycle_state === 'active')) continue;
+      agents.push({
+        agent_id: agentId,
+        card_url: `${deps.a2a.edgeBaseUrl.replace(/\/$/, '')}/v1/a2a/agents/${agentId}/.well-known/agent.json`,
+      });
+    }
+    return { agents };
+  });
+
+  // Per-agent card: resolves the ACTIVE version (an agent with no active
+  // version exports nothing — same 404).
+  app.get('/v1/agents/:agent_id/a2a-card', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:read');
+    const { agent_id } = request.params as { agent_id: string };
+    if (!deps.a2a.exposure.has(agent_id)) return a2aNotFound(reply, agent_id);
+    const versions = await deps.store.listVersions(agent_id);
+    const active = versions.find((v) => v.lifecycle_state === 'active');
+    if (active === undefined) return a2aNotFound(reply, agent_id);
+    return reply.send(await signA2ACard(deps.signingKey, toA2ACard(active, a2aOptions)));
+  });
+
+  // Version-pinned card export (still exposure-gated; the same 404 shape for
+  // non-exposed, unknown agent, and unknown version).
+  app.get('/v1/agents/:agent_id/versions/:version/a2a-card', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:read');
+    const { agent_id, version } = request.params as { agent_id: string; version: string };
+    if (!deps.a2a.exposure.has(agent_id)) return a2aNotFound(reply, agent_id);
+    const card = await deps.store.getVersion(agent_id, version);
+    if (card === undefined) return a2aNotFound(reply, agent_id);
+    return reply.send(await signA2ACard(deps.signingKey, toA2ACard(card, a2aOptions)));
   });
 
   // Version-aware routing view for a capability (the Deployment Controller's

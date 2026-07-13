@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import process from 'node:process';
 import {
   ensureAuditStream,
@@ -47,6 +48,20 @@ const nc = await connectBus({
 });
 await ensureAuditStream(nc);
 
+// A2A exposure allowlist (item 3): PLATFORM deploy config, never
+// agent-authored. No file configured means nothing is exported — the
+// secure default keeps existing deployments unchanged.
+const exposurePath = process.env.ACP_A2A_EXPOSURE;
+let a2aExposure = new Set<string>();
+if (exposurePath !== undefined && exposurePath !== '') {
+  const parsed = JSON.parse(readFileSync(exposurePath, 'utf8')) as { exposed?: unknown };
+  if (!Array.isArray(parsed.exposed) || parsed.exposed.some((id) => typeof id !== 'string')) {
+    throw new Error(`${exposurePath}: expected {"exposed": [agent ids]}`);
+  }
+  a2aExposure = new Set(parsed.exposed as string[]);
+  logger.info({ exposed: [...a2aExposure] }, 'a2a card export exposure allowlist loaded');
+}
+
 const app = buildRegistryApp({
   verifier: new JwtVerifier(
     { jwksUrl: env('ACP_JWKS_URL', 'http://localhost:7101/.well-known/jwks.json') },
@@ -57,6 +72,12 @@ const app = buildRegistryApp({
   jwks: { keys: [{ ...publicJwk, kid, alg: 'EdDSA', use: 'sig' }] },
   announcer: await NatsRegistryAnnouncer.connect(nc, logger),
   control: await KillSwitchControl.open(nc),
+  a2a: {
+    exposure: a2aExposure,
+    edgeBaseUrl: env('ACP_A2A_EDGE_URL', 'http://localhost:7100'),
+    providerOrg: env('ACP_A2A_PROVIDER_ORG', 'Agentic Control Plane (dev)'),
+    tokenUrl: env('ACP_TOKEN_URL', 'http://localhost:7101'),
+  },
   audit: new AuditPublisher(nc, logger),
   logger,
 });

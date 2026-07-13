@@ -1,4 +1,5 @@
 import type {
+  A2AAgentCard,
   AgentCard,
   AgentManifest,
   AuditEvent,
@@ -17,6 +18,7 @@ import {
   type JWK,
 } from 'jose';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { verifyA2ACard } from '../src/a2a.js';
 import { buildRegistryApp, REGISTRY_AUDIENCE } from '../src/app.js';
 import { verifyCard } from '../src/signing.js';
 import {
@@ -196,6 +198,8 @@ const announcements: { verb: string; card: AgentCard }[] = [];
 const suspensions: { agentId: string; suspended: boolean; reason: string }[] = [];
 const auditEvents: AuditEvent[] = [];
 const flips: { op: string; target: string; reason?: string; by?: string }[] = [];
+/** Platform exposure allowlist for the A2A export routes (mutable per test). */
+const a2aExposure = new Set<string>();
 
 beforeAll(async () => {
   const tokenPair = await generateKeyPair('EdDSA');
@@ -246,6 +250,12 @@ beforeAll(async () => {
       ),
       resumeFleet: () => (flips.push({ op: 'resumeFleet', target: 'fleet' }), Promise.resolve()),
     },
+    a2a: {
+      exposure: a2aExposure,
+      edgeBaseUrl: 'http://localhost:7100',
+      providerOrg: 'Agentic Control Plane (test)',
+      tokenUrl: 'http://localhost:7101',
+    },
     audit: {
       publish: (e) => {
         auditEvents.push(e);
@@ -262,6 +272,7 @@ beforeEach(() => {
   suspensions.length = 0;
   auditEvents.length = 0;
   flips.length = 0;
+  a2aExposure.clear();
 });
 
 async function makeToken(scope: string): Promise<string> {
@@ -1036,5 +1047,99 @@ describe('edge cases', () => {
   it('rejects a registration with no manifest at all', async () => {
     const res = await register({ version: '0.1.0' });
     expect(res.statusCode).toBe(400);
+  });
+});
+
+describe('a2a card export routes (exposure allowlist)', () => {
+  async function getA2A(path: string, scope = 'registry:read') {
+    return app.inject({
+      method: 'GET',
+      url: path,
+      headers: { authorization: `Bearer ${await makeToken(scope)}` },
+    });
+  }
+
+  async function registerAndActivateEcho(): Promise<void> {
+    await register({ manifest: manifest({ id: 'external-echo' }), version: '0.1.0' });
+    await transition('external-echo', 'active');
+  }
+
+  it('serves a signed a2a card for an exposed active agent', async () => {
+    a2aExposure.add('external-echo');
+    await registerAndActivateEcho();
+    const res = await getA2A('/v1/agents/external-echo/a2a-card');
+    expect(res.statusCode).toBe(200);
+    const card = res.json() as A2AAgentCard;
+    expect(card.protocolVersion).toBe('1.0');
+    expect(card.url).toBe('http://localhost:7100/v1/a2a/agents/external-echo');
+    expect(await verifyA2ACard(card, registryJwks)).toBe(true);
+    // The strict projection leaks nothing internal.
+    const wire = JSON.stringify(card);
+    expect(wire).not.toContain('"tools"');
+    expect(wire).not.toContain('lifecycle_state');
+    expect(wire).not.toContain('card_signature');
+  });
+
+  it('answers an identical 404 for non-exposed and unknown agents (never 403)', async () => {
+    await registerAndActivateEcho(); // registered + active but NOT exposed
+    const nonExposed = await getA2A('/v1/agents/external-echo/a2a-card');
+    const unknown = await getA2A('/v1/agents/no-such-agent/a2a-card');
+    expect(nonExposed.statusCode).toBe(404);
+    expect(unknown.statusCode).toBe(404);
+    const shape = (body: string): string => body.replace(/external-echo|no-such-agent/g, 'X');
+    expect(shape(nonExposed.body)).toBe(shape(unknown.body));
+  });
+
+  it('404s an exposed agent with no active version', async () => {
+    a2aExposure.add('external-echo');
+    await register({ manifest: manifest({ id: 'external-echo' }), version: '0.1.0' });
+    const res = await getA2A('/v1/agents/external-echo/a2a-card');
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('serves the version-pinned card only for exposed agents', async () => {
+    a2aExposure.add('external-echo');
+    await registerAndActivateEcho();
+    const pinned = await getA2A('/v1/agents/external-echo/versions/0.1.0/a2a-card');
+    expect(pinned.statusCode).toBe(200);
+    expect(await verifyA2ACard(pinned.json() as A2AAgentCard, registryJwks)).toBe(true);
+    const missing = await getA2A('/v1/agents/external-echo/versions/9.9.9/a2a-card');
+    expect(missing.statusCode).toBe(404);
+    a2aExposure.clear();
+    const hidden = await getA2A('/v1/agents/external-echo/versions/0.1.0/a2a-card');
+    expect(hidden.statusCode).toBe(404);
+  });
+
+  it('indexes only exposed agents with an active version', async () => {
+    a2aExposure.add('external-echo');
+    a2aExposure.add('never-registered');
+    await registerAndActivateEcho();
+    await register({ manifest: manifest({ id: 'hidden-agent' }), version: '0.1.0' });
+    await transition('hidden-agent', 'active');
+    const res = await getA2A('/v1/a2a-cards');
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      agents: [
+        {
+          agent_id: 'external-echo',
+          card_url: 'http://localhost:7100/v1/a2a/agents/external-echo/.well-known/agent.json',
+        },
+      ],
+    });
+  });
+
+  it('requires registry:read on every export route', async () => {
+    a2aExposure.add('external-echo');
+    await registerAndActivateEcho();
+    for (const path of [
+      '/v1/a2a-cards',
+      '/v1/agents/external-echo/a2a-card',
+      '/v1/agents/external-echo/versions/0.1.0/a2a-card',
+    ]) {
+      const res = await getA2A(path, 'registry:write');
+      expect(res.statusCode, path).toBe(403);
+      const unauthed = await app.inject({ method: 'GET', url: path });
+      expect(unauthed.statusCode, path).toBe(401);
+    }
   });
 });
