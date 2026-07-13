@@ -123,6 +123,34 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
 
+  agents/external-echo:
+    dependencies:
+      '@acp/a2a-proxy':
+        specifier: workspace:*
+        version: link:../../packages/a2a-proxy
+      '@acp/agent-sdk':
+        specifier: workspace:*
+        version: link:../../packages/agent-sdk
+      '@acp/tool-client':
+        specifier: workspace:*
+        version: link:../../packages/tool-client
+    devDependencies:
+      '@acp/protocol':
+        specifier: workspace:*
+        version: link:../../packages/protocol
+      '@temporalio/common':
+        specifier: ^1.13.0
+        version: 1.20.2
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
+
   agents/netsec:
     dependencies:
       '@acp/agent-sdk':
@@ -592,6 +620,25 @@ importers:
       zod:
         specifier: ^3.25.76
         version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.15.0
+        version: 22.20.1
+      '@vitest/coverage-v8':
+        specifier: ^3.2.4
+        version: 3.2.7(vitest@3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0))
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/node@22.20.1)(jiti@2.6.1)(terser@5.49.0)(yaml@2.9.0)
+
+  packages/a2a-proxy:
+    dependencies:
+      '@acp/agent-sdk':
+        specifier: workspace:*
+        version: link:../agent-sdk
+      '@acp/protocol':
+        specifier: workspace:*
+        version: link:../protocol
     devDependencies:
       '@types/node':
         specifier: ^22.15.0
