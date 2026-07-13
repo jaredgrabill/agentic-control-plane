@@ -31,9 +31,9 @@ import {
   startPlatform,
   stopPlatform,
 } from './support/platform.js';
-import { ciToken, janeToken, waitForResult } from './support/scenario-helpers.js';
+import { auditEvents, ciToken, janeToken, waitForResult } from './support/scenario-helpers.js';
 
-const PROBE_AGENT_ID = 'paved-road-probe-agent';
+const PROBE_AGENT_ID = 'dod-onboard-probe';
 const PROBE_VERSION = '0.1.0';
 const PROBE_MANIFEST = join(
   repoRoot,
@@ -136,9 +136,15 @@ describe('onboarding — external team scaffolds an agent to active with zero pl
       'DoD onboarding: external agent to active',
     );
     probeWorker = await startProbeAgent();
+    // Let the registry announcement of the new active agent propagate before we
+    // route a task to it (the orchestrator resolves the route live per step).
+    await new Promise((r) => setTimeout(r, 5000));
 
     const taskId = await submitCapability('probe.echo', { note: 'dod-proof' });
-    const result: TaskResult = await waitForResult(taskId);
+    const result: TaskResult = await waitForResult(taskId, 90_000).catch(async (e: unknown) => {
+      const evs = await auditEvents(taskId).catch(() => []);
+      throw new Error(`${String(e)}\naudit types: [${evs.map((x) => x.event_type).join(', ')}]`);
+    });
     expect(result.status, JSON.stringify(result.error ?? {})).toBe('completed');
     expect(result.answer!.text).toContain('probe.echo online');
     expect(result.answer!.citations.length).toBeGreaterThan(0);
