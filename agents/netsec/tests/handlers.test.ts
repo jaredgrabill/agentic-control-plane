@@ -33,6 +33,14 @@ function sgResponse(data: Record<string, unknown>): ToolResponse {
 function ipamResponse(data: Record<string, unknown>): ToolResponse {
   return { data, provenance: [IPAM_PROV] };
 }
+const VULN_PROV = {
+  doc_id: 'netsec/vuln-scan',
+  version: '2026-07-09',
+  lineage_id: '01981c00-0000-7000-8000-0000000000d4',
+};
+function vulnResponse(data: Record<string, unknown>): ToolResponse {
+  return { data, provenance: [VULN_PROV] };
+}
 
 const RULE_443 = {
   rule_id: 'FW-1001',
@@ -79,6 +87,7 @@ interface AnswerOutput {
   truncated?: boolean;
   exposures?: { service: string; port: number }[];
   internet_exposed?: boolean;
+  critical_findings?: { service: string; cve: string }[];
   widens_exposure?: boolean;
   affected_services?: string[];
   overlapping_rules?: unknown[];
@@ -316,6 +325,95 @@ describe('netsec.exposure_analysis', () => {
     expect(step.status).toBe('failed');
     expect(step.error?.class).toBe('needs_input');
     expect(tools.calls).toHaveLength(0);
+  });
+});
+
+describe('netsec.cve_exposure', () => {
+  const paymentsSg = {
+    security_group_id: 'sg-payments-01',
+    service: 'payments-api',
+    ingress: [
+      { port: 443, source_cidr: '0.0.0.0/0' },
+      { port: 8443, source_cidr: '10.0.0.0/8' },
+    ],
+    egress: [],
+  };
+  const paymentsCritical = {
+    image: 'acme/payments-api:2.4.1',
+    service: 'payments-api',
+    cve: 'CVE-2026-31337',
+    severity: 'critical',
+    fixed_version: '2.4.2',
+  };
+
+  it('flags an internet-exposed service with a critical cve, citing both snapshots', async () => {
+    const tools = new FakeToolClient({
+      'netsec.vuln_scan_report': () => vulnResponse({ findings: [paymentsCritical] }),
+      'netsec.security_group_get': () => sgResponse({ groups: [paymentsSg] }),
+    });
+    const step = await buildAgent(tools).execute(
+      stepRequest('netsec.cve_exposure', { service: 'payments-api' }),
+    );
+    expect(step.status).toBe('completed');
+    const output = step.output as unknown as AnswerOutput;
+    expect(output.internet_exposed).toBe(true);
+    expect(output.critical_findings).toHaveLength(1);
+    expect(output.text).toContain('CVE-2026-31337');
+    expect(output.text.toLowerCase()).toContain('critical');
+    expect(output.text).toContain('0.0.0.0/0');
+    expect(output.text).toContain('payments-api');
+    expect(output.citations).toEqual([VULN_PROV, SG_PROV]);
+    expect(tools.calls.map((c) => c.tool)).toEqual(['vuln_scan_report', 'security_group_get']);
+    expect(step.usage?.llm_calls).toBe(0);
+  });
+
+  it('clears a critical cve on a service with no internet ingress', async () => {
+    const tools = new FakeToolClient({
+      'netsec.vuln_scan_report': () =>
+        vulnResponse({
+          findings: [
+            {
+              image: 'acme/ledger-core:3.1.0',
+              service: 'ledger-core',
+              cve: 'CVE-2026-99999',
+              severity: 'critical',
+              fixed_version: '3.1.1',
+            },
+          ],
+        }),
+      'netsec.security_group_get': () =>
+        sgResponse({
+          groups: [
+            {
+              security_group_id: 'sg-ledger-01',
+              service: 'ledger-core',
+              ingress: [{ port: 5432, source_cidr: '10.0.0.0/8' }],
+              egress: [],
+            },
+          ],
+        }),
+    });
+    const step = await buildAgent(tools).execute(
+      stepRequest('netsec.cve_exposure', { service: 'ledger-core' }),
+    );
+    const output = step.output as unknown as AnswerOutput;
+    expect(output.internet_exposed).toBe(false);
+    expect(output.critical_findings).toEqual([]);
+    expect(output.text).toContain('No internet-exposed service');
+    expect(output.abstained).toBeUndefined();
+  });
+
+  it('abstains when the service is absent from both snapshots', async () => {
+    const tools = new FakeToolClient({
+      'netsec.vuln_scan_report': () => vulnResponse({ findings: [] }),
+      'netsec.security_group_get': () => sgResponse({ groups: [] }),
+    });
+    const step = await buildAgent(tools).execute(
+      stepRequest('netsec.cve_exposure', { service: 'analytics' }),
+    );
+    const output = step.output as unknown as AnswerOutput;
+    expect(output.abstained).toBe(true);
+    expect(output.citations).toEqual([]);
   });
 });
 

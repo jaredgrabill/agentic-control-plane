@@ -60,6 +60,32 @@
       "expect": { "abstain": true }
     },
     {
+      "name": "cve exposure flags payments-api internet-exposed with a critical cve",
+      "capability": "netsec.cve_exposure",
+      "input": { "service": "payments-api" },
+      "expect": {
+        "must_contain": ["payments-api", "CVE-2026-31337", "critical", "0.0.0.0/0"],
+        "must_cite_docs": ["netsec/vuln-scan", "netsec/security-groups"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "cve exposure clears a covered service with no internet-exposed critical cve",
+      "capability": "netsec.cve_exposure",
+      "input": { "service": "ledger-core" },
+      "expect": {
+        "must_contain": ["No internet-exposed service"],
+        "must_cite_docs": ["netsec/vuln-scan", "netsec/security-groups"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "cve exposure for a service absent from the netsec snapshots abstains",
+      "capability": "netsec.cve_exposure",
+      "input": { "service": "analytics" },
+      "expect": { "abstain": true }
+    },
+    {
       "name": "adding internet ingress widens exposure and names the overlap",
       "capability": "netsec.change_impact",
       "input": {

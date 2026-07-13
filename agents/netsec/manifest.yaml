@@ -73,6 +73,35 @@ capabilities:
       - input: { service: payments-api }
       - input: {}
       - input: { service: ledger-core }
+  - name: netsec.cve_exposure
+    description: >
+      Report which internet-exposed services are running images with critical
+      CVEs: joins the vuln-scan findings with the security-group snapshot by
+      service. A service is internet-exposed when a security group admits
+      0.0.0.0/0 on ingress; a critical finding on such a service is the joined
+      risk. Scoped to one service or the whole snapshot; abstains when the named
+      service is absent from both the vuln-scan and security-group snapshots.
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: false
+      properties:
+        service: { type: string, minLength: 1 }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+        internet_exposed: { type: boolean }
+        critical_findings: { type: array }
+    examples:
+      - input: { service: payments-api }
+      - input: {}
+      - input: { service: ledger-core }
   - name: netsec.change_impact
     description: >
       Analyze a proposed firewall rule change without touching anything: which
