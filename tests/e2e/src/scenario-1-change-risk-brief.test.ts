@@ -16,8 +16,14 @@ import { join } from 'node:path';
 import type { AuditEvent } from '@acp/protocol';
 import { McpToolClient } from '@acp/tool-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { registerAndActivate, repoRoot, startPlatform, stopPlatform } from './support/platform.js';
-import { ciToken, pollAudit, submitSequence, waitForResult } from './support/scenario-helpers.js';
+import { repoRoot, startPlatform, stopPlatform } from './support/platform.js';
+import {
+  ciToken,
+  ensureRegisteredActive,
+  pollAudit,
+  submitSequence,
+  waitForResult,
+} from './support/scenario-helpers.js';
 
 let platform: ChildProcess;
 
@@ -50,7 +56,7 @@ describe('scenario 1 — change-risk brief', () => {
       ['python/agents/knowledge', 'knowledge-agent'],
       ['agents/change', 'change-agent'],
     ] as const) {
-      await registerAndActivate(
+      await ensureRegisteredActive(
         join(repoRoot, ...dir.split('/'), 'manifest.yaml'),
         id,
         writeToken,

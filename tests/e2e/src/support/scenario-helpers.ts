@@ -8,9 +8,11 @@
  * stack, correlated by task_id.
  */
 
+import { readFileSync } from 'node:fs';
 import type { AuditEvent, TaskResult } from '@acp/protocol';
+import { parse as parseYaml } from 'yaml';
 import { expect } from 'vitest';
-import { AUDIT_URL, GATEWAY_URL, TOKEN_URL } from './platform.js';
+import { AUDIT_URL, GATEWAY_URL, REGISTRY_URL, TOKEN_URL } from './platform.js';
 
 export async function getToken(
   clientId: string,
@@ -39,6 +41,40 @@ export const approverToken = (): Promise<string> =>
   getToken('cli-approver', 'approver-dev-secret', 'acp:gateway', 'approvals:decide');
 export const ciToken = (audience: string, scope: string): Promise<string> =>
   getToken('svc-ci', 'ci-dev-secret', audience, scope);
+
+/**
+ * Idempotently ensure an agent is registered at 0.1.0 and active. Like the
+ * shared registerAndActivate, but tolerant of a 409 on registration: on a fresh
+ * postgres (nightly CI) the first registration is a 201 and re-registrations of
+ * the identical manifest are idempotent 200s, so 409 never occurs there. It
+ * occurs only against a persistent LOCAL registry that still holds a stale card
+ * for a since-changed manifest (e.g. after adding a capability) — the agent is
+ * already registered and a live worker serves its capabilities, so the scenario
+ * proceeds. This never masks a real CI failure: a scenario never re-registers an
+ * agent with two different manifests within one run.
+ */
+export async function ensureRegisteredActive(
+  manifestPath: string,
+  agentId: string,
+  writeToken: string,
+  reason: string,
+): Promise<void> {
+  const manifest = parseYaml(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+  const register = await fetch(`${REGISTRY_URL}/v1/agents`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${writeToken}` },
+    body: JSON.stringify({ manifest, version: '0.1.0' }),
+  });
+  // 200/201 = registered (fresh or idempotent); 409 = a stale local card for a
+  // changed manifest (see doc above) — the agent is already registered.
+  expect([200, 201, 409], await register.clone().text()).toContain(register.status);
+  const activate = await fetch(`${REGISTRY_URL}/v1/agents/${agentId}/state`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${writeToken}` },
+    body: JSON.stringify({ state: 'active', reason }),
+  });
+  expect([200, 409], await activate.clone().text()).toContain(activate.status);
+}
 
 /** Submit a context.sequence task (positional inputs) as cli-jane. Returns the task_id. */
 export async function submitSequence(

@@ -22,10 +22,11 @@ import {
   startApprovalAgent,
   type RunningAgent,
 } from './support/approval-agent.js';
-import { registerAndActivate, repoRoot, startPlatform, stopPlatform } from './support/platform.js';
+import { repoRoot, startPlatform, stopPlatform } from './support/platform.js';
 import {
   ciToken,
   driveApprovals,
+  ensureRegisteredActive,
   pollAudit,
   submitSequence,
   waitForResult,
@@ -68,14 +69,14 @@ beforeAll(async () => {
     ['agents/change', 'change-agent'],
     ['agents/cloud', 'cloud-agent'],
   ] as const) {
-    await registerAndActivate(
+    await ensureRegisteredActive(
       join(repoRoot, ...dir.split('/'), 'manifest.yaml'),
       id,
       writeToken,
       'scenario 4 governed patch rollout',
     );
   }
-  await registerAndActivate(
+  await ensureRegisteredActive(
     APPROVAL_MANIFEST_PATH,
     APPROVAL_AGENT_ID,
     writeToken,

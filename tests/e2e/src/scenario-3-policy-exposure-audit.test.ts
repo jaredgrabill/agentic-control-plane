@@ -15,10 +15,11 @@ import { type ChildProcess } from 'node:child_process';
 import { join } from 'node:path';
 import type { AuditEvent } from '@acp/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { registerAndActivate, repoRoot, startPlatform, stopPlatform } from './support/platform.js';
+import { repoRoot, startPlatform, stopPlatform } from './support/platform.js';
 import {
   auditEvents,
   ciToken,
+  ensureRegisteredActive,
   pollAudit,
   submitSequence,
   waitForResult,
@@ -50,7 +51,7 @@ describe('scenario 3 — policy exposure audit', () => {
       ['agents/code', 'code-agent'],
       ['python/agents/knowledge', 'knowledge-agent'],
     ] as const) {
-      await registerAndActivate(
+      await ensureRegisteredActive(
         join(repoRoot, ...dir.split('/'), 'manifest.yaml'),
         id,
         writeToken,
