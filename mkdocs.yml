@@ -28,3 +28,75 @@ markdown_extensions:
           format: !!python/name:pymdownx.superfences.fence_code_format
 
 docs_dir: docs
+
+# Versioned docs are published with `mike` on release (.github/workflows/docs-release.yml).
+# The material theme reads the version list from the deployed site at runtime, so
+# `mkdocs build --strict` needs no mike plugin and stays green in the docs CI job.
+extra:
+  version:
+    provider: mike
+
+# Internal sprint artifacts are built but intentionally kept out of the nav;
+# without this, `--strict` would flag them as omitted pages.
+not_in_nav: |
+  notes/sprint-handoff-*.md
+
+nav:
+  - Home: index.md
+  - Vision & Scope:
+      - Vision: vision.md
+      - Domains: domains.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Agent Lifecycle: architecture/agent-lifecycle.md
+      - Messaging & Discovery: architecture/messaging-and-discovery.md
+      - Orchestration: architecture/orchestration.md
+      - Knowledge & RAG: architecture/knowledge-and-rag.md
+      - Multi-Tenancy: architecture/multi-tenancy.md
+      - Governance & Policy: architecture/governance-and-policy.md
+      - Security: architecture/security.md
+      - Threat Model: architecture/threat-model.md
+      - Security Self-Assessment: architecture/security-self-assessment.md
+      - Observability: architecture/observability.md
+      - Evaluation: architecture/evaluation.md
+      - Cost Management: architecture/cost-management.md
+  - Standards:
+      - Agent Patterns: standards/agent-patterns.md
+      - Tool Integration: standards/tool-integration.md
+      - Coding Standards: standards/coding-standards.md
+      - Testing: standards/testing.md
+      - Review Practices: standards/review-practices.md
+      - The Paved Road: standards/paved-road.md
+      - API Versioning & Stability: standards/api-versioning.md
+      - SLO Targets: standards/slo-targets.md
+  - Runbooks:
+      - Index: runbooks/README.md
+      - Operational Levers: runbooks/operational-levers.md
+      - Rolling Upgrade: runbooks/upgrade-rolling.md
+      - DR — Postgres Backup/Restore: runbooks/dr-postgres-backup-restore.md
+      - DR — NATS JetStream: runbooks/dr-nats-jetstream.md
+      - Helm Deployment: runbooks/deploy-helm.md
+      - Kill Switch — Tier 1 (Agent): runbooks/kill-switch-tier-1-agent.md
+      - Kill Switch — Tier 2 (Capability): runbooks/kill-switch-tier-2-capability.md
+      - Kill Switch — Tier 3 (Fleet): runbooks/kill-switch-tier-3-fleet.md
+      - Audit Integrity & Retention: runbooks/audit-integrity-and-retention.md
+  - Decisions (ADRs):
+      - Index: adr/README.md
+      - 0001 · NATS Messaging & Discovery: adr/0001-nats-messaging-and-discovery.md
+      - 0002 · Temporal Workflow Orchestration: adr/0002-temporal-workflow-orchestration.md
+      - 0003 · pgvector for RAG: adr/0003-pgvector-for-rag.md
+      - 0004 · Stateless JWT RBAC: adr/0004-stateless-jwt-rbac.md
+      - 0005 · TypeScript/Python Split: adr/0005-language-split-typescript-python.md
+      - 0006 · MCP Tools & A2A Cards: adr/0006-mcp-tools-a2a-agent-cards.md
+      - 0007 · Orchestrator Identity Broker: adr/0007-orchestrator-identity-broker.md
+  - RFCs:
+      - Process: rfc/README.md
+      - Template (0000): rfc/0000-template.md
+  - Project:
+      - OpenSSF Best Practices Badge: notes/openssf-badge.md
+  - Research:
+      - Index: research/README.md
+      - Governance, Safety & Security: research/governance-safety-security.md
+      - Infrastructure Stack: research/infra-stack.md
+      - Observability, Eval & Cost: research/observability-eval-cost.md
+      - Protocols & Interop: research/protocols-and-interop.md
