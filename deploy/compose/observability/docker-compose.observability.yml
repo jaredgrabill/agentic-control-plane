@@ -1,0 +1,57 @@
+# Opt-in observability overlay: Prometheus + Grafana for the SLO dashboards.
+# This is SEPARATE from the canonical dev stack (deploy/compose/docker-compose.yml)
+# and is not required for `make dev` / E2E. It scrapes the OTel collector's
+# Prometheus exporter (:8889, added in otel/collector-config.yaml).
+#
+# Bring the dev stack up first, then this overlay on the SAME network:
+#
+#   docker compose -f deploy/compose/docker-compose.yml up -d
+#   docker compose -f deploy/compose/observability/docker-compose.observability.yml up -d
+#
+# Grafana → http://localhost:3001 (admin/admin), Prometheus → http://localhost:9090.
+
+name: acp-observability
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=15d'
+    ports:
+      - '9090:9090'
+    volumes:
+      - ../../observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ../../observability/prometheus/rules.yml:/etc/prometheus/rules.yml:ro
+      - promdata:/prometheus
+    networks:
+      - acp
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    depends_on:
+      - prometheus
+    environment:
+      GF_SECURITY_ADMIN_USER: ${ACP_GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${ACP_GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    ports:
+      - '3001:3000'
+    volumes:
+      - ../../observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../../observability/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    networks:
+      - acp
+
+volumes:
+  promdata:
+  grafanadata:
+
+networks:
+  # Join the canonical dev stack's network so `otel-collector:8889` resolves.
+  # The dev compose project is named `acp-dev`, so its default network is
+  # `acp-dev_default`.
+  acp:
+    external: true
+    name: acp-dev_default

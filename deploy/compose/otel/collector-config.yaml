@@ -16,6 +16,15 @@ exporters:
       insecure: true
   debug:
     verbosity: basic
+  # Prometheus scrape endpoint for the SLO dashboards. Exposes all OTLP
+  # metrics on :8889/metrics; the observability overlay's Prometheus scrapes
+  # it (deploy/compose/observability/docker-compose.observability.yml).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    # Keep gen_ai.* / acp.* attributes as labels so SLO rules can group by
+    # tenant, agent_version, capability, etc.
+    resource_to_telemetry_conversion:
+      enabled: true
 
 extensions:
   health_check:
@@ -31,7 +40,7 @@ service:
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [debug, prometheus]
     logs:
       receivers: [otlp]
       processors: [batch]

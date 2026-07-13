@@ -1,0 +1,110 @@
+# Recording + alerting rules for the ACP 1.0 SLOs
+# (docs/standards/slo-targets.md). PROPOSED thresholds — ratify before these
+# page anyone.
+#
+# METRIC NAMES ARE ASSUMED. The platform emits OTel `gen_ai.*` (GenAI semantic
+# conventions) and `acp.*` (governance) instruments; the Prometheus exporter
+# sanitizes dots to underscores and appends unit/type suffixes (histograms →
+# _bucket/_sum/_count, counters → _total). The exact instrument names depend on
+# what the SDK registers — confirm against `:8889/metrics` on a live stack and
+# adjust. Each rule notes the metric it assumes.
+groups:
+  - name: acp-slo-latency
+    rules:
+      # SLO 2a: task end-to-end p95 < 30s. Assumes histogram acp_task_duration_seconds.
+      - record: acp:task_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le, acp_agent_id) (rate(acp_task_duration_seconds_bucket[5m])))
+      - alert: TaskLatencyP95High
+        expr: acp:task_duration_seconds:p95_5m > 30
+        for: 15m
+        labels: { severity: warning, slo: latency }
+        annotations:
+          summary: 'Task e2e p95 latency > 30s ({{ $labels.acp_agent_id }})'
+          description: 'p95 task latency has exceeded the 30s SLO for 15m.'
+      - alert: TaskLatencyP95Critical
+        expr: acp:task_duration_seconds:p95_5m > 60
+        for: 5m
+        labels: { severity: critical, slo: latency }
+        annotations:
+          summary: 'Task e2e p95 latency > 2x SLO ({{ $labels.acp_agent_id }})'
+
+      # SLO 2b: LLM step p95. Assumes gen_ai_client_operation_duration_seconds histogram.
+      - record: acp:gen_ai_operation_duration_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le, acp_agent_version) (rate(gen_ai_client_operation_duration_seconds_bucket[5m])))
+
+  - name: acp-slo-availability
+    rules:
+      # SLO 1: dispatch success >= 99.5%. Assumes counter acp_step_dispatch_total{outcome=...}.
+      - record: acp:step_dispatch_success:ratio_30m
+        expr: |
+          sum(rate(acp_step_dispatch_total{outcome="success"}[30m]))
+          /
+          clamp_min(sum(rate(acp_step_dispatch_total[30m])), 1)
+      - alert: DispatchAvailabilityBudgetBurnFast
+        # 14.4x burn of a 0.5% error budget over 1h AND 5m windows (multi-window).
+        expr: |
+          (1 - acp:step_dispatch_success:ratio_30m) > (14.4 * 0.005)
+        for: 5m
+        labels: { severity: critical, slo: availability }
+        annotations:
+          summary: 'Dispatch availability error budget burning fast (>14.4x)'
+
+  - name: acp-slo-backlog
+    rules:
+      # SLO 3: queue backlog drains between bursts. Assumes gauge acp_queue_depth
+      # and a throughput counter acp_step_completed_total. Alert when the queue
+      # is filling faster than it drains for >5m. N defaults to 2 (ratify).
+      - alert: QueueBacklogNotDraining
+        expr: |
+          acp_queue_depth
+          >
+          (2 * sum by (acp_agent_id) (rate(acp_step_completed_total[5m])) * 60)
+        for: 5m
+        labels: { severity: warning, slo: backlog }
+        annotations:
+          summary: 'Task queue backlog not draining ({{ $labels.acp_agent_id }})'
+          description: 'Backlog exceeds 2x the 5m throughput for 5m — queue is not keeping up.'
+
+  - name: acp-slo-quality-budget
+    rules:
+      # SLO 5a/5b: mirror the online-eval engine (online-eval/budget.ts,
+      # ladder.ts). Assumes gauges acp_budget_burn_ratio and acp_quality_state
+      # (0=measurable,1=warning,2=exhausted,3=severe,4=floor).
+      - alert: BudgetBurnWarning
+        expr: acp_budget_burn_ratio >= 0.5 and acp_budget_burn_ratio < 1.0
+        for: 5m
+        labels: { severity: warning, slo: budget }
+        annotations:
+          summary: 'Budget burn_ratio >= 0.5 ({{ $labels.acp_tenant }}/{{ $labels.acp_agent_id }})'
+      - alert: BudgetExhausted
+        expr: acp_budget_burn_ratio >= 1.0
+        for: 1m
+        labels: { severity: critical, slo: budget }
+        annotations:
+          summary: 'Budget exhausted → change-freeze ({{ $labels.acp_tenant }}/{{ $labels.acp_agent_id }})'
+      - alert: QualityStateDegraded
+        expr: acp_quality_state >= 2
+        for: 5m
+        labels: { severity: critical, slo: quality }
+        annotations:
+          summary: 'Quality ladder at exhausted or worse ({{ $labels.acp_agent_id }})'
+
+  - name: acp-slo-audit
+    rules:
+      # SLO 6: audit append lag p95 < ~5s. Assumes histogram acp_audit_append_lag_seconds.
+      - record: acp:audit_append_lag_seconds:p95_5m
+        expr: histogram_quantile(0.95, sum by (le) (rate(acp_audit_append_lag_seconds_bucket[5m])))
+      - alert: AuditLagHigh
+        expr: acp:audit_append_lag_seconds:p95_5m > 5
+        for: 15m
+        labels: { severity: warning, slo: audit }
+        annotations:
+          summary: 'Audit append lag p95 > 5s'
+      # Integrity, not latency: any chain-verify failure pages immediately.
+      # Assumes gauge acp_audit_chain_verified (1=ok, 0=broken).
+      - alert: AuditChainBroken
+        expr: acp_audit_chain_verified == 0
+        for: 1m
+        labels: { severity: critical, slo: audit-integrity }
+        annotations:
+          summary: 'Audit hash-chain verification FAILED — possible gap or tamper'
