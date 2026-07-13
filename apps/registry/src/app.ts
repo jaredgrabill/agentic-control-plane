@@ -4,11 +4,13 @@ import {
   agentManifest,
   evalBaseline,
   ProtocolValidationError,
+  toolServerRecord,
   type AgentCard,
   type AgentManifest,
   type AuditEvent,
   type EvalBaseline,
   type LifecycleState,
+  type ToolServerRecord,
 } from '@acp/protocol';
 import {
   AuthError,
@@ -24,6 +26,7 @@ import type { JSONWebKeySet, CryptoKey } from 'jose';
 import { signA2ACard, toA2ACard, type A2ACardOptions } from './a2a.js';
 import { signCard } from './signing.js';
 import { InvariantViolation, type AgentFilter, type RegistryStore } from './store.js';
+import type { ToolServerStore } from './tool-servers.js';
 
 export const REGISTRY_AUDIENCE = 'acp:registry';
 
@@ -80,6 +83,8 @@ export interface RegistryDeps {
   control: KillSwitchControlLike;
   /** A2A card export: allowlist + projection options. */
   a2a: A2AExportConfig;
+  /** MCP tool-server catalog (SF3). Authed-internal reads + admin publish. */
+  toolServers: ToolServerStore;
   audit: AuditSink;
   logger: Logger;
   now?: () => Date;
@@ -422,6 +427,59 @@ export function buildRegistryApp(deps: RegistryDeps): FastifyInstance {
       throw new AuthError('capability query parameter is required', 400);
     }
     return reply.send(await deps.store.routingSet(query.capability));
+  });
+
+  // --- MCP tool-server catalog (SF3). INTERNAL only: these records name scope
+  // vocabulary, SoR topology, and credential KEY NAMES, so reads require
+  // registry:read and publishes require registry:admin. The catalog is NEVER
+  // served on the public A2A edge. Secrets are never stored — auth.credential_ref
+  // is an env/vault key name the tool gateway expands at call time.
+
+  app.get('/v1/tool-servers', async (request) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:read');
+    return { tool_servers: await deps.toolServers.list() };
+  });
+
+  app.get('/v1/tool-servers/:id', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:read');
+    const { id } = request.params as { id: string };
+    const record = await deps.toolServers.get(id);
+    if (record === undefined) {
+      return reply
+        .status(404)
+        .send({ error: { message: `no tool server with id ${id}`, status: 404 } });
+    }
+    return reply.send(record);
+  });
+
+  app.put('/v1/tool-servers/:id', async (request, reply) => {
+    const claims = await authenticate(deps, request);
+    requireScope(claims, 'registry:admin');
+    const { id } = request.params as { id: string };
+    let record: ToolServerRecord;
+    try {
+      record = toolServerRecord.parse(request.body);
+    } catch (err) {
+      if (err instanceof ProtocolValidationError) throw new AuthError(err.message, 400);
+      throw err;
+    }
+    if (record.id !== id) {
+      throw new AuthError(`tool server record id ${record.id} does not match path ${id}`, 400);
+    }
+    const result = await deps.toolServers.put(record);
+    const deprecated = record.deprecation?.deprecated === true;
+    await deps.audit.publish({
+      event_id: randomUUID(),
+      occurred_at: now().toISOString(),
+      tenant: 'platform',
+      event_type: deprecated ? 'tool_server.deprecated' : 'tool_server.published',
+      actor: { principal: claims.sub, delegation_chain: delegationChain(claims) },
+      action: { name: deprecated ? 'tool_server.deprecated' : 'tool_server.published' },
+      details: { tool_server: id, version: record.version, outcome: result.outcome },
+    });
+    return reply.status(result.outcome === 'inserted' ? 201 : 200).send(record);
   });
 
   app.put('/v1/agents/:agent_id/baseline', async (request, reply) => {

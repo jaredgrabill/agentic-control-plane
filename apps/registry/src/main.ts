@@ -16,6 +16,7 @@ import pg from 'pg';
 import { buildRegistryApp } from './app.js';
 import { NatsRegistryAnnouncer } from './bus.js';
 import { PgRegistryStore } from './store.js';
+import { PgToolServerStore, staticServersToRecords } from './tool-servers.js';
 
 const logger = createLogger('registry');
 const telemetry = initTelemetry('registry');
@@ -40,6 +41,24 @@ const pool = new pg.Pool({
 });
 const store = new PgRegistryStore(pool);
 await store.migrate();
+
+// MCP tool-server catalog (item 3, SF3). The table is always created; it is
+// consumed only when a tool gateway opts in with ACP_TOOL_CATALOG_URL, so an
+// empty catalog changes nothing. The optional backward-compat seed converts the
+// legacy static tool-servers.json into catalog records on first run — guarded so
+// a seed hiccup can never keep the registry (and the whole stack) from starting.
+const toolServers = new PgToolServerStore(pool);
+await toolServers.migrate();
+const seedPath = process.env.ACP_TOOL_CATALOG_SEED;
+if (seedPath !== undefined && seedPath !== '') {
+  try {
+    const records = staticServersToRecords(JSON.parse(readFileSync(seedPath, 'utf8')));
+    await toolServers.seed(records);
+    logger.info({ count: records.length }, 'tool-server catalog seeded from static config');
+  } catch (err) {
+    logger.error({ err }, 'tool-server catalog seed failed (non-fatal; catalog stays as-is)');
+  }
+}
 
 const nc = await connectBus({
   name: 'registry',
@@ -78,6 +97,7 @@ const app = buildRegistryApp({
     providerOrg: env('ACP_A2A_PROVIDER_ORG', 'Agentic Control Plane (dev)'),
     tokenUrl: env('ACP_TOKEN_URL', 'http://localhost:7101'),
   },
+  toolServers,
   audit: new AuditPublisher(nc, logger),
   logger,
 });

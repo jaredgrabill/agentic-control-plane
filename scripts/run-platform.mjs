@@ -68,6 +68,10 @@ const services = [
     {
       // Item 3 (a2a edge): platform-controlled card export allowlist.
       ACP_A2A_EXPOSURE: join(repoRoot, 'deploy', 'dev', 'a2a-exposure.json'),
+      // Item 3 (SF3): backward-compat seed for the tool-server catalog. The
+      // catalog is consumed only when a tool gateway sets ACP_TOOL_CATALOG_URL
+      // (default OFF), so seeding leaves dev/CI behavior unchanged.
+      ACP_TOOL_CATALOG_SEED: join(repoRoot, 'deploy', 'dev', 'tool-servers.json'),
     },
   ],
   ['policy', 'node', ['apps/policy/dist/main.js'], {}],

@@ -1,5 +1,11 @@
 import type { AgentCard, AgentManifest } from '@acp/protocol';
-import { calculateJwkThumbprint, exportJWK, generateKeyPair, type JSONWebKeySet } from 'jose';
+import {
+  calculateJwkThumbprint,
+  exportJWK,
+  generateKeyPair,
+  type CryptoKey,
+  type JSONWebKeySet,
+} from 'jose';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { a2aSigningPayload, signA2ACard, toA2ACard, verifyA2ACard } from '../src/a2a.js';
 
@@ -102,8 +108,8 @@ describe('toA2ACard projection (strict allowlist)', () => {
       'external.submit',
       'external.withdraw',
     ]);
-    expect(projected.skills[0]?.tags).toEqual(['R0']);
-    expect(projected.skills[0]?.examples).toContain('{"message":"hello"}');
+    expect(projected.skills[0].tags).toEqual(['R0']);
+    expect(projected.skills[0].examples).toContain('{"message":"hello"}');
     expect(projected.capabilities).toEqual({
       streaming: false,
       pushNotifications: false,
