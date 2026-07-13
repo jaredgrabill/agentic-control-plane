@@ -1,0 +1,153 @@
+import { createLogger } from '@acp/service-kit';
+import { describe, expect, it } from 'vitest';
+import {
+  SessionContextCache,
+  validateEntry,
+  type SessionCacheEntry,
+  type SessionCacheKv,
+} from '../src/session-cache.js';
+
+const logger = createLogger('session-cache-store-test');
+
+/** In-memory KV fake matching the narrow SessionCacheKv surface. */
+class FakeKv implements SessionCacheKv {
+  readonly store = new Map<string, string>();
+  putCalls = 0;
+  failGet = false;
+  failPut = false;
+
+  get(key: string): Promise<{ string(): string } | null> {
+    if (this.failGet) return Promise.reject(new Error('kv down'));
+    const v = this.store.get(key);
+    return Promise.resolve(v === undefined ? null : { string: () => v });
+  }
+  put(key: string, value: string): Promise<number> {
+    this.putCalls += 1;
+    if (this.failPut) return Promise.reject(new Error('kv down'));
+    this.store.set(key, value);
+    return Promise.resolve(1);
+  }
+  delete(key: string): Promise<void> {
+    this.store.delete(key);
+    return Promise.resolve();
+  }
+}
+
+function entry(overrides: Partial<SessionCacheEntry> = {}): SessionCacheEntry {
+  return {
+    v: 1,
+    tenant: 'acme',
+    perm_hash: 'p'.repeat(64),
+    query_hash: 'q'.repeat(64),
+    results: [
+      {
+        content: 'A change freeze is in effect.',
+        score: 0.5,
+        citation: { doc_id: 'policy/cm', version: '3.2.0', lineage_id: 'lin-1', snippet: 'A change freeze' },
+      },
+    ],
+    sources: ['policy-docs'],
+    gens: { 'policy-docs': '7' },
+    lineage_ids: ['lin-1'],
+    written_at: new Date().toISOString(),
+    expires_at: Date.now() + 60_000,
+    ...overrides,
+  };
+}
+
+describe('SessionContextCache store', () => {
+  it('round-trips an entry through put → get', async () => {
+    const kv = new FakeKv();
+    const cache = new SessionContextCache(kv, 262_144, logger);
+    expect(await cache.put('k', entry())).toBe('ok');
+    const got = await cache.get('k');
+    expect(got?.results[0]?.citation.lineage_id).toBe('lin-1');
+    expect(got?.gens['policy-docs']).toBe('7');
+  });
+
+  it('returns undefined for an absent key', async () => {
+    const cache = new SessionContextCache(new FakeKv(), 262_144, logger);
+    expect(await cache.get('missing')).toBeUndefined();
+  });
+
+  it('skips oversize writes rather than truncating (serves live, uncached)', async () => {
+    const kv = new FakeKv();
+    const cache = new SessionContextCache(kv, 64, logger); // tiny cap
+    expect(await cache.put('k', entry())).toBe('too_large');
+    expect(kv.putCalls).toBe(0);
+    expect(kv.store.size).toBe(0);
+  });
+
+  it('degrades to a miss when the KV get throws', async () => {
+    const kv = new FakeKv();
+    kv.failGet = true;
+    const cache = new SessionContextCache(kv, 262_144, logger);
+    expect(await cache.get('k')).toBeUndefined();
+  });
+
+  it('reports a write failure without throwing', async () => {
+    const kv = new FakeKv();
+    kv.failPut = true;
+    const cache = new SessionContextCache(kv, 262_144, logger);
+    expect(await cache.put('k', entry())).toBe('error');
+  });
+
+  it('treats an unparseable stored value as a miss', async () => {
+    const kv = new FakeKv();
+    kv.store.set('k', '{not json');
+    const cache = new SessionContextCache(kv, 262_144, logger);
+    expect(await cache.get('k')).toBeUndefined();
+  });
+});
+
+const expected = { tenant: 'acme', permHashHex: 'p'.repeat(64), queryHashHex: 'q'.repeat(64) };
+const genOk = (t: string, s: string): string => (t === 'acme' && s === 'policy-docs' ? '7' : '0');
+
+describe('validateEntry', () => {
+  it('accepts a fresh, matching, current entry', () => {
+    expect(validateEntry(entry(), expected, genOk, Date.now())).toEqual({ ok: true });
+  });
+
+  it('rejects an expired entry (proves TTL is enforced on read)', () => {
+    const now = 1_000_000;
+    const e = entry({ expires_at: now - 1 });
+    expect(validateEntry(e, expected, genOk, now)).toEqual({ ok: false, reason: 'expired' });
+  });
+
+  it('expires_at = min(now+ttl, tokenExp*1000) can never exceed the token — a token-bound entry expires with the token', () => {
+    const now = 1_000_000;
+    const ttlMs = 60_000;
+    const tokenExpSec = 1_010; // 1_010_000 ms < now+ttl (1_060_000)
+    const expiresAt = Math.min(now + ttlMs, tokenExpSec * 1000);
+    expect(expiresAt).toBe(1_010_000);
+    // At token expiry the entry is already a miss.
+    expect(validateEntry(entry({ expires_at: expiresAt }), expected, genOk, 1_010_000)).toMatchObject({
+      ok: false,
+      reason: 'expired',
+    });
+  });
+
+  it('rejects a tenant/perm/query mismatch (paranoia re-check of the key parts)', () => {
+    const now = Date.now();
+    expect(validateEntry(entry({ tenant: 'globex' }), expected, genOk, now)).toMatchObject({
+      reason: 'tenant_mismatch',
+    });
+    expect(validateEntry(entry({ perm_hash: 'x'.repeat(64) }), expected, genOk, now)).toMatchObject({
+      reason: 'perm_mismatch',
+    });
+    expect(validateEntry(entry({ query_hash: 'x'.repeat(64) }), expected, genOk, now)).toMatchObject({
+      reason: 'query_mismatch',
+    });
+  });
+
+  it('rejects an entry whose captured source generation no longer matches (lineage evict)', () => {
+    const stale = (t: string, s: string): string => (s === 'policy-docs' ? '8' : '0'); // bumped 7 → 8
+    const res = validateEntry(entry(), expected, stale, Date.now());
+    expect(res).toEqual({ ok: false, reason: 'stale', source_id: 'policy-docs' });
+  });
+
+  it('treats a wiped generation view (source now unknown → 0) as stale, not fresh', () => {
+    const wiped = (): string => '0';
+    expect(validateEntry(entry(), expected, wiped, Date.now())).toMatchObject({ reason: 'stale' });
+  });
+});

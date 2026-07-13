@@ -1,4 +1,12 @@
-import { assertTenantId, sha256Digest, stableStringify, type PlatformClaims } from '@acp/service-kit';
+import { StorageType, type KV, type NatsConnection } from 'nats';
+import {
+  assertTenantId,
+  sha256Digest,
+  stableStringify,
+  type Logger,
+  type PlatformClaims,
+} from '@acp/service-kit';
+import type { SearchResult } from './search.js';
 
 /**
  * The session context cache memoizes the EXPENSIVE, permission-invariant half
@@ -137,4 +145,155 @@ export function deriveCacheKey(input: CacheKeyInput): CacheKey {
   };
   const queryHashHex = hex(sha256Digest(stableStringify(query)));
   return { key: `${perm.tenant}.${permHashHex}.${queryHashHex}`, tenant: perm.tenant, permHashHex, queryHashHex };
+}
+
+/**
+ * A cached retrieval context. Holds ONLY reconstructable retrieval output —
+ * the assembled `SearchResult[]` (chunk text + full citations) and the
+ * provenance needed to re-emit `retrieval.served` on a hit. It never holds
+ * execution state (loop position, plan progress, conversation memory): those
+ * live in Temporal history, not here (messaging-and-discovery.md
+ * state-discipline — a cache is loss-tolerant, task state must not be).
+ */
+export interface SessionCacheEntry {
+  v: number;
+  tenant: string;
+  /** The hex permission-snapshot digest — re-checked on read as defense in depth. */
+  perm_hash: string;
+  /** The hex query-snapshot digest — re-checked on read as defense in depth. */
+  query_hash: string;
+  /** The assembled retrieval context the answer builder needs. */
+  results: SearchResult[];
+  /** Distinct source_ids the results came from — the eviction handles. */
+  sources: string[];
+  /** The generation captured for each source at write time (source_id → gen). */
+  gens: Record<string, string>;
+  /** The exact lineage_ids served, so a hit re-emits an accurate retrieval.served. */
+  lineage_ids: string[];
+  written_at: string;
+  /** ms epoch; `min(now + ttlMs, claims.exp*1000)` so the cache never outlives the token. */
+  expires_at: number;
+}
+
+/**
+ * The narrow slice of the NATS KV surface the cache uses. The real `KV`
+ * satisfies it structurally; an in-memory fake implements it for unit tests.
+ */
+export interface SessionCacheKv {
+  get(key: string): Promise<{ string(): string } | null>;
+  put(key: string, value: string): Promise<number>;
+  delete(key: string): Promise<void>;
+}
+
+export type CachePutResult = 'ok' | 'too_large' | 'error';
+
+export type EntryValidation =
+  | { ok: true }
+  | { ok: false; reason: 'expired' | 'tenant_mismatch' | 'perm_mismatch' | 'query_mismatch' | 'stale'; source_id?: string };
+
+/**
+ * Validates a fetched entry against the caller's freshly-derived key parts,
+ * the live generation view, and the clock. Pure, so the security-critical
+ * checks — TTL ≤ token, permission/tenant re-binding, lineage staleness — are
+ * unit-tested directly. Every failure is a MISS (fail-safe): the caller runs
+ * the live path and never serves a stale-wrong or foreign-permission result.
+ */
+export function validateEntry(
+  entry: SessionCacheEntry,
+  expected: { tenant: string; permHashHex: string; queryHashHex: string },
+  currentGen: (tenant: string, sourceId: string) => string,
+  nowMs: number,
+): EntryValidation {
+  if (nowMs >= entry.expires_at) return { ok: false, reason: 'expired' };
+  // The key already encodes tenant/perm/query, so a mismatch here can only
+  // mean a corrupted or collided entry — refuse it rather than serve it.
+  if (entry.tenant !== expected.tenant) return { ok: false, reason: 'tenant_mismatch' };
+  if (entry.perm_hash !== expected.permHashHex) return { ok: false, reason: 'perm_mismatch' };
+  if (entry.query_hash !== expected.queryHashHex) return { ok: false, reason: 'query_mismatch' };
+  for (const source of entry.sources) {
+    if (currentGen(entry.tenant, source) !== (entry.gens[source] ?? '')) {
+      return { ok: false, reason: 'stale', source_id: source };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * The memory-backed KV read/write door. Get and put are best-effort: any KV
+ * error is swallowed and reported to the caller as a miss / write-failure, so
+ * a cache fault degrades to correct live retrieval and never surfaces an error
+ * on the retrieval hot path.
+ */
+export class SessionContextCache {
+  constructor(
+    private readonly kv: SessionCacheKv,
+    private readonly maxValueBytes: number,
+    private readonly logger: Logger,
+  ) {}
+
+  async get(key: string): Promise<SessionCacheEntry | undefined> {
+    try {
+      const entry = await this.kv.get(key);
+      if (entry === null) return undefined;
+      return JSON.parse(entry.string()) as SessionCacheEntry;
+    } catch (err) {
+      this.logger.warn({ err }, 'session cache get failed — treating as a miss');
+      return undefined;
+    }
+  }
+
+  async put(key: string, entry: SessionCacheEntry): Promise<CachePutResult> {
+    let payload: string;
+    try {
+      payload = JSON.stringify(entry);
+    } catch (err) {
+      this.logger.warn({ err }, 'session cache entry could not be serialized — skipping write');
+      return 'error';
+    }
+    // Oversize entries are skipped, not truncated: a partial retrieval context
+    // would be a correctness bug. The live path already returned the full result.
+    if (Buffer.byteLength(payload, 'utf8') > this.maxValueBytes) return 'too_large';
+    try {
+      await this.kv.put(key, payload);
+      return 'ok';
+    } catch (err) {
+      this.logger.warn({ err }, 'session cache put failed — served live, uncached');
+      return 'error';
+    }
+  }
+
+  async evict(key: string): Promise<void> {
+    try {
+      await this.kv.delete(key);
+    } catch (err) {
+      this.logger.warn({ err }, 'session cache evict failed (harmless — entry ages out via TTL)');
+    }
+  }
+}
+
+export interface SessionCacheBucketOptions {
+  maxValueBytes: number;
+  maxBytes: number;
+  /** Backstop TTL on every key; per-entry expiry (≤ token TTL) is enforced on read. */
+  ttlMs: number;
+}
+
+/**
+ * Creates (or binds) the single MEMORY-storage session cache bucket. Memory
+ * storage is deliberate: classified retrieval context must never land on disk,
+ * and a restart resets entries and their captured generations together, so the
+ * two views can never disagree. history:1 — only the latest value per key
+ * matters. The generation keys (`gen.>`) live in the same bucket.
+ */
+export async function ensureSessionCacheBucket(
+  nc: NatsConnection,
+  opts: SessionCacheBucketOptions,
+): Promise<KV> {
+  return nc.jetstream().views.kv(SESSION_CACHE_BUCKET, {
+    history: 1,
+    storage: StorageType.Memory,
+    maxValueSize: opts.maxValueBytes,
+    max_bytes: opts.maxBytes,
+    ttl: opts.ttlMs,
+  });
 }
