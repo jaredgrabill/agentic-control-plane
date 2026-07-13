@@ -1,0 +1,43 @@
+id: paved-road-probe-agent
+name: Paved Road Probe Agent
+owner: team-external
+description: >
+  A minimal pure-LLM R0 agent standing in for an externally onboarded team's
+  agent in the DoD onboarding acceptance scenario. It is promoted to active via
+  the registered→active admin edge (no platform change) and answers one governed
+  task through its probe.echo capability. The handler is canned and side-effect
+  free (no tool calls, no bus identity) — this slice proves the onboarding
+  ladder and active routing, not any content.
+capabilities:
+  - name: probe.echo
+    description: >
+      Echoes a citation-bearing answer for the onboarding proof. R0, no side
+      effects, no tool calls.
+    risk: R0
+    input_schema:
+      type: object
+      additionalProperties: true
+      properties:
+        note: { type: string }
+    output_schema:
+      type: object
+      required: [text, citations, confidence]
+      additionalProperties: false
+      properties:
+        text: { type: string }
+        citations: { type: array }
+        confidence: { type: number }
+        abstained: { type: boolean }
+    examples:
+      - input: {}
+        description: echo a cited answer
+      - input: { note: a }
+        description: echo a cited answer
+      - input: { note: b }
+        description: echo a cited answer
+models:
+  allowed: [default-tier]
+data_classification: internal
+sla:
+  p95_latency_s: 30
+  quality_slo: 0.9
