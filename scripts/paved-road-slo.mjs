@@ -53,8 +53,16 @@ async function mintToken(tokenUrl, clientId, clientSecret, audience, scope) {
       ...(scope === undefined ? {} : { scope }),
     }),
   });
-  assert.equal(res.status, 200, `token mint for ${clientId} failed: ${await res.text()}`);
-  return (await res.json()).access_token;
+  const body = await res.text();
+  assert.equal(res.status, 200, `token mint for ${clientId} failed (http ${res.status}): ${body}`);
+  return JSON.parse(body).access_token;
+}
+
+/** Reads a response body ONCE, asserts an accepted status, and parses JSON. */
+async function expectJson(res, okStatuses, label) {
+  const body = await res.text();
+  assert.ok(okStatuses.includes(res.status), `${label} failed (http ${res.status}): ${body}`);
+  return body === '' ? {} : JSON.parse(body);
 }
 
 /** The set of git working-tree changes under platform-owned paths. */
@@ -126,7 +134,10 @@ export async function runPavedRoadSlo(options = {}) {
   // The registrar holds registry:write (agent registration + baseline); the
   // deployer holds registry:deploy (the registered→shadow edge).
   const registrar = options.registrar ?? { id: 'svc-ci', secret: 'ci-dev-secret' };
-  const deployer = options.deployer ?? { id: 'svc-orchestrator', secret: 'orchestrator-dev-secret' };
+  const deployer = options.deployer ?? {
+    id: 'svc-orchestrator',
+    secret: 'orchestrator-dev-secret',
+  };
 
   const agentId = `paved-probe-${randomBytes(4).toString('hex')}`;
   const version = '0.1.0';
@@ -151,8 +162,7 @@ export async function runPavedRoadSlo(options = {}) {
     },
     body: JSON.stringify({ principal: `agent:${agentId}@${version}` }),
   });
-  assert.equal(provisionRes.status, 201, `provision failed: ${await provisionRes.text()}`);
-  const client = await provisionRes.json();
+  const client = await expectJson(provisionRes, [201], 'provision');
   assert.deepEqual(client.roles, ['agent'], 'provisioned client must be agent-role');
   assert.deepEqual(client.scopes, [], 'provisioned client must carry zero scopes');
   assert.ok(client.client_secret, 'provisioned client must return its secret once');
@@ -171,10 +181,7 @@ export async function runPavedRoadSlo(options = {}) {
     headers: { 'content-type': 'application/json', authorization: `Bearer ${writeToken}` },
     body: JSON.stringify({ manifest, version }),
   });
-  assert.ok(
-    [200, 201].includes(registerRes.status),
-    `register failed: ${await registerRes.text()}`,
-  );
+  await expectJson(registerRes, [200, 201], 'register');
   log(`registered ${agentId}@${version}`);
 
   // 4. Record a baseline (shadow entry requires one).
@@ -183,7 +190,10 @@ export async function runPavedRoadSlo(options = {}) {
     agent_id: agentId,
     agent_version: version,
     metrics: { pass_rate: 1, citation_precision: 1, abstention_accuracy: 1 },
-    suite: { digest: `sha256:${createHash('sha256').update(agentId).digest('hex')}`, case_count: 1 },
+    suite: {
+      digest: `sha256:${createHash('sha256').update(agentId).digest('hex')}`,
+      case_count: 1,
+    },
     harness: 'acp-paved-road-slo@0.1.0',
     recorded_at: new Date().toISOString(),
   };
@@ -192,17 +202,22 @@ export async function runPavedRoadSlo(options = {}) {
     headers: { 'content-type': 'application/json', authorization: `Bearer ${writeToken}` },
     body: JSON.stringify(baseline),
   });
-  assert.equal(baselineRes.status, 200, `baseline failed: ${await baselineRes.text()}`);
+  await expectJson(baselineRes, [200], 'baseline');
 
   // 5. Transition registered → shadow (a registry:deploy edge).
-  const deployToken = await mintToken(tokenUrl, deployer.id, deployer.secret, 'acp:registry', 'registry:deploy');
+  const deployToken = await mintToken(
+    tokenUrl,
+    deployer.id,
+    deployer.secret,
+    'acp:registry',
+    'registry:deploy',
+  );
   const shadowRes = await fetch(`${registryUrl}/v1/agents/${agentId}/versions/${version}/state`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', authorization: `Bearer ${deployToken}` },
     body: JSON.stringify({ state: 'shadow', reason: 'paved-road slo probe' }),
   });
-  assert.equal(shadowRes.status, 200, `shadow transition failed: ${await shadowRes.text()}`);
-  const shadowCard = await shadowRes.json();
+  const shadowCard = await expectJson(shadowRes, [200], 'shadow transition');
   assert.equal(shadowCard.lifecycle_state, 'shadow');
   log(`transitioned ${agentId}@${version} to shadow`);
 

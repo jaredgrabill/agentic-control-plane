@@ -927,6 +927,9 @@ importers:
       '@types/pg':
         specifier: ^8.11.10
         version: 8.20.0
+      jose:
+        specifier: ^6.0.11
+        version: 6.2.3
       nats:
         specifier: ^2.29.3
         version: 2.29.3
