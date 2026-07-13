@@ -16,7 +16,7 @@ import {
 } from '@acp/service-kit';
 import { buildToolGatewayApp } from './app.js';
 import { DevCredentialBroker } from './broker.js';
-import { loadToolServerConfig } from './config.js';
+import { loadToolServerCatalog, loadToolServerConfig } from './config.js';
 import { ToolGatewayCore } from './core.js';
 import { HttpPolicyClient } from './policy-client.js';
 import { TokenBucketLimiter } from './rate-limit.js';
@@ -25,6 +25,32 @@ import { UpstreamPool, type UpstreamBinding } from './upstream.js';
 const logger = createLogger('tool-gateway');
 const telemetry = initTelemetry('tool-gateway');
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
+
+/** Client-credentials mint for the gateway's own registry:read catalog reads. */
+async function mintRegistryReadToken(
+  tokenUrl: string,
+  clientId: string,
+  clientSecret: string,
+): Promise<string> {
+  const res = await fetch(`${tokenUrl}/v1/token`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'client_credentials',
+      client_id: clientId,
+      client_secret: clientSecret,
+      audience: 'acp:registry',
+      scope: 'registry:read',
+    }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `tool-gateway could not mint a registry:read token (http ${res.status}) — ` +
+        'enabling ACP_TOOL_CATALOG_URL requires granting svc-tool-gateway registry:read',
+    );
+  }
+  return ((await res.json()) as { access_token: string }).access_token;
+}
 
 const nc = await connectBus({
   name: 'tool-gateway',
@@ -40,13 +66,23 @@ const verifier = new JwtVerifier(
   env('ACP_TOKEN_ISSUER', 'https://token.acp.local'),
 );
 
-const config = loadToolServerConfig(
-  env('ACP_TOOL_SERVERS', join(repoRoot, 'deploy', 'dev', 'tool-servers.json')),
-);
-
 const tokenUrl = env('ACP_TOKEN_URL', 'http://localhost:7101');
 const clientId = env('ACP_TOOL_GATEWAY_CLIENT_ID', 'svc-tool-gateway');
 const clientSecret = env('ACP_TOOL_GATEWAY_CLIENT_SECRET', 'tool-gateway-dev-secret');
+
+// Item 3 (SF3): the tool-server config source. ACP_TOOL_CATALOG_URL is OFF by
+// default, so the gateway keeps loading the static file and dev/CI behavior is
+// unchanged. When set, the config comes from the registry catalog instead — the
+// gateway mints a registry:read token for itself to read it (enabling the flag
+// therefore requires granting svc-tool-gateway registry:read).
+const catalogUrl = process.env.ACP_TOOL_CATALOG_URL;
+const config =
+  catalogUrl !== undefined && catalogUrl !== ''
+    ? await loadToolServerCatalog({
+        registryUrl: catalogUrl,
+        token: await mintRegistryReadToken(tokenUrl, clientId, clientSecret),
+      })
+    : loadToolServerConfig(env('ACP_TOOL_SERVERS', join(repoRoot, 'deploy', 'dev', 'tool-servers.json')));
 
 const policy = new HttpPolicyClient({
   policyUrl: env('ACP_POLICY_URL', 'http://localhost:7103'),

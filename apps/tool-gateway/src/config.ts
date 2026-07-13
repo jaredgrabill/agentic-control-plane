@@ -8,6 +8,7 @@
  */
 
 import { readFileSync } from 'node:fs';
+import type { ToolServerRecord } from '@acp/protocol';
 
 export interface RateLimitSpec {
   per_minute: number;
@@ -230,4 +231,97 @@ export function expand(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const DEFAULT_BROKER_HEADER = 'x-acp-broker-credential';
+
+/**
+ * Maps one registry catalog record (server.json) back to the in-memory
+ * ToolServerEntry the gateway core already understands (core.ts untouched). A
+ * `credential-ref` auth becomes a static broker header whose value is the
+ * env/vault secret expanded from the credential_ref KEY NAME — the secret never
+ * leaves the environment and is never stored in the catalog.
+ */
+export function recordToEntry(
+  record: ToolServerRecord,
+  env: Record<string, string | undefined> = process.env,
+): ToolServerEntry {
+  const source = `tool-server catalog record ${record.id}`;
+  const tools: Record<string, ToolSpec> = {};
+  for (const tool of record.tools) {
+    if (!isRiskClass(tool.risk)) {
+      throw new Error(`${source}: tool ${tool.name} has invalid risk ${JSON.stringify(tool.risk)}`);
+    }
+    tools[tool.name] = { scope: tool.scope, risk: tool.risk };
+  }
+
+  let auth: AuthMode;
+  if (record.auth.mode === 'token-exchange') {
+    if (record.auth.audience === undefined || record.auth.scope === undefined) {
+      throw new Error(`${source}: token-exchange auth needs audience + scope`);
+    }
+    auth = { mode: 'token-exchange', audience: record.auth.audience, scope: record.auth.scope };
+  } else {
+    if (record.auth.credential_ref === undefined) {
+      throw new Error(`${source}: credential-ref auth needs a credential_ref key name`);
+    }
+    const header = record.auth.header ?? DEFAULT_BROKER_HEADER;
+    auth = {
+      mode: 'static-headers',
+      headers: { [header]: expand(`\${${record.auth.credential_ref}}`, env, source) },
+    };
+  }
+
+  return {
+    id: record.id,
+    url: expand(record.url, env, source),
+    auth,
+    tools,
+    rate_limit: record.rate_limit,
+    ...(record.tool_rate_limits === undefined ? {} : { tool_rate_limits: record.tool_rate_limits }),
+    timeout_ms: record.timeout_ms ?? DEFAULT_TIMEOUT_MS,
+  };
+}
+
+/**
+ * Loads the tool-server config from the registry catalog (GET /v1/tool-servers)
+ * instead of the static file. Opt-in via ACP_TOOL_CATALOG_URL — the default
+ * path keeps loading the static file, so dev/CI behavior is unchanged until the
+ * flag is flipped. The bearer token must carry registry:read.
+ */
+export async function loadToolServerCatalog(options: {
+  registryUrl: string;
+  token: string;
+  env?: Record<string, string | undefined>;
+  fetchImpl?: typeof fetch;
+}): Promise<ToolServerConfig> {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const res = await fetchImpl(`${options.registryUrl.replace(/\/$/, '')}/v1/tool-servers`, {
+    headers: { authorization: `Bearer ${options.token}` },
+  });
+  if (!res.ok) {
+    throw new Error(
+      `tool-server catalog load failed: registry answered http ${res.status} — ` +
+        'the gateway credential must carry registry:read to read the catalog',
+    );
+  }
+  const body = (await res.json()) as { tool_servers?: unknown };
+  if (!Array.isArray(body.tool_servers)) {
+    throw new Error('tool-server catalog load failed: response has no tool_servers array');
+  }
+  const env = options.env ?? process.env;
+  const servers = new Map<string, ToolServerEntry>();
+  for (const record of body.tool_servers as ToolServerRecord[]) {
+    // A deprecated-and-sunset server drops out of the live config; a deprecated
+    // but not-yet-sunset one still serves (deprecation is a warning, not a cut).
+    const entry = recordToEntry(record, env);
+    if (servers.has(entry.id)) {
+      throw new Error(`tool-server catalog: duplicate tool server id ${entry.id}`);
+    }
+    servers.set(entry.id, entry);
+  }
+  if (servers.size === 0) {
+    throw new Error('tool-server catalog is empty — refusing to start the gateway with no upstreams');
+  }
+  return { servers };
 }
