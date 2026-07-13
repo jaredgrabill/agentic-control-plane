@@ -149,6 +149,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # Full history so the schema-diff can reach the base branch's baseline
+          # (PRs) or the previous commit's baseline (pushes to main).
+          fetch-depth: 0
       - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -157,14 +161,37 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # The API report is extracted from the built .d.ts rollups.
       - run: pnpm --filter @acp/agent-sdk... --filter @acp/tool-client... --filter @acp/llm-client... build
-      # 1. The frozen wire contract may not regress. A breaking change to the
-      # JSON schemas or subject grammar fails unless the PR carries the
-      # `breaking` label (a deliberate major bump), which also requires the
-      # committed baseline to be regenerated.
+      # 1. The frozen wire contract may not regress. The diff runs the LIVE
+      # schema surface against the MERGE-BASE baseline — the base branch's
+      # committed schema-baseline.json (PRs) or the previous commit's (pushes) —
+      # NOT the PR's own committed baseline. Diffing against the PR's baseline is
+      # self-referential: the no-drift test forces baseline == current, so a PR
+      # that regenerates the baseline for its schema change would show zero
+      # findings and slip past the label gate. Against the merge-base baseline a
+      # breaking change surfaces and fails unless the PR carries the `breaking`
+      # label (a deliberate major bump). A no-change PR is identical to the base
+      # baseline → zero findings → passes.
       - name: protocol schema-diff (breaking changes need the 'breaking' label)
         env:
           ACP_ALLOW_BREAKING: ${{ contains(github.event.pull_request.labels.*.name, 'breaking') && '1' || '0' }}
-        run: node scripts/schema-diff.mjs
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -e
+          baseline_path='packages/protocol/schema-baseline.json'
+          out="$RUNNER_TEMP/merge-base-baseline.json"
+          if [ -n "$BASE_REF" ]; then
+            # Pull request: compare against the base branch's frozen contract.
+            git fetch --no-tags --depth=1 origin "$BASE_REF"
+            git show "origin/$BASE_REF:$baseline_path" > "$out"
+            node scripts/schema-diff.mjs --baseline "$out"
+          elif git cat-file -e "HEAD~1:$baseline_path" 2>/dev/null; then
+            # Push (e.g. to main): compare against the previous commit's baseline.
+            git show "HEAD~1:$baseline_path" > "$out"
+            node scripts/schema-diff.mjs --baseline "$out"
+          else
+            # No parent baseline to diff against (initial commit); nothing to gate.
+            echo 'schema-diff: no previous baseline to compare against; skipping.'
+          fi
       # 2. Self-test: the gate itself is gated. A deliberately-breaking fixture
       # MUST be rejected with exactly exit 1 AND the expected violation on
       # stderr — exit 0 means the gate accepted a regression, exit 2 means it
