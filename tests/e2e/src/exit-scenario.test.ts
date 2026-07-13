@@ -1,10 +1,15 @@
 /**
- * The Phase 1 exit scenario (ROADMAP.md), verified end to end — nothing
- * mocked in the control path:
+ * DoD acceptance scenario 5 — the Phase 1 exit scenario (ROADMAP.md), verified
+ * end to end — nothing mocked in the control path:
  *
  *   "What does our policy say about change freezes?" → cited answer;
  *   trace shows gateway → workflow → agent → retrieval; audit shows the
  *   full delegation chain; suspending the agent stops traffic in seconds.
+ *
+ * This is scenario 5 of the five DoD acceptance scenarios. It stays PR-gated
+ * (and nightly) as the single-agent composite: one task yields BOTH a cited
+ * answer with a full delegation chain AND a single trace across the whole path,
+ * and the kill switch stops traffic in seconds.
  *
  * Prerequisites: `make dev` (substrate), `pnpm build`, `uv sync` (in
  * python/). The suite boots the platform itself via scripts/run-platform.mjs.
