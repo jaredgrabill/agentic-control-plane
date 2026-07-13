@@ -1,5 +1,10 @@
 # Agentic Control Plane
 
+<!-- OpenSSF Best Practices badge: after registering the project at
+https://bestpractices.dev and completing the questionnaire, paste the badge
+here (see docs/notes/openssf-badge.md):
+[![OpenSSF Best Practices](https://bestpractices.dev/projects/<ID>/badge)](https://bestpractices.dev/projects/<ID>) -->
+
 **An open-source control plane for composable, governed AI agents.**
 
 Specialized agents — knowledge & policy, change/ITSM, network security,
@@ -14,14 +19,19 @@ six tools and an afternoon:
 > agent) — with the full trail of every agent consulted, every tool called,
 > and every policy check applied.
 
-**Status: 🚧 walking skeleton (roadmap Phase 1).** The design docs below are
-implemented as a running system: token service, gateway, registry, Cedar
-policy engine, Temporal orchestrator, audit trail, knowledge service, the
-Python agent SDK, and the first agent — one R0 agent answering one question
-end-to-end with every governance boundary real. Feedback via issues and
-discussions is very welcome.
+**Status: approaching 1.0.** The design below runs as a real system: token
+service, gateway, registry, Cedar policy engine, Temporal orchestrator, audit
+trail with a verifiable hash chain, knowledge/RAG service, tool and LLM
+gateways, an evaluation service, and TypeScript + Python agent SDKs — with
+multiple reference agents (knowledge, cloud, code, change/ITSM, NetSec),
+multi-tenant isolation, per-tenant budgets, signed A2A card export, and tiered
+kill switches. The public protocol and SDK surface is frozen under
+[SemVer](docs/standards/api-versioning.md). Feedback via issues and discussions
+is very welcome.
 
-## Quickstart (the Phase 1 exit scenario)
+## Quickstart (one command per step, from a clean checkout)
+
+Prerequisites: Node 22+, pnpm 11, [uv](https://docs.astral.sh/uv/), Docker, make.
 
 ```bash
 make dev        # substrate: NATS, Temporal, Postgres+pgvector, OTel, Jaeger
@@ -29,6 +39,10 @@ pnpm install && pnpm build
 cd python && uv sync && cd ..
 make e2e        # register agent → ingest corpus → cited answer → audit → kill switch
 ```
+
+`make dev` + `pnpm build` + `uv sync` + `make e2e` is the full reproducible
+build-and-test from scratch. For a cluster deployment, see the
+[Helm deployment runbook](docs/runbooks/deploy-helm.md).
 
 Or run it interactively: `make platform`, then submit
 *"What does our policy say about change freezes?"* through the gateway with
@@ -89,17 +103,25 @@ Start with the **[Architecture Overview](docs/architecture/overview.md)**.
   [coding standards](docs/standards/coding-standards.md) ·
   [testing](docs/standards/testing.md) ·
   [review practices](docs/standards/review-practices.md) ·
-  [the paved road](docs/standards/paved-road.md)
-- **Decisions** — [ADR index](docs/adr/README.md)
+  [the paved road](docs/standards/paved-road.md) ·
+  [API versioning & stability](docs/standards/api-versioning.md) ·
+  [SLO targets](docs/standards/slo-targets.md)
+- **Operations** — [runbooks](docs/runbooks/README.md)
+  (upgrade, backup/restore, DR, kill switches) ·
+  [Helm deployment](docs/runbooks/deploy-helm.md) ·
+  [security self-assessment](docs/architecture/security-self-assessment.md)
+- **Decisions** — [ADR index](docs/adr/README.md) ·
+  [RFC process](docs/rfc/README.md)
 - **Research** — [research briefs](docs/research/README.md) (July 2026 state of the art)
 - **Plan** — [ROADMAP.md](ROADMAP.md)
 
 ## Contributing
 
-Design-phase contributions (architecture review, ADR discussion, roadmap
-feedback) are open now — see [CONTRIBUTING.md](CONTRIBUTING.md). Project
-governance is described in [GOVERNANCE.md](GOVERNANCE.md); security reports
-go through [SECURITY.md](SECURITY.md).
+Contributions are open — build, test, and quality-gate instructions are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Larger changes go through the
+[RFC process](docs/rfc/README.md). Project governance is described in
+[GOVERNANCE.md](GOVERNANCE.md); security reports go through
+[SECURITY.md](SECURITY.md).
 
 ## License
 

@@ -1,0 +1,23 @@
+{{- /*
+Non-secret runtime seed documents, mounted read-only at /etc/acp on every pod.
+The ACP_* file-path env in _helpers.tpl point here. token-clients.json is NOT
+here — it carries client secrets and rides the token-clients Secret instead.
+Override each document per environment via .Values.runtimeConfig.
+*/ -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "acp.runtimeConfigMap" . }}
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+data:
+  online-eval.json: |
+    {{- .Values.runtimeConfig.onlineEval | toPrettyJson | nindent 4 }}
+  tool-servers.json: |
+    {{- .Values.runtimeConfig.toolServers | toPrettyJson | nindent 4 }}
+  model-classes.json: |
+    {{- .Values.runtimeConfig.modelClasses | toPrettyJson | nindent 4 }}
+  tenant-budgets.json: |
+    {{- .Values.runtimeConfig.tenantBudgets | toPrettyJson | nindent 4 }}
+  a2a-exposure.json: |
+    {{- .Values.runtimeConfig.a2aExposure | toPrettyJson | nindent 4 }}

@@ -20,6 +20,9 @@ audit — is a platform feature, documented in
 
 - Default: **lazy consensus**. Proposals (issues, ADR PRs) that receive no
   objection from a maintainer within 7 days are accepted.
+- Substantive, cross-cutting, or trust-boundary changes go through the **RFC
+  process** ([docs/rfc/](docs/rfc/README.md)) before implementation; an
+  accepted RFC is distilled into an ADR.
 - Architecture decisions: recorded as ADRs in [docs/adr/](docs/adr/); require
   two maintainer approvals.
 - Escalation: if consensus fails, the steering group decides by majority vote.
@@ -32,10 +35,13 @@ consensus of the maintainer group.
 
 ## Releases
 
-- Semantic versioning across all published packages.
+- Semantic versioning across all published packages, per
+  [docs/standards/api-versioning.md](docs/standards/api-versioning.md), enforced
+  by the `api-freeze` CI gate.
 - Conventional Commits drive automated changelogs and release PRs.
 - Pre-1.0: breaking changes allowed in minor versions, always flagged in the
-  changelog with migration notes.
+  changelog with migration notes. At 1.0 the frozen public surface is governed
+  by the SemVer policy above.
 
 ## Changes to Governance
 

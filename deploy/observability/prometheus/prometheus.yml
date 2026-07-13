@@ -1,0 +1,26 @@
+# Prometheus scrape config for the ACP SLO dashboards. Scrapes the OTel
+# collector's Prometheus exporter (deploy/compose/otel/collector-config.yaml,
+# exporters.prometheus on :8889). Loaded by the observability overlay.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules.yml
+
+scrape_configs:
+  # The collector re-exports all OTLP metrics (gen_ai.* / acp.*) here.
+  - job_name: otel-collector
+    static_configs:
+      - targets: ['otel-collector:8889']
+    metric_relabel_configs:
+      # OTLP metric names arrive dotted; the Prometheus exporter sanitizes
+      # dots to underscores (e.g. gen_ai.client.operation.duration →
+      # gen_ai_client_operation_duration). The rules use the sanitized names.
+      []
+
+  # The collector's own health/pipeline metrics (optional, useful for
+  # debugging dropped spans/metrics).
+  - job_name: otel-collector-internal
+    static_configs:
+      - targets: ['otel-collector:8888']

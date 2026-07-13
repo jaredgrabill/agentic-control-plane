@@ -144,6 +144,56 @@ jobs:
             exit 1
           fi
 
+  api-freeze:
+    name: protocol + sdk api freeze (semver gate)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda # v4.1.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The API report is extracted from the built .d.ts rollups.
+      - run: pnpm --filter @acp/agent-sdk... --filter @acp/tool-client... --filter @acp/llm-client... build
+      # 1. The frozen wire contract may not regress. A breaking change to the
+      # JSON schemas or subject grammar fails unless the PR carries the
+      # `breaking` label (a deliberate major bump), which also requires the
+      # committed baseline to be regenerated.
+      - name: protocol schema-diff (breaking changes need the 'breaking' label)
+        env:
+          ACP_ALLOW_BREAKING: ${{ contains(github.event.pull_request.labels.*.name, 'breaking') && '1' || '0' }}
+        run: node scripts/schema-diff.mjs
+      # 2. Self-test: the gate itself is gated. A deliberately-breaking fixture
+      # MUST be rejected with exactly exit 1 AND the expected violation on
+      # stderr — exit 0 means the gate accepted a regression, exit 2 means it
+      # crashed without ever gating. Mirrors the evals-job self-test.
+      - name: the gate rejects a breaking schema change
+        run: |
+          set +e
+          output="$(node scripts/schema-diff.mjs \
+            --baseline packages/protocol/tests/fixtures/schema-diff/baseline.json \
+            --current packages/protocol/tests/fixtures/schema-diff/breaking.json 2>&1)"
+          status=$?
+          set -e
+          printf '%s\n' "$output"
+          if [ "$status" -ne 1 ]; then
+            echo "::error::expected schema-diff to reject the breaking fixture with exit 1, got exit $status"
+            exit 1
+          fi
+          if ! printf '%s\n' "$output" | grep -F 'enum value removed' >/dev/null; then
+            echo '::error::schema-diff exited 1 without reporting the expected enum-removal violation'
+            exit 1
+          fi
+      # 3. The committed SDK API reports must match the built export surface.
+      - name: sdk api reports match the built surface
+        run: |
+          node scripts/api-report.mjs --check || {
+            echo '::error::SDK public API changed without an updated report. Run `pnpm api:report` and commit the etc/*.api.md changes in the same PR.'
+            exit 1
+          }
+
   commitlint:
     runs-on: ubuntu-latest
     steps:
@@ -170,6 +220,35 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
       - run: uvx --with mkdocs-material mkdocs build --strict
+
+  helm-lint:
+    name: helm chart lints and renders valid kubernetes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Self-contained install (pinned versions) so the gate needs no third-party
+      # action. The chart declares NO active subchart dependencies, so lint and
+      # template render fully offline — no `helm dependency update`, no cluster.
+      - name: install helm + kubeconform
+        run: |
+          curl -fsSL https://get.helm.sh/helm-v3.16.4-linux-amd64.tar.gz | tar -xz
+          sudo mv linux-amd64/helm /usr/local/bin/helm
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz | tar -xz
+          sudo mv kubeconform /usr/local/bin/kubeconform
+          helm version --short && kubeconform -v
+      - name: helm lint (default + dev values)
+        run: |
+          helm lint deploy/helm/acp
+          helm lint deploy/helm/acp --values deploy/helm/acp/values-dev.yaml
+      # Render both value sets and validate every manifest against the Kubernetes
+      # API schemas. -ignore-missing-schemas tolerates any CRDs (e.g. an
+      # ExternalSecret) while still strictly validating core resources.
+      - name: helm template | kubeconform
+        run: |
+          helm template acp deploy/helm/acp \
+            | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
+          helm template acp deploy/helm/acp --values deploy/helm/acp/values-dev.yaml \
+            | kubeconform -strict -summary -ignore-missing-schemas -kubernetes-version 1.30.0
 
   security:
     runs-on: ubuntu-latest

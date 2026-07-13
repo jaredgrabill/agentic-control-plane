@@ -1,0 +1,67 @@
+{{- /*
+The orchestrator is a Temporal worker: it polls task queues and has no HTTP
+listener, so there is no Service and no /healthz probe. Liveness is delegated
+to the kubelet's process-exit restart (the worker crashes loudly on lost
+Temporal/NATS connectivity). Readiness is meaningless with no inbound traffic.
+*/ -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "acp.fullname" . }}-orchestrator
+  labels:
+    {{- include "acp.labels" . | nindent 4 }}
+    app.kubernetes.io/component: orchestrator
+spec:
+  replicas: {{ .Values.orchestrator.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "acp.selectorLabels" (dict "root" . "service" "orchestrator") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "acp.labels" . | nindent 8 }}
+        app.kubernetes.io/component: orchestrator
+    spec:
+      {{- with .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: orchestrator
+          image: {{ include "acp.image" . | quote }}
+          imagePullPolicy: {{ .Values.global.image.pullPolicy }}
+          command: ["node"]
+          args:
+            {{- toYaml .Values.orchestrator.args | nindent 12 }}
+          env:
+            - name: ACP_SERVICE_NAME
+              value: "orchestrator"
+            {{- include "acp.sharedEnv" . | nindent 12 }}
+            {{- with .Values.orchestrator.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- range .Values.orchestrator.secretEnv }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "acp.credentialsSecret" $ }}
+                  key: {{ .key | quote }}
+            {{- end }}
+          resources:
+            {{- toYaml (.Values.orchestrator.resources | default .Values.resources) | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: runtime-config
+              mountPath: /etc/acp
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: runtime-config
+          configMap:
+            name: {{ include "acp.runtimeConfigMap" . }}
+        - name: tmp
+          emptyDir: {}

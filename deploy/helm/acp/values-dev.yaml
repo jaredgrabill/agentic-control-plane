@@ -1,0 +1,137 @@
+# Dev overlay: mirrors the compose/dev defaults (deploy/compose,
+# scripts/run-platform.mjs, deploy/dev/*.json) so
+#   helm template acp deploy/helm/acp -f deploy/helm/acp/values-dev.yaml
+# renders a dev-equivalent stack. Dev secrets are created in-cluster
+# (devSecrets.create=true) — for local/CI clusters only, never production.
+
+global:
+  image:
+    tag: "dev"
+    pullPolicy: IfNotPresent
+
+config:
+  tokenIssuer: "https://token.acp.local"
+  natsUrl: "nats://nats:4222"
+  temporalAddress: "temporal:7233"
+  otel:
+    endpoint: "http://otel-collector:4318"
+    scheduleDelayMs: "500"
+  busTenantAccounts:
+    acme: TENANT_ACME
+    globex: TENANT_GLOBEX
+  database:
+    secretKey: "database-url"
+
+# Single replicas for a dev cluster.
+httpServices:
+  token:
+    replicas: 1
+    args: ["apps/token/dist/main.js"]
+    port: 7101
+    secretEnv:
+      - name: ACP_NATS_AUTH_ISSUER_SEED
+        key: nats-auth-issuer-seed
+      - name: ACP_NATS_AUTH_XKEY_SEED
+        key: nats-auth-xkey-seed
+  registry:
+    replicas: 1
+    port: 7102
+    args: ["apps/registry/dist/main.js"]
+  policy:
+    replicas: 1
+    port: 7103
+    args: ["apps/policy/dist/main.js"]
+  audit:
+    replicas: 1
+    port: 7104
+    args: ["apps/audit/dist/main.js"]
+  knowledge:
+    replicas: 1
+    port: 7105
+    args: ["apps/knowledge/dist/main.js"]
+  tool-gateway:
+    replicas: 1
+    port: 7106
+    args: ["apps/tool-gateway/dist/main.js"]
+    env:
+      - name: ACP_TOOL_GATEWAY_CLIENT_ID
+        value: "svc-tool-gateway"
+      - name: ACP_NATS_SERVICE_USER
+        value: "tool-gateway"
+    secretEnv:
+      - name: ACP_TOOL_GATEWAY_CLIENT_SECRET
+        key: tool-gateway-client-secret
+      - name: ACP_NATS_SERVICE_PASSWORD
+        key: tool-gateway-nats-password
+  llm-gateway:
+    replicas: 1
+    port: 7107
+    args: ["apps/llm-gateway/dist/main.js"]
+    env:
+      - name: ACP_LLM_GATEWAY_CLIENT_ID
+        value: "svc-llm-gateway"
+      - name: ACP_NATS_SERVICE_USER
+        value: "llm-gateway"
+    secretEnv:
+      - name: ACP_LLM_GATEWAY_CLIENT_SECRET
+        key: llm-gateway-client-secret
+      - name: ACP_NATS_SERVICE_PASSWORD
+        key: llm-gateway-nats-password
+  gateway:
+    replicas: 1
+    port: 7100
+    args: ["apps/gateway/dist/main.js"]
+    env:
+      - name: ACP_GATEWAY_CLIENT_ID
+        value: "svc-gateway"
+    secretEnv:
+      - name: ACP_GATEWAY_CLIENT_SECRET
+        key: gateway-client-secret
+  evaluation:
+    replicas: 1
+    port: 7108
+    args: ["apps/evaluation/dist/main.js", "serve"]
+    env:
+      - name: ACP_EVALUATION_CLIENT_ID
+        value: "svc-evaluation"
+      - name: ACP_NATS_SERVICE_USER
+        value: "evaluation"
+    secretEnv:
+      - name: ACP_EVALUATION_CLIENT_SECRET
+        key: evaluation-client-secret
+      - name: ACP_NATS_SERVICE_PASSWORD
+        key: evaluation-nats-password
+
+orchestrator:
+  replicas: 1
+
+# In-cluster dev Secrets. The seed values mirror scripts/run-platform.mjs and
+# the compose defaults — DEV ONLY. token-clients defaults to an empty array;
+# pass the real table with:
+#   --set-file devSecrets.tokenClients=deploy/dev/token-clients.json
+devSecrets:
+  create: true
+  databaseUrl: "postgres://acp:acp-dev-password@postgres:5432/acp"
+  tokenClients: "[]"
+  credentials:
+    nats-auth-issuer-seed: "REPLACE_WITH_DEV_ISSUER_SEED"
+    nats-auth-xkey-seed: "REPLACE_WITH_DEV_XKEY_SEED"
+    tool-gateway-client-secret: "tool-gateway-dev-secret"
+    tool-gateway-nats-password: "tool-gateway-dev-password"
+    llm-gateway-client-secret: "llm-gateway-dev-secret"
+    llm-gateway-nats-password: "llm-gateway-dev-password"
+    gateway-client-secret: "gateway-dev-secret"
+    evaluation-client-secret: "evaluation-dev-secret"
+    evaluation-nats-password: "evaluation-dev-password"
+    orchestrator-client-secret: "orchestrator-dev-secret"
+    prober-client-secret: "prober-dev-secret"
+
+# Dev seed documents. For a full dev deploy also pass the JSON files with
+# --set-file (they are large and environment-specific):
+#   --set-file runtimeConfig.toolServers=deploy/dev/tool-servers.json  (etc.)
+runtimeConfig:
+  onlineEval: {}
+  toolServers: []
+  modelClasses: {}
+  tenantBudgets: {}
+  a2aExposure: {}

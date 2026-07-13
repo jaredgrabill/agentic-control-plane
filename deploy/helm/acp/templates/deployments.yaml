@@ -1,0 +1,104 @@
+{{- /*
+One Deployment + one Service per HTTP control-plane service. All nine share
+the same monorepo image and shared env; `args` selects the entrypoint and
+`port` is where /healthz answers.
+*/ -}}
+{{- $root := . -}}
+{{- range $name, $svc := .Values.httpServices }}
+{{- $port := $svc.port | int }}
+{{- $resources := $svc.resources | default $root.Values.resources }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "acp.fullname" $root }}-{{ $name }}
+  labels:
+    {{- include "acp.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  replicas: {{ $svc.replicas | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "acp.selectorLabels" (dict "root" $root "service" $name) | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "acp.labels" $root | nindent 8 }}
+        app.kubernetes.io/component: {{ $name }}
+    spec:
+      {{- with $root.Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $root.Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ $name }}
+          image: {{ include "acp.image" $root | quote }}
+          imagePullPolicy: {{ $root.Values.global.image.pullPolicy }}
+          command: ["node"]
+          args:
+            {{- toYaml $svc.args | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: {{ $port }}
+          env:
+            - name: ACP_SERVICE_NAME
+              value: {{ $name | quote }}
+            - name: PORT
+              value: {{ $port | quote }}
+            {{- include "acp.sharedEnv" $root | nindent 12 }}
+            {{- with $svc.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+            {{- range $svc.secretEnv }}
+            - name: {{ .name }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "acp.credentialsSecret" $root }}
+                  key: {{ .key | quote }}
+            {{- end }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $port }}
+            {{- toYaml $root.Values.probes.readiness | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: {{ $port }}
+            {{- toYaml $root.Values.probes.liveness | nindent 12 }}
+          resources:
+            {{- toYaml $resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $root.Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: runtime-config
+              mountPath: /etc/acp
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: runtime-config
+          configMap:
+            name: {{ include "acp.runtimeConfigMap" $root }}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "acp.fullname" $root }}-{{ $name }}
+  labels:
+    {{- include "acp.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "acp.selectorLabels" (dict "root" $root "service" $name) | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ $port }}
+      targetPort: http
+      protocol: TCP
+{{- end }}
