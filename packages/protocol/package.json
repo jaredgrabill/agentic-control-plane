@@ -1,6 +1,6 @@
 {
   "name": "@acp/protocol",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Single source of truth for cross-language contracts: JSON Schemas plus generated TypeScript bindings, subject vocabulary, and runtime validators",
   "license": "MIT",
   "type": "module",

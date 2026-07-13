@@ -1,6 +1,6 @@
 {
   "name": "@acp/agent-sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "ACP agent SDK for TypeScript: manifest-bound agents, capability handlers, governed model/retrieval access, telemetry, eval harness",
   "license": "MIT",
   "type": "module",
