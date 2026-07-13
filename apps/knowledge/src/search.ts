@@ -12,6 +12,8 @@ import {
 import type { Embedder } from './embedding.js';
 import {
   CACHE_SCHEMA_VERSION,
+  DEFAULT_K,
+  MAX_K,
   deriveCacheKey,
   validateEntry,
   type CachePutResult,
@@ -147,7 +149,7 @@ export class SearchService {
     }
 
     const classifications = allowedClassifications(scopes);
-    const k = Math.min(request.k ?? 8, 50);
+    const k = Math.min(request.k ?? DEFAULT_K, MAX_K);
     const embeddingModel = this.deps.embedder.model;
     const nowDate = this.deps.now?.() ?? new Date();
     const nowMs = nowDate.getTime();

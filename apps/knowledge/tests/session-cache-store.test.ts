@@ -11,15 +11,21 @@ import {
 
 const logger = createLogger('session-cache-store-test');
 
-/** In-memory KV fake matching the narrow SessionCacheKv surface. */
+/**
+ * In-memory KV fake matching the narrow SessionCacheKv surface. Models NATS
+ * delete tombstones: a deleted key is not absent — a subsequent get returns the
+ * tombstone entry (operation DEL, empty value), exactly like nats@2 kv.get.
+ */
 class FakeKv implements SessionCacheKv {
   readonly store = new Map<string, string>();
+  readonly tombstones = new Set<string>();
   putCalls = 0;
   failGet = false;
   failPut = false;
 
-  get(key: string): Promise<{ string(): string } | null> {
+  get(key: string): Promise<{ string(): string; operation?: string } | null> {
     if (this.failGet) return Promise.reject(new Error('kv down'));
+    if (this.tombstones.has(key)) return Promise.resolve({ string: () => '', operation: 'DEL' });
     const v = this.store.get(key);
     return Promise.resolve(v === undefined ? null : { string: () => v });
   }
@@ -27,10 +33,12 @@ class FakeKv implements SessionCacheKv {
     this.putCalls += 1;
     if (this.failPut) return Promise.reject(new Error('kv down'));
     this.store.set(key, value);
+    this.tombstones.delete(key);
     return Promise.resolve(1);
   }
   delete(key: string): Promise<void> {
     this.store.delete(key);
+    this.tombstones.add(key);
     return Promise.resolve();
   }
 }
@@ -103,6 +111,18 @@ describe('SessionContextCache store', () => {
     const kv = new FakeKv();
     kv.store.set('k', '{not json');
     const cache = new SessionContextCache(kv, 262_144, logger);
+    expect(await cache.get('k')).toBeUndefined();
+  });
+
+  it('a read after evict sees the tombstone as a miss (not a phantom KV failure)', async () => {
+    const kv = new FakeKv();
+    const cache = new SessionContextCache(kv, 262_144, logger);
+    await cache.put('k', entry());
+    await cache.evict('k');
+    // The key now holds a DEL tombstone (empty value); get() must treat it as a
+    // clean miss rather than JSON.parse('') throwing and logging a fake fault.
+    expect(kv.store.has('k')).toBe(false);
+    expect(kv.tombstones.has('k')).toBe(true);
     expect(await cache.get('k')).toBeUndefined();
   });
 
@@ -207,14 +227,14 @@ describe('SessionCacheControl.purgeTenant', () => {
 
   it('purges only the tenant entry keys, not generations or other tenants', async () => {
     const kv = new PurgeKv();
-    kv.store.add('acme.aaa.bbb');
-    kv.store.add('acme.ccc.ddd');
-    kv.store.add('globex.eee.fff');
+    kv.store.add('ctx.acme.aaa.bbb');
+    kv.store.add('ctx.acme.ccc.ddd');
+    kv.store.add('ctx.globex.eee.fff');
     kv.store.add('gen.acme.policy-docs');
     const control = new SessionCacheControl(kv);
     const count = await control.purgeTenant('acme');
     expect(count).toBe(2);
-    expect(kv.store.has('globex.eee.fff')).toBe(true);
+    expect(kv.store.has('ctx.globex.eee.fff')).toBe(true);
     expect(kv.store.has('gen.acme.policy-docs')).toBe(true);
   });
 

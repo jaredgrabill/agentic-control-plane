@@ -5,8 +5,9 @@
  *     the mock A2A remote (7305) with its OWN credential — the orchestrator PEP
  *     gates it exactly like a native agent. The mock rejects any bearer other
  *     than the adapter credential, so a completed task IS the proof the
- *     platform's delegated token never egressed. Suspending the agent
- *     (kill switch) denies the next dispatch.
+ *     platform's delegated token never egressed. (The PEP is unchanged for a
+ *     proxy agent, so the kill-switch deny-on-dispatch path is not re-proven
+ *     here — killswitch-audit.test.ts covers the switch tiers end to end.)
  *  2. A2A input-required maps to a needs_input step outcome — NEVER an approval
  *     grant (no approval.* audit for the task).
  *  3. Card export: the public /.well-known edge serves a signed card with NO

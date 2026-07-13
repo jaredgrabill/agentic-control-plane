@@ -314,4 +314,30 @@ describe('tool-server catalog loader (SF3)', () => {
       }),
     ).rejects.toThrow(/empty/);
   });
+
+  it('drops a sunset server but keeps a deprecated-not-yet-sunset (or sunset-less) one', async () => {
+    const past = new Date(Date.now() - 60_000).toISOString();
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+
+    // Past sunset → cut. Future sunset → still served. deprecated w/o sunset →
+    // advisory, still served.
+    const records: ToolServerRecord[] = [
+      { ...cloudRecord, id: 'gone', deprecation: { deprecated: true, sunset_at: past } },
+      { ...cloudRecord, id: 'soon', deprecation: { deprecated: true, sunset_at: future } },
+      { ...cloudRecord, id: 'warned', deprecation: { deprecated: true } },
+    ];
+    const fetchImpl = (() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ tool_servers: records }),
+      } as unknown as Response)) as unknown as typeof fetch;
+    const config = await loadToolServerCatalog({
+      registryUrl: 'http://registry',
+      token: 't',
+      env: CRED_ENV,
+      fetchImpl,
+    });
+    expect([...config.servers.keys()].sort()).toEqual(['soon', 'warned']);
+  });
 });

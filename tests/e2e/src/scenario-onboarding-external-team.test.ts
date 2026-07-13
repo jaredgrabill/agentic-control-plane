@@ -136,15 +136,33 @@ describe('onboarding — external team scaffolds an agent to active with zero pl
       'DoD onboarding: external agent to active',
     );
     probeWorker = await startProbeAgent();
-    // Let the registry announcement of the new active agent propagate before we
-    // route a task to it (the orchestrator resolves the route live per step).
-    await new Promise((r) => setTimeout(r, 5000));
 
-    const taskId = await submitCapability('probe.echo', { note: 'dod-proof' });
-    const result: TaskResult = await waitForResult(taskId, 90_000).catch(async (e: unknown) => {
-      const evs = await auditEvents(taskId).catch(() => []);
-      throw new Error(`${String(e)}\naudit types: [${evs.map((x) => x.event_type).join(', ')}]`);
-    });
+    // Poll instead of a single fixed sleep: the registry announcement of the
+    // newly-active agent propagates asynchronously and the orchestrator resolves
+    // the route live per step, so a task submitted too early fails to route. A
+    // fixed setTimeout is the classic nightly-flake shape (too short flakes; too
+    // long wastes minutes). Retry submit+await until the route resolves (the
+    // task completes) or a deadline, surfacing audit context on final failure.
+    const routeDeadline = Date.now() + 60_000;
+    let completed: TaskResult | undefined;
+    for (;;) {
+      const taskId = await submitCapability('probe.echo', { note: 'dod-proof' });
+      const r = await waitForResult(taskId, 30_000).catch(() => undefined);
+      if (r?.status === 'completed') {
+        completed = r;
+        break;
+      }
+      if (Date.now() > routeDeadline) {
+        const evs = await auditEvents(taskId).catch(() => []);
+        throw new Error(
+          `probe.echo route did not resolve within 60s (last status ${r?.status ?? 'timeout'})\n` +
+            `audit types: [${evs.map((x) => x.event_type).join(', ')}]`,
+        );
+      }
+      await new Promise((res) => setTimeout(res, 2000));
+    }
+
+    const result: TaskResult = completed;
     expect(result.status, JSON.stringify(result.error ?? {})).toBe('completed');
     expect(result.answer!.text).toContain('probe.echo online');
     expect(result.answer!.citations.length).toBeGreaterThan(0);

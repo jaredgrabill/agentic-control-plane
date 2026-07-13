@@ -11,7 +11,9 @@ import { Agent } from '@acp/agent-sdk';
 import { A2AClient, registerProxyCapabilities } from '@acp/a2a-proxy';
 import { noRetriever } from '@acp/tool-client';
 
-/** The name any remote-supplied provenance is tagged with (external:<name>). */
+/** Diagnostic label for the remote in step-outcome error messages. Remote
+ * provenance is not tagged — the adapter EMPTIES remote citations (see
+ * sanitizeRemoteOutput); nothing remote is ever presented as a first-party source. */
 export const REMOTE_NAME = 'external-echo-remote';
 
 export interface ProxyAgentOptions {

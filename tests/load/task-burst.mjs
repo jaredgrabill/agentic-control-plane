@@ -49,13 +49,20 @@ function parseArgs(argv) {
     const key = argv[i]?.replace(/^--/, '');
     const val = argv[i + 1];
     if (key === undefined || val === undefined) continue;
-    if (key in opts) opts[key] = Number(val);
+    if (!(key in opts)) continue;
+    const num = Number(val);
+    // A typo (`--rps five`) must fail loudly, not silently coerce to NaN and
+    // then drive zero traffic or an infinite loop downstream.
+    if (Number.isNaN(num)) {
+      process.stderr.write(`invalid numeric value for --${key}: ${JSON.stringify(val)}\n`);
+      process.exit(2);
+    }
+    opts[key] = num;
   }
   return { mode, opts };
 }
 
 async function mintToken() {
-  if (process.env.ACP_LOAD_TOKEN) return process.env.ACP_LOAD_TOKEN;
   const res = await fetch(`${TOKEN_URL}/v1/token`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -72,22 +79,66 @@ async function mintToken() {
   return (await res.json()).access_token;
 }
 
-async function submitTask(token) {
-  const res = await fetch(`${GATEWAY_URL}/v1/tasks`, {
+/**
+ * Caches an access token and re-mints on demand. Client-credentials tokens are
+ * TTL-capped (ADR-0004: 15 min), so a `soak --duration 3600` run WILL outlive
+ * its token; without re-minting every request 401s past the TTL and the harness
+ * reports a false SLO breach. A pre-supplied ACP_LOAD_TOKEN is static — used
+ * as-is and never re-minted (re-mint would hand back the same expired token).
+ */
+function makeTokenProvider() {
+  const staticToken = process.env.ACP_LOAD_TOKEN;
+  let cached = staticToken ?? null;
+  let inflight = null;
+  return {
+    async get() {
+      if (cached !== null) return cached;
+      if (inflight === null) {
+        inflight = mintToken().then((t) => {
+          cached = t;
+          inflight = null;
+          return t;
+        });
+      }
+      return inflight;
+    },
+    /** Drop the given token so the next get() re-mints (no-op for a static token). */
+    invalidate(token) {
+      if (staticToken === undefined && cached === token) cached = null;
+    },
+  };
+}
+
+/** fetch with the current token; on a 401 re-mints once and retries. */
+async function authedFetch(tokens, url, init = {}) {
+  let token = await tokens.get();
+  const withAuth = (t) => ({
+    ...init,
+    headers: { ...(init.headers ?? {}), authorization: `Bearer ${t}` },
+  });
+  let res = await fetch(url, withAuth(token));
+  if (res.status === 401) {
+    tokens.invalidate(token);
+    token = await tokens.get();
+    res = await fetch(url, withAuth(token));
+  }
+  return res;
+}
+
+async function submitTask(tokens) {
+  const res = await authedFetch(tokens, `${GATEWAY_URL}/v1/tasks`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+    headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ text: QUESTION }),
   });
   const body = await res.json().catch(() => ({}));
   return { status: res.status, taskId: body.task_id };
 }
 
-async function pollTask(token, taskId, timeoutMs) {
+async function pollTask(tokens, taskId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const res = await fetch(`${GATEWAY_URL}/v1/tasks/${taskId}`, {
-      headers: { authorization: `Bearer ${token}` },
-    });
+    const res = await authedFetch(tokens, `${GATEWAY_URL}/v1/tasks/${taskId}`);
     const body = await res.json().catch(() => ({}));
     if (body.status === 'completed') return 'completed';
     if (body.status === 'failed') return 'failed';
@@ -97,12 +148,12 @@ async function pollTask(token, taskId, timeoutMs) {
 }
 
 /** One task lifecycle; returns { ok, ms }. */
-async function runOne(token, timeoutMs) {
+async function runOne(tokens, timeoutMs) {
   const start = Date.now();
   try {
-    const sub = await submitTask(token);
+    const sub = await submitTask(tokens);
     if (sub.status !== 202 || !sub.taskId) return { ok: false, ms: Date.now() - start };
-    const outcome = await pollTask(token, sub.taskId, timeoutMs);
+    const outcome = await pollTask(tokens, sub.taskId, timeoutMs);
     return { ok: outcome === 'completed', ms: Date.now() - start };
   } catch {
     return { ok: false, ms: Date.now() - start };
@@ -130,7 +181,8 @@ function summarize(results) {
 }
 
 async function drive({ rps, duration, timeout }) {
-  const token = await mintToken();
+  const tokens = makeTokenProvider();
+  await tokens.get(); // fail fast if the token service is unreachable
   const results = [];
   const inflight = new Set();
   const intervalMs = Math.max(1, Math.round(1000 / rps));
@@ -138,7 +190,7 @@ async function drive({ rps, duration, timeout }) {
   process.stdout.write(`driving ~${rps} rps for ${duration}s (per-task timeout ${timeout}ms)\n`);
 
   while (Date.now() < end) {
-    const p = runOne(token, timeout).then((r) => {
+    const p = runOne(tokens, timeout).then((r) => {
       results.push(r);
       inflight.delete(p);
       const tag = r.ok ? 'ok' : 'FAIL';

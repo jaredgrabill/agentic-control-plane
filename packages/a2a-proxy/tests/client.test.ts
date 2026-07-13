@@ -129,6 +129,19 @@ describe('A2AClient.send', () => {
     await expect(client.send(SEND)).rejects.toBeInstanceOf(A2ATransportError);
   });
 
+  it('maps an aborted (hung) fetch to a timeout error, not a transport error', async () => {
+    // A remote that accepts the connection then never answers: the per-request
+    // AbortSignal fires a TimeoutError. That is a deadline breach — the adapter
+    // must surface A2ATimeoutError so the step is retried, not a transport fault.
+    const fetchImpl = (() => {
+      const err = new Error('aborted');
+      err.name = 'TimeoutError';
+      return Promise.reject(err);
+    }) as unknown as typeof fetch;
+    const client = new A2AClient({ endpoint: 'http://remote/a2a', credential: 'cred', fetchImpl });
+    await expect(client.send(SEND)).rejects.toBeInstanceOf(A2ATimeoutError);
+  });
+
   it('falls back to the status message data part and text', async () => {
     const { fetchImpl } = jsonRpcFetch([
       task('input-required', {

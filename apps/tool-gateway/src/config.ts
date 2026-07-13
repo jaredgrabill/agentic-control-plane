@@ -310,10 +310,17 @@ export async function loadToolServerCatalog(options: {
     throw new Error('tool-server catalog load failed: response has no tool_servers array');
   }
   const env = options.env ?? process.env;
+  const now = Date.now();
   const servers = new Map<string, ToolServerEntry>();
   for (const record of body.tool_servers as ToolServerRecord[]) {
     // A deprecated-and-sunset server drops out of the live config; a deprecated
     // but not-yet-sunset one still serves (deprecation is a warning, not a cut).
+    // A deprecation with no sunset_at is purely advisory and never cuts.
+    const { deprecation } = record;
+    if (deprecation?.deprecated === true && deprecation.sunset_at !== undefined) {
+      const sunsetAt = Date.parse(deprecation.sunset_at);
+      if (!Number.isNaN(sunsetAt) && sunsetAt <= now) continue;
+    }
     const entry = recordToEntry(record, env);
     if (servers.has(entry.id)) {
       throw new Error(`tool-server catalog: duplicate tool server id ${entry.id}`);

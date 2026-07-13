@@ -40,7 +40,6 @@ export class SessionCacheGenerations {
   readonly ready: Promise<void>;
 
   private constructor(private readonly logger: Logger) {
-    void this.logger;
     this.ready = new Promise((resolve) => {
       this.resolveReady = resolve;
     });
@@ -71,6 +70,10 @@ export class SessionCacheGenerations {
       initializedFn: () => {
         watcher.seeded = true;
         watcher.resolveReady();
+        watcher.logger.debug(
+          { generations: watcher.gens.size },
+          'session cache generation view seeded',
+        );
       },
     });
     void (async () => {

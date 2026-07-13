@@ -60,6 +60,23 @@ describe('schema-diff gate', () => {
     expect(msgs).toContain('pattern constraint added');
   });
 
+  it('catches a break against the MERGE-BASE baseline even when the PR regenerates its own', () => {
+    // The gate's mechanics (see the api-freeze job): a PR that makes a breaking
+    // change also regenerates its committed baseline to satisfy the no-drift
+    // test, so `current` and the PR's own baseline are identical → zero findings
+    // (the self-referential trap). Diffing the SAME `current` against the
+    // MERGE-BASE baseline (the base branch's frozen contract) still surfaces the
+    // break, which is what CI must gate on.
+    const mergeBaseBaseline = load('baseline');
+    const current = load('breaking');
+    const prRegeneratedBaseline = load('breaking'); // == current, satisfies no-drift
+
+    // Self-referential (the bug): current vs the PR's own baseline → nothing.
+    expect(diffBundles(prRegeneratedBaseline, current).breaking).toHaveLength(0);
+    // Merge-base (the fix): current vs the base branch's baseline → caught.
+    expect(diffBundles(mergeBaseBaseline, current).breaking.length).toBeGreaterThan(0);
+  });
+
   it('the committed baseline matches the live protocol surface (no drift)', () => {
     // The gate that guards a no-change PR: the frozen baseline must equal what
     // `pnpm gen` reads today, or every unrelated PR would trip the gate.

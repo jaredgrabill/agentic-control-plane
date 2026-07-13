@@ -236,10 +236,18 @@ function parseArgs(argv) {
   const args = { allowBreaking: false, writeBaseline: false, baseline: null, current: null };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
+    const needValue = (flag) => {
+      const v = argv[(i += 1)];
+      if (v === undefined) {
+        process.stderr.write(`${flag} requires a file path\n`);
+        process.exit(2);
+      }
+      return v;
+    };
     if (a === '--allow-breaking') args.allowBreaking = true;
     else if (a === '--write-baseline') args.writeBaseline = true;
-    else if (a === '--baseline') args.baseline = argv[(i += 1)];
-    else if (a === '--current') args.current = argv[(i += 1)];
+    else if (a === '--baseline') args.baseline = needValue('--baseline');
+    else if (a === '--current') args.current = needValue('--current');
     else {
       process.stderr.write(`unknown argument: ${a}\n`);
       process.exit(2);

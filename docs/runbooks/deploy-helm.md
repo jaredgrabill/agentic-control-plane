@@ -25,7 +25,17 @@ entrypoint (mirrors `scripts/run-platform.mjs`).
 ## Prerequisites (human-provisioned)
 
 1. **Kubernetes** 1.27+ and Helm 3.13+.
-2. **Data stores** — the chart is BYO by default (`postgresql.enabled`,
+2. **The monorepo container image** — build and push it before installing. No
+   CI job builds or publishes it yet, and the chart defaults to
+   `ghcr.io/jaredgrabill/agentic-control-plane:<appVersion>`; without the image
+   present every pod `ImagePullBackOff`s. All ten services share ONE image (the
+   per-service `args` select the entrypoint, mirroring
+   `scripts/run-platform.mjs`), so a single build/push suffices. Override
+   `global.image.registry` / `global.image.repository` / `global.image.tag` to
+   point at your own registry. **Fast-follow:** a committed multi-service
+   Dockerfile + a publish workflow are out of scope for 1.0 and tracked
+   separately; until then this is a manual step.
+3. **Data stores** — the chart is BYO by default (`postgresql.enabled`,
    `nats.enabled`, `temporal.enabled` all `false`):
    - **Postgres** with `pgvector` (shared by all services; also Temporal's
      backing store if you self-host Temporal).
@@ -34,7 +44,7 @@ entrypoint (mirrors `scripts/run-platform.mjs`).
      account boundary — mirror `deploy/compose/nats/`). A vanilla NATS install
      is not sufficient.
    - **Temporal** frontend reachable at `config.temporalAddress`.
-3. **A secret store** (Vault, cloud secret manager) fronted by ExternalSecrets
+4. **A secret store** (Vault, cloud secret manager) fronted by ExternalSecrets
    or pre-provisioned `Secret`s. Production sets `devSecrets.create=false`
    (default) and supplies the Secrets below out of band.
 

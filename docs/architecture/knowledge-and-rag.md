@@ -188,7 +188,9 @@ plan progress, conversation memory). It is Knowledge Service infrastructure
 with the same governance as retrieval itself:
 
 - **Permission-snapshot keyed (the security crux):** the entry key is
-  `<tenant>.<permHash>.<queryHash>`, where `permHash = sha256(stable JSON of
+  `ctx.<tenant>.<permHash>.<queryHash>` (the `ctx.` prefix keeps the entry
+  keyspace disjoint from the `gen.<tenant>.<source>` generation keys), where
+  `permHash = sha256(stable JSON of
   {v, tenant, actor, sorted scopes, sorted classifications, embedding_model})`
   is derived from VERIFIED claims only. Two principals share a key **iff**
   their effective permissions are identical — i.e. the same principal with
