@@ -1,0 +1,214 @@
+# Default (production-shaped) values for the ACP umbrella chart.
+#
+# Data stores are BYO by default: set config.natsUrl / config.temporalAddress
+# and the datastore Secret to your managed Postgres, NATS (JetStream +
+# accounts), and Temporal. See docs/runbooks/deploy-helm.md.
+#
+# Secrets are NEVER committed here. Every credential is pulled from a
+# Kubernetes Secret via secretKeyRef (the credential-broker posture). Provide
+# them with ExternalSecrets or a pre-provisioned Secret; the keys are listed
+# under `credentials`. For a throwaway dev render, `values-dev.yaml` sets
+# devSecrets.create=true.
+
+nameOverride: ""
+fullnameOverride: ""
+
+global:
+  image:
+    registry: ghcr.io
+    repository: jaredgrabill/agentic-control-plane
+    # tag defaults to .Chart.AppVersion when empty.
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+
+# In-cluster subcharts are disabled by default (BYO managed stores). Enabling
+# these flags alone is NOT enough — you must also add the dependency block to
+# Chart.yaml and run `helm dependency update` (see Chart.yaml comment).
+postgresql:
+  enabled: false
+nats:
+  enabled: false
+temporal:
+  enabled: false
+
+# Shared runtime configuration injected into every pod.
+config:
+  tokenIssuer: "https://token.acp.example"
+  # Reachable from every pod. Point at your managed endpoints.
+  natsUrl: "nats://nats.acp.svc.cluster.local:4222"
+  temporalAddress: "temporal-frontend.temporal.svc.cluster.local:7233"
+  otel:
+    endpoint: "http://otel-collector.observability.svc.cluster.local:4318"
+    scheduleDelayMs: "500"
+  # tenant claim → NATS account NAME. Must match the NATS server accounts block.
+  busTenantAccounts:
+    acme: TENANT_ACME
+    globex: TENANT_GLOBEX
+  # ACP_DATABASE_URL is a secret (it carries the password): supply it as a key
+  # in this Secret. devSecrets can create it for a dev render.
+  database:
+    secretName: ""        # defaults to <release>-datastore
+    secretKey: "database-url"
+
+# Secret wiring. secretName defaults to <release>-credentials; every entry
+# below is a KEY inside that Secret. Populate the Secret out-of-band (Vault /
+# ExternalSecrets) in production.
+credentials:
+  secretName: ""
+  tokenClientsSecret: ""   # holds token-clients.json
+
+# Runtime seed documents mounted at /etc/acp from a ConfigMap. Override per
+# environment. token-clients.json is NOT here (it carries secrets) — it rides
+# the token-clients Secret.
+runtimeConfig:
+  onlineEval: {}
+  toolServers: []
+  modelClasses: {}
+  tenantBudgets: {}
+  a2aExposure: {}
+
+# Dev-only in-cluster Secret creation. OFF for production.
+devSecrets:
+  create: false
+
+# Default resources applied to every service unless overridden per-service.
+resources:
+  requests:
+    cpu: 100m
+    memory: 192Mi
+  limits:
+    cpu: "1"
+    memory: 512Mi
+
+# The 9 HTTP control-plane services. One monorepo image; `args` selects the
+# entrypoint. Every service exposes /healthz on `port`. `env` are non-secret
+# name/value pairs; `secretEnv` map env → a key in the credentials Secret.
+httpServices:
+  token:
+    port: 7101
+    replicas: 2
+    args: ["apps/token/dist/main.js"]
+    secretEnv:
+      - name: ACP_NATS_AUTH_ISSUER_SEED
+        key: nats-auth-issuer-seed
+      - name: ACP_NATS_AUTH_XKEY_SEED
+        key: nats-auth-xkey-seed
+  registry:
+    port: 7102
+    replicas: 2
+    args: ["apps/registry/dist/main.js"]
+  policy:
+    port: 7103
+    replicas: 2
+    args: ["apps/policy/dist/main.js"]
+  audit:
+    port: 7104
+    replicas: 2
+    args: ["apps/audit/dist/main.js"]
+  knowledge:
+    port: 7105
+    replicas: 2
+    args: ["apps/knowledge/dist/main.js"]
+  tool-gateway:
+    port: 7106
+    replicas: 2
+    args: ["apps/tool-gateway/dist/main.js"]
+    env:
+      - name: ACP_TOOL_GATEWAY_CLIENT_ID
+        value: "svc-tool-gateway"
+      - name: ACP_NATS_SERVICE_USER
+        value: "tool-gateway"
+    secretEnv:
+      - name: ACP_TOOL_GATEWAY_CLIENT_SECRET
+        key: tool-gateway-client-secret
+      - name: ACP_NATS_SERVICE_PASSWORD
+        key: tool-gateway-nats-password
+  llm-gateway:
+    port: 7107
+    replicas: 2
+    args: ["apps/llm-gateway/dist/main.js"]
+    env:
+      - name: ACP_LLM_GATEWAY_CLIENT_ID
+        value: "svc-llm-gateway"
+      - name: ACP_NATS_SERVICE_USER
+        value: "llm-gateway"
+    secretEnv:
+      - name: ACP_LLM_GATEWAY_CLIENT_SECRET
+        key: llm-gateway-client-secret
+      - name: ACP_NATS_SERVICE_PASSWORD
+        key: llm-gateway-nats-password
+  gateway:
+    port: 7100
+    replicas: 3
+    args: ["apps/gateway/dist/main.js"]
+    # The public ingress door. Wire an Ingress/Gateway API resource to this
+    # Service out-of-band; the chart keeps it ClusterIP by default.
+    env:
+      - name: ACP_GATEWAY_CLIENT_ID
+        value: "svc-gateway"
+    secretEnv:
+      - name: ACP_GATEWAY_CLIENT_SECRET
+        key: gateway-client-secret
+  evaluation:
+    port: 7108
+    replicas: 2
+    args: ["apps/evaluation/dist/main.js", "serve"]
+    env:
+      - name: ACP_EVALUATION_CLIENT_ID
+        value: "svc-evaluation"
+      - name: ACP_NATS_SERVICE_USER
+        value: "evaluation"
+    secretEnv:
+      - name: ACP_EVALUATION_CLIENT_SECRET
+        key: evaluation-client-secret
+      - name: ACP_NATS_SERVICE_PASSWORD
+        key: evaluation-nats-password
+
+# The orchestrator: a Temporal worker. No HTTP port, no Service. kubelet
+# restarts it on process exit; there is no /healthz to probe.
+orchestrator:
+  replicas: 2
+  args: ["apps/orchestrator/dist/main.js"]
+  env:
+    - name: ACP_ORCHESTRATOR_CLIENT_ID
+      value: "svc-orchestrator"
+    - name: ACP_PROBER_CLIENT_ID
+      value: "svc-prober"
+  secretEnv:
+    - name: ACP_ORCHESTRATOR_CLIENT_SECRET
+      key: orchestrator-client-secret
+    - name: ACP_PROBER_CLIENT_SECRET
+      key: prober-client-secret
+  resources:
+    requests:
+      cpu: 200m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
+
+# Standard probe timings for the HTTP services (/healthz).
+probes:
+  readiness:
+    initialDelaySeconds: 5
+    periodSeconds: 10
+    timeoutSeconds: 3
+    failureThreshold: 3
+  liveness:
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL

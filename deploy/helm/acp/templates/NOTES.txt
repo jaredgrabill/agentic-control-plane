@@ -1,0 +1,25 @@
+Agentic Control Plane {{ .Chart.AppVersion }} installed as release "{{ .Release.Name }}".
+
+Services (ClusterIP) in namespace {{ .Release.Namespace }}:
+{{- range $name, $svc := .Values.httpServices }}
+  - {{ include "acp.fullname" $ }}-{{ $name }}:{{ $svc.port }}  (/healthz)
+{{- end }}
+  - {{ include "acp.fullname" . }}-orchestrator  (Temporal worker, no Service)
+
+Public ingress is the gateway Service on port {{ (index .Values.httpServices "gateway").port }}.
+Wire an Ingress / Gateway API route to it — the chart keeps it ClusterIP.
+
+Verify:
+  kubectl -n {{ .Release.Namespace }} get pods -l app.kubernetes.io/instance={{ .Release.Name }}
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "acp.fullname" . }}-gateway {{ (index .Values.httpServices "gateway").port }}
+
+{{- if not .Values.devSecrets.create }}
+
+NOTE: devSecrets.create is false. This release expects these Secrets to exist:
+  - {{ include "acp.credentialsSecret" . }}     (client secrets, NATS seeds)
+  - {{ include "acp.tokenClientsSecret" . }}    (key: token-clients.json)
+  - {{ include "acp.datastoreSecret" . }}       (key: {{ .Values.config.database.secretKey }})
+{{- end }}
+
+Upgrades: follow docs/runbooks/upgrade-rolling.md (expand-then-contract
+migrations, protocol-parity deploy order). Do NOT skip it on a shared Postgres.

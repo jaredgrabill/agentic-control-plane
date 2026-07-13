@@ -1,0 +1,43 @@
+apiVersion: v2
+name: acp
+description: >-
+  Agentic Control Plane — umbrella chart for the 9 HTTP control-plane services
+  and the orchestrator (Temporal) worker. Scoped 1.0: "runs on a cluster".
+  Postgres, NATS (with JetStream + accounts), and Temporal are expected as
+  external managed endpoints by default (BYO); see values.yaml and
+  docs/runbooks/deploy-helm.md for enabling in-cluster subcharts.
+type: application
+
+# Chart version tracks the chart; appVersion tracks the platform release the
+# chart is validated against.
+version: 0.1.0
+appVersion: "1.0.0"
+
+keywords:
+  - agents
+  - control-plane
+  - governance
+home: https://github.com/jaredgrabill/agentic-control-plane
+sources:
+  - https://github.com/jaredgrabill/agentic-control-plane
+
+# Data-store subcharts are intentionally NOT declared as active dependencies:
+# `helm template`/`helm lint` would then require the archives to be present in
+# charts/ (via `helm dependency update`), which the offline helm-lint CI gate
+# cannot fetch. The chart therefore renders the ACP services standalone against
+# external DSNs by default. To run batteries-included, add the block below to
+# this file and run `helm dependency update` before install:
+#
+# dependencies:
+#   - name: postgresql
+#     version: "15.5.x"
+#     repository: "https://charts.bitnami.com/bitnami"
+#     condition: postgresql.enabled
+#   - name: nats
+#     version: "1.2.x"
+#     repository: "https://nats-io.github.io/k8s/helm/charts/"
+#     condition: nats.enabled
+#   - name: temporal
+#     version: "0.62.x"
+#     repository: "https://go.temporal.io/helm-charts"
+#     condition: temporal.enabled
