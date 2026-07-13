@@ -16,8 +16,4 @@ export {
   type A2ASendRequest,
   type A2ATaskView,
 } from './client.js';
-export {
-  registerProxyCapabilities,
-  sanitizeRemoteOutput,
-  type ProxyOptions,
-} from './proxy.js';
+export { registerProxyCapabilities, sanitizeRemoteOutput, type ProxyOptions } from './proxy.js';

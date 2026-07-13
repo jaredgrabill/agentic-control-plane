@@ -10,7 +10,9 @@ const STATIC = {
       url: 'http://localhost:7301/mcp',
       auth: {
         mode: 'static-headers',
-        headers: { 'x-acp-broker-credential': '${ACP_TOOL_CRED_CLOUD_ESTATE:-cloud-estate-dev-broker}' },
+        headers: {
+          'x-acp-broker-credential': '${ACP_TOOL_CRED_CLOUD_ESTATE:-cloud-estate-dev-broker}',
+        },
       },
       tools: {
         inventory_search: { scope: 'cloud:inventory:read', risk: 'R0' },
@@ -66,7 +68,10 @@ describe('staticServersToRecords', () => {
           {
             id: 'bad',
             url: 'http://x/mcp',
-            auth: { mode: 'static-headers', headers: { 'x-acp-broker-credential': 'literal-secret' } },
+            auth: {
+              mode: 'static-headers',
+              headers: { 'x-acp-broker-credential': 'literal-secret' },
+            },
             tools: { t: { scope: 'a:b:read', risk: 'R0' } },
             rate_limit: { per_minute: 1, burst: 1 },
           },

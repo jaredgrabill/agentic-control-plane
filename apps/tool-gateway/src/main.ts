@@ -82,7 +82,9 @@ const config =
         registryUrl: catalogUrl,
         token: await mintRegistryReadToken(tokenUrl, clientId, clientSecret),
       })
-    : loadToolServerConfig(env('ACP_TOOL_SERVERS', join(repoRoot, 'deploy', 'dev', 'tool-servers.json')));
+    : loadToolServerConfig(
+        env('ACP_TOOL_SERVERS', join(repoRoot, 'deploy', 'dev', 'tool-servers.json')),
+      );
 
 const policy = new HttpPolicyClient({
   policyUrl: env('ACP_POLICY_URL', 'http://localhost:7103'),

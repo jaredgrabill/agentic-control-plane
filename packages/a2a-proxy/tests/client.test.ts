@@ -25,7 +25,12 @@ function task(state: string, extra: Record<string, unknown> = {}): Record<string
   return { id: 't-1', status: { state }, ...extra };
 }
 
-const SEND = { capability: 'external.echo', input: { text: 'hi' }, taskId: 'task-1', stepId: 'step-1' };
+const SEND = {
+  capability: 'external.echo',
+  input: { text: 'hi' },
+  taskId: 'task-1',
+  stepId: 'step-1',
+};
 const noSleep = (): Promise<void> => Promise.resolve();
 
 describe('A2AClient.send', () => {
@@ -64,7 +69,11 @@ describe('A2AClient.send', () => {
 
   it('carries the adapter credential and never a platform token', async () => {
     const { fetchImpl, calls } = jsonRpcFetch([task('completed')]);
-    const client = new A2AClient({ endpoint: 'http://remote/a2a', credential: 'own-cred', fetchImpl });
+    const client = new A2AClient({
+      endpoint: 'http://remote/a2a',
+      credential: 'own-cred',
+      fetchImpl,
+    });
     await client.send(SEND);
     const headers = calls[0]?.init.headers as Record<string, string>;
     expect(headers.authorization).toBe('Bearer own-cred');
@@ -88,7 +97,8 @@ describe('A2AClient.send', () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        json: () => Promise.resolve({ jsonrpc: '2.0', id: '1', result: { status: { state: 'working' } } }),
+        json: () =>
+          Promise.resolve({ jsonrpc: '2.0', id: '1', result: { status: { state: 'working' } } }),
       } as unknown as Response)) as unknown as typeof fetch;
     const client = new A2AClient({ endpoint: 'http://remote/a2a', credential: 'cred', fetchImpl });
     await expect(client.send(SEND)).rejects.toBeInstanceOf(A2ATransportError);
@@ -106,15 +116,15 @@ describe('A2AClient.send', () => {
       Promise.resolve({
         ok: true,
         status: 200,
-        json: () => Promise.resolve({ jsonrpc: '2.0', id: '1', error: { code: -32000, message: 'boom' } }),
+        json: () =>
+          Promise.resolve({ jsonrpc: '2.0', id: '1', error: { code: -32000, message: 'boom' } }),
       } as unknown as Response)) as unknown as typeof fetch;
     const client = new A2AClient({ endpoint: 'http://remote/a2a', credential: 'cred', fetchImpl });
     await expect(client.send(SEND)).rejects.toThrow(/boom/);
   });
 
   it('maps an unreachable remote to a transport error', async () => {
-    const fetchImpl = (() =>
-      Promise.reject(new Error('ECONNREFUSED'))) as unknown as typeof fetch;
+    const fetchImpl = (() => Promise.reject(new Error('ECONNREFUSED'))) as unknown as typeof fetch;
     const client = new A2AClient({ endpoint: 'http://remote/a2a', credential: 'cred', fetchImpl });
     await expect(client.send(SEND)).rejects.toBeInstanceOf(A2ATransportError);
   });

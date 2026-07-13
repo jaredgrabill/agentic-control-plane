@@ -49,12 +49,20 @@ function recordingRemote(result: Record<string, unknown>): {
 }
 
 function completed(output: Record<string, unknown>): Record<string, unknown> {
-  return { id: 't-1', status: { state: 'completed' }, artifacts: [{ parts: [{ kind: 'data', data: output }] }] };
+  return {
+    id: 't-1',
+    status: { state: 'completed' },
+    artifacts: [{ parts: [{ kind: 'data', data: output }] }],
+  };
 }
 
 function buildProxy(fetchImpl: typeof fetch): Agent {
   const agent = new Agent({ manifest: MANIFEST });
-  const client = new A2AClient({ endpoint: 'http://remote/a2a', credential: 'own-remote-cred', fetchImpl });
+  const client = new A2AClient({
+    endpoint: 'http://remote/a2a',
+    credential: 'own-remote-cred',
+    fetchImpl,
+  });
   registerProxyCapabilities(agent, { client, remoteName: 'echo-remote' });
   return agent;
 }
@@ -78,12 +86,18 @@ describe('registerProxyCapabilities', () => {
     const agent = new Agent({ manifest: MANIFEST });
     const client = new A2AClient({ endpoint: 'http://remote/a2a', credential: 'c' });
     expect(() => {
-      registerProxyCapabilities(agent, { client, remoteName: 'r', capabilities: ['external.nope'] });
+      registerProxyCapabilities(agent, {
+        client,
+        remoteName: 'r',
+        capabilities: ['external.nope'],
+      });
     }).toThrow(/not declared/);
   });
 
   it('completes a step from a remote completed task', async () => {
-    const { fetchImpl } = recordingRemote(completed({ text: 'echoed', citations: [], confidence: 1 }));
+    const { fetchImpl } = recordingRemote(
+      completed({ text: 'echoed', citations: [], confidence: 1 }),
+    );
     const result = await buildProxy(fetchImpl).execute(step());
     expect(result.status).toBe('completed');
     expect(result.output).toMatchObject({ text: 'echoed' });
@@ -93,22 +107,33 @@ describe('registerProxyCapabilities', () => {
   });
 
   it('NEVER egresses the broker delegated token to the remote', async () => {
-    const { fetchImpl, calls } = recordingRemote(completed({ text: 'ok', citations: [], confidence: 1 }));
+    const { fetchImpl, calls } = recordingRemote(
+      completed({ text: 'ok', citations: [], confidence: 1 }),
+    );
     const result = await buildProxy(fetchImpl).execute(step());
     expect(result.status).toBe('completed');
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls) {
-      const serialized = JSON.stringify({ url: call.url, headers: call.init.headers, body: call.init.body });
+      const serialized = JSON.stringify({
+        url: call.url,
+        headers: call.init.headers,
+        body: call.init.body,
+      });
       expect(serialized).not.toContain(SENTINEL_TOKEN);
       // What DOES cross is the adapter's own credential, nothing else.
-      expect((call.init.headers as Record<string, string>).authorization).toBe('Bearer own-remote-cred');
+      expect((call.init.headers as Record<string, string>).authorization).toBe(
+        'Bearer own-remote-cred',
+      );
     }
   });
 
   it('maps input-required to a needs_input step outcome, never an approval', async () => {
     const { fetchImpl } = recordingRemote({
       id: 't-1',
-      status: { state: 'input-required', message: { parts: [{ kind: 'text', data: 'need region' }] } },
+      status: {
+        state: 'input-required',
+        message: { parts: [{ kind: 'text', data: 'need region' }] },
+      },
     });
     const result = await buildProxy(fetchImpl).execute(step());
     expect(result.status).toBe('failed');
@@ -132,7 +157,9 @@ describe('registerProxyCapabilities', () => {
 
   it('maps an unexpected terminal state to a permanent failure', async () => {
     const agent = new Agent({ manifest: MANIFEST });
-    const stub = { send: () => Promise.resolve({ state: 'weird', output: {} }) } as unknown as A2AClient;
+    const stub = {
+      send: () => Promise.resolve({ state: 'weird', output: {} }),
+    } as unknown as A2AClient;
     registerProxyCapabilities(agent, { client: stub, remoteName: 'r' });
     const result = await agent.execute(step());
     expect(result.status).toBe('failed');
@@ -165,7 +192,9 @@ describe('sanitizeRemoteOutput', () => {
   });
 
   it('empties remote citations (a remote can never supply first-party lineage)', () => {
-    const clean = sanitizeRemoteOutput({ citations: [{ doc_id: 'remote/doc', lineage_id: 'forged' }] });
+    const clean = sanitizeRemoteOutput({
+      citations: [{ doc_id: 'remote/doc', lineage_id: 'forged' }],
+    });
     expect(clean.citations).toEqual([]);
   });
 });

@@ -321,7 +321,9 @@ export async function loadToolServerCatalog(options: {
     servers.set(entry.id, entry);
   }
   if (servers.size === 0) {
-    throw new Error('tool-server catalog is empty — refusing to start the gateway with no upstreams');
+    throw new Error(
+      'tool-server catalog is empty — refusing to start the gateway with no upstreams',
+    );
   }
   return { servers };
 }

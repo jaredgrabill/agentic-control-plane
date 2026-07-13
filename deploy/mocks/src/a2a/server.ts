@@ -68,7 +68,9 @@ export function handleA2ARpc(request: JsonRpcRequest): JsonRpcResult {
         id: TASK_ID,
         status: {
           state: 'failed',
-          message: { parts: [{ kind: 'text', data: 'the remote agent could not complete the task' }] },
+          message: {
+            parts: [{ kind: 'text', data: 'the remote agent could not complete the task' }],
+          },
         },
       },
     };
@@ -79,7 +81,9 @@ export function handleA2ARpc(request: JsonRpcRequest): JsonRpcResult {
         id: TASK_ID,
         status: {
           state: 'input-required',
-          message: { parts: [{ kind: 'text', data: 'the remote agent needs more information to proceed' }] },
+          message: {
+            parts: [{ kind: 'text', data: 'the remote agent needs more information to proceed' }],
+          },
         },
       },
     };

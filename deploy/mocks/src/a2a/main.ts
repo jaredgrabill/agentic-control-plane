@@ -14,7 +14,8 @@ import { authorized, handleA2ARpc, type JsonRpcRequest } from './server.js';
 
 const port = Number(process.env.ACP_MOCK_A2A_PORT ?? 7305);
 // The credential the adapter presents (ACP_PROXY_CREDENTIAL on the agent side).
-const expectedCredential = process.env.ACP_MOCK_A2A_CREDENTIAL ?? 'external-echo-remote-dev-credential';
+const expectedCredential =
+  process.env.ACP_MOCK_A2A_CREDENTIAL ?? 'external-echo-remote-dev-credential';
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' });
@@ -54,7 +55,11 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   try {
     request = JSON.parse(Buffer.concat(chunks).toString('utf-8')) as JsonRpcRequest;
   } catch {
-    sendJson(res, 400, { jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } });
+    sendJson(res, 400, {
+      jsonrpc: '2.0',
+      id: null,
+      error: { code: -32700, message: 'parse error' },
+    });
     return;
   }
   const outcome = handleA2ARpc(request);

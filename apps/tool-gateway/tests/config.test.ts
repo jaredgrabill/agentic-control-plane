@@ -289,7 +289,12 @@ describe('tool-server catalog loader (SF3)', () => {
     const fetchImpl = (() =>
       Promise.resolve({ ok: false, status: 403 } as Response)) as unknown as typeof fetch;
     await expect(
-      loadToolServerCatalog({ registryUrl: 'http://registry', token: 't', env: CRED_ENV, fetchImpl }),
+      loadToolServerCatalog({
+        registryUrl: 'http://registry',
+        token: 't',
+        env: CRED_ENV,
+        fetchImpl,
+      }),
     ).rejects.toThrow(/registry:read/);
   });
 
@@ -301,7 +306,12 @@ describe('tool-server catalog loader (SF3)', () => {
         json: () => Promise.resolve({ tool_servers: [] }),
       } as unknown as Response)) as unknown as typeof fetch;
     await expect(
-      loadToolServerCatalog({ registryUrl: 'http://registry', token: 't', env: CRED_ENV, fetchImpl }),
+      loadToolServerCatalog({
+        registryUrl: 'http://registry',
+        token: 't',
+        env: CRED_ENV,
+        fetchImpl,
+      }),
     ).rejects.toThrow(/empty/);
   });
 });

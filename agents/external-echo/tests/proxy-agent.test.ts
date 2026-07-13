@@ -7,7 +7,9 @@ function echoRemote(): { fetchImpl: typeof fetch; calls: { init: RequestInit }[]
   const calls: { init: RequestInit }[] = [];
   const fetchImpl = ((_url: string, init: RequestInit) => {
     calls.push({ init });
-    const body = JSON.parse(String(init.body)) as { params: { message: { parts: { data: unknown }[] } } };
+    const body = JSON.parse(String(init.body)) as {
+      params: { message: { parts: { data: unknown }[] } };
+    };
     const input = body.params.message.parts[0]?.data as { text?: string };
     return Promise.resolve({
       ok: true,

@@ -1185,7 +1185,11 @@ describe('tool-server catalog (SF3)', () => {
       owning_team: 'team-platform',
       wrapped_sor: 'cloud-estate',
       data_classification: 'internal',
-      auth: { mode: 'credential-ref', credential_ref: 'ACP_TOOL_CRED_CLOUD_ESTATE', header: 'x-acp-broker-credential' },
+      auth: {
+        mode: 'credential-ref',
+        credential_ref: 'ACP_TOOL_CRED_CLOUD_ESTATE',
+        header: 'x-acp-broker-credential',
+      },
       tools: [{ name: 'inventory_search', scope: 'cloud:inventory:read', risk: 'R0' }],
       rate_limit: { per_minute: 60, burst: 20 },
       ...overrides,

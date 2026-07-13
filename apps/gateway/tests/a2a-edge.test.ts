@@ -60,7 +60,10 @@ const fakeSource: A2ACardSource = {
     Promise.resolve(
       agentId === 'external-echo'
         ? { status: 200, body: SIGNED_CARD }
-        : { status: 404, body: { error: { message: `no a2a card for agent ${agentId}`, status: 404 } } },
+        : {
+            status: 404,
+            body: { error: { message: `no a2a card for agent ${agentId}`, status: 404 } },
+          },
     ),
 };
 
@@ -127,9 +130,9 @@ describe('RegistryA2ASource', () => {
   }
 
   function fakeFetch(calls: Call[], cardStatus = 200): typeof fetch {
-    return ((url: string | URL | Request, init?: RequestInit) => {
-      calls.push({ url: String(url), ...(init === undefined ? {} : { init }) });
-      const u = String(url);
+    return (url: string | URL | Request, init?: RequestInit) => {
+      const u = typeof url === 'string' ? url : url instanceof URL ? url.href : url.url;
+      calls.push({ url: u, ...(init === undefined ? {} : { init }) });
       if (u.endsWith('/v1/token')) {
         return Promise.resolve(
           new Response(JSON.stringify({ access_token: 'svc-token', expires_in: 600 }), {
@@ -145,7 +148,7 @@ describe('RegistryA2ASource', () => {
           status: cardStatus,
         }),
       );
-    }) as typeof fetch;
+    };
   }
 
   function source(calls: Call[], cardStatus = 200, ttl = 60_000): RegistryA2ASource {

@@ -1815,9 +1815,9 @@ describe('paved-road client provisioning (POST /v1/clients)', () => {
   });
 
   it('rejects a malformed principal', async () => {
-    expect((await provision('cli-jane', 'jane-secret', { principal: 'not-an-agent' })).statusCode).toBe(
-      400,
-    );
+    expect(
+      (await provision('cli-jane', 'jane-secret', { principal: 'not-an-agent' })).statusCode,
+    ).toBe(400);
     expect((await provision('cli-jane', 'jane-secret', {})).statusCode).toBe(400);
   });
 

@@ -6,7 +6,12 @@ function send(input: Record<string, unknown>): JsonRpcRequest {
     jsonrpc: '2.0',
     id: '1',
     method: 'message/send',
-    params: { message: { parts: [{ kind: 'data', data: input }], metadata: { capability: 'external.echo' } } },
+    params: {
+      message: {
+        parts: [{ kind: 'data', data: input }],
+        metadata: { capability: 'external.echo' },
+      },
+    },
   };
 }
 
@@ -30,7 +35,9 @@ describe('mock a2a handleA2ARpc()', () => {
   });
 
   it('scripts a failed terminal state', () => {
-    expect(handleA2ARpc(send({ text: 'x', directive: 'fail' })).result?.status.state).toBe('failed');
+    expect(handleA2ARpc(send({ text: 'x', directive: 'fail' })).result?.status.state).toBe(
+      'failed',
+    );
   });
 
   it('scripts an input-required terminal state', () => {
@@ -39,11 +46,18 @@ describe('mock a2a handleA2ARpc()', () => {
   });
 
   it('answers tasks/get with a terminal task (synchronous mock)', () => {
-    const out = handleA2ARpc({ jsonrpc: '2.0', id: '2', method: 'tasks/get', params: { id: 'mock-a2a-task-1' } });
+    const out = handleA2ARpc({
+      jsonrpc: '2.0',
+      id: '2',
+      method: 'tasks/get',
+      params: { id: 'mock-a2a-task-1' },
+    });
     expect(out.result?.status.state).toBe('completed');
   });
 
   it('rejects an unknown method', () => {
-    expect(handleA2ARpc({ jsonrpc: '2.0', id: '3', method: 'tasks/cancel' }).error?.code).toBe(-32601);
+    expect(handleA2ARpc({ jsonrpc: '2.0', id: '3', method: 'tasks/cancel' }).error?.code).toBe(
+      -32601,
+    );
   });
 });

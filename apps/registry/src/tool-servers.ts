@@ -118,7 +118,11 @@ export function staticServersToRecords(raw: unknown): ToolServerRecord[] {
       rate_limit: server.rate_limit as ToolServerRecord['rate_limit'],
       ...(server.tool_rate_limits === undefined
         ? {}
-        : { tool_rate_limits: server.tool_rate_limits as NonNullable<ToolServerRecord['tool_rate_limits']> }),
+        : {
+            tool_rate_limits: server.tool_rate_limits as NonNullable<
+              ToolServerRecord['tool_rate_limits']
+            >,
+          }),
       ...(server.timeout_ms === undefined ? {} : { timeout_ms: server.timeout_ms as number }),
     };
     // Fail closed: a malformed synthesized record is a seed error, never a

@@ -60,7 +60,10 @@ export class RegistryA2ASource implements A2ACardSource {
     );
   }
 
-  private async cached(key: string, load: () => Promise<A2AEdgeResponse>): Promise<A2AEdgeResponse> {
+  private async cached(
+    key: string,
+    load: () => Promise<A2AEdgeResponse>,
+  ): Promise<A2AEdgeResponse> {
     const hit = this.cache.get(key);
     const now = Date.now();
     if (hit !== undefined && hit.expires > now) return hit.response;
@@ -79,12 +82,15 @@ export class RegistryA2ASource implements A2ACardSource {
       headers: { authorization: `Bearer ${token}` },
     });
     if (res.status === 200 || res.status === 404) {
-      return { status: res.status, body: (await res.json()) as unknown };
+      return { status: res.status, body: await res.json() };
     }
     // Anything else (auth failure, registry down) is an upstream problem the
     // public edge reports as 502 without leaking the internal response.
     this.opts.logger.error({ path, status: res.status }, 'a2a card fetch from registry failed');
-    return { status: 502, body: { error: { message: 'a2a card source unavailable', status: 502 } } };
+    return {
+      status: 502,
+      body: { error: { message: 'a2a card source unavailable', status: 502 } },
+    };
   }
 
   private async serviceToken(): Promise<string> {

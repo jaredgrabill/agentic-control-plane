@@ -14,12 +14,7 @@
  * it, so an accidental field addition fails closed at translation time.
  */
 
-import {
-  a2aAgentCard,
-  type A2AAgentCard,
-  type AgentCard,
-  type Capability,
-} from '@acp/protocol';
+import { a2aAgentCard, type A2AAgentCard, type AgentCard, type Capability } from '@acp/protocol';
 import { stableStringify } from '@acp/service-kit';
 import {
   createLocalJWKSet,

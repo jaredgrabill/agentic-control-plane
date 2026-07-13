@@ -14,27 +14,22 @@
  *      never reads ctx.delegatedToken for anything outbound;
  *   3. maps the terminal A2A task state to a typed step outcome, treating the
  *      remote reply as UNTRUSTED: the SDK validates it against the declared
- *      output_schema, and this module strips first-party lineage and tags any
- *      remote-supplied provenance as external before it re-enters the platform.
+ *      output_schema, and this module strips first-party lineage and drops any
+ *      remote-supplied citations before the output re-enters the platform.
  *
  * Remote-reported usage is never read, so it cannot enter the cost ledger — the
  * proxy makes no model calls and the SDK books zero LLM usage for the step.
  */
 
 import { CapabilityError, ErrorClass, type Agent, type CapabilityContext } from '@acp/agent-sdk';
-import {
-  A2ATimeoutError,
-  A2ATransportError,
-  type A2AClient,
-  type A2ATaskView,
-} from './client.js';
+import { A2ATimeoutError, A2ATransportError, type A2AClient, type A2ATaskView } from './client.js';
 
 export interface ProxyOptions {
   /** The remote A2A client, constructed with the adapter's own credential. */
   client: A2AClient;
   /**
-   * A stable, human-readable name for the remote used to TAG any provenance it
-   * returns (`external:<remoteName>`). Never a secret or an internal id.
+   * A stable, human-readable name for the remote, used to attribute it in
+   * step-outcome error messages. Never a secret or an internal id.
    */
   remoteName: string;
   /**
@@ -62,7 +57,9 @@ export function registerProxyCapabilities(agent: Agent, opts: ProxyOptions): voi
         `cannot proxy capability ${name}: it is not declared in the manifest for ${agent.agentId}`,
       );
     }
-    agent.capability(name, (ctx, input) => proxyStep(opts.client, opts.remoteName, skillFor, ctx, input));
+    agent.capability(name, (ctx, input) =>
+      proxyStep(opts.client, opts.remoteName, skillFor, ctx, input),
+    );
   }
 }
 
