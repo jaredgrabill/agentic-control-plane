@@ -185,9 +185,11 @@ jobs:
             git show "origin/$BASE_REF:$baseline_path" > "$out"
             node scripts/schema-diff.mjs --baseline "$out"
           elif git cat-file -e "HEAD~1:$baseline_path" 2>/dev/null; then
-            # Push (e.g. to main): compare against the previous commit's baseline.
+            # Push (e.g. to main): report-only. Gating already happened at PR
+            # time; a legitimately-labeled breaking change has merged, so the
+            # post-merge push must NOT red main just because a break is present.
             git show "HEAD~1:$baseline_path" > "$out"
-            node scripts/schema-diff.mjs --baseline "$out"
+            node scripts/schema-diff.mjs --baseline "$out" --allow-breaking
           else
             # No parent baseline to diff against (initial commit); nothing to gate.
             echo 'schema-diff: no previous baseline to compare against; skipping.'

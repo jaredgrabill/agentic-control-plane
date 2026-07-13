@@ -131,7 +131,9 @@ describe('handleCorpusMutation', () => {
     // A space is not a legal KV key char: kv.put would throw indistinguishably
     // from a transient fault. Park it (term), never NAK — no source-controlled
     // value can wedge the consumer in an infinite redelivery loop.
-    for (const bad of ['policy docs', 'a*b', 'a>b', 'ns:src', '']) {
+    // incl. edge-dot forms that pass a naive charset check but mint an
+    // empty-token subject the KV rejects (the poison-loop the regex must close).
+    for (const bad of ['policy docs', 'a*b', 'a>b', 'ns:src', '', 'x.', '.x', 'a..b']) {
       const m = msg(mutation(bad), 9);
       expect(await handleCorpusMutation(m, kv, logger)).toBe('skipped');
       expect(m.term).toHaveBeenCalledOnce();

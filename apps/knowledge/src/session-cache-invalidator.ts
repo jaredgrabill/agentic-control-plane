@@ -13,7 +13,10 @@ export const INVALIDATOR_CONSUMER = 'session-cache-invalidator';
  * which would NAK and redeliver forever (no max_deliver). We validate up front
  * and park such a message instead, matching the malformed-event path.
  */
-const KV_LEGAL_SOURCE_ID = /^[\w./=-]+$/;
+// Dots may only separate non-empty tokens: no leading/trailing/double dot, so a
+// source_id like `x.` / `.x` / `a..b` (which passes a naive charset check but
+// mints an empty-token subject the KV rejects) is parked, not NAK-looped.
+const KV_LEGAL_SOURCE_ID = /^[\w/=-]+(?:\.[\w/=-]+)*$/;
 
 /** The narrow KV surface the invalidator writes generations through. */
 export interface InvalidatorKv {
