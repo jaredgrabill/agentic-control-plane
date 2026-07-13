@@ -123,3 +123,33 @@ over NATS/Temporal — not point-to-point HTTP. At the platform edge:
 
 This keeps the internal substrate efficient while remaining protocol-citizens
 externally. See [research brief](../research/protocols-and-interop.md).
+
+## A2A at the Edge (Phase 4 item 3)
+
+**Card export (out-bound).** The registry projects a card through a strict
+opt-in allowlist and re-signs it as a detached JWS; the gateway serves it
+unauthenticated at `/.well-known/agent.json` and per-agent well-known routes.
+Nothing internal leaks (no tools/scopes/models/data-classification/tenant/saga
+wiring), a non-exposed agent 404s identically to an unknown one, and exposure is
+a platform allowlist — not agent-authored. The card `url` is documented-inert:
+inbound A2A execution is out of scope in v0.
+
+**Proxy adapter (in-bound work to an external agent).** An external A2A agent is
+onboarded as a registry proxy record whose worker is a thin `@acp/a2a-proxy`
+adapter. Because the adapter IS a normal SDK `Agent`, the orchestrator PEP gates
+it exactly like a native agent. The token model is the crux:
+
+- Orchestrator → adapter (internal, trusted): the broker `delegated_token`
+  crosses on the `StepRequest`, as for any agent.
+- Adapter → remote (external, untrusted): ONLY the mapped capability input and
+  the adapter's OWN `ACP_PROXY_CREDENTIAL`. The `delegated_token` NEVER egresses
+  — the adapter does not read it for anything outbound.
+- Remote → platform (untrusted): the reply is output schema-validated by the
+  SDK; first-party lineage keys are stripped and remote citations dropped (a
+  remote can never mint first-party lineage); remote-reported usage is not
+  booked into the cost ledger.
+- A2A `input-required`/`auth-required` becomes a `needs_input` terminal step
+  outcome — NEVER an approval grant (approval is decided pre-dispatch by the
+  PDP and is unreachable from the remote). Proxy agents are R0/R1 only; the
+  adapter binds no tools and forwards no token, so a compromised remote has no
+  system-of-record write path.

@@ -77,3 +77,20 @@ The platform team's standing priorities, in order: (1) registration gates
 stay honest, (2) SDK upgrades are non-breaking or ship codemods,
 (3) paved-road friction reports from agent teams are triaged weekly like
 bugs — because a paved road nobody drives is just governance theater.
+
+## Self-Service Onboarding (zero platform changes)
+
+Standing up a new agent's worker used to require one platform edit: a bus client
+credential in `token-clients.json`. `POST /v1/clients` closes that seam. It
+mints an **agent-role, tenant-bound, zero-scope** client and returns the secret
+exactly once (no read-back route), audited as `client.provisioned`. The role is
+forced `agent` and scopes forced empty, so a provisioned client can never
+self-grant a platform scope; the caller is bound to its own tenant
+(`assertTenantAccess`, platform callers excepted), agent-role callers are
+refused (no self-replication), and provisioning is rate-limited.
+
+`scripts/paved-road-slo.mjs` is the guardrail: it scaffolds a throwaway agent,
+provisions a client, registers, baselines, and transitions to shadow, then
+asserts both the scaffold→shadow SLO AND that `git status` over platform-owned
+paths (`apps/**`, `packages/**`, `deploy/**`, `.github/**`, `policies/**`,
+`run-platform.mjs`) gained nothing — the zero-platform-changes invariant.
