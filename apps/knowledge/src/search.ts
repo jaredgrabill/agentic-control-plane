@@ -152,22 +152,35 @@ export class SearchService {
     const nowDate = this.deps.now?.() ?? new Date();
     const nowMs = nowDate.getTime();
 
+    // Normalize the query once so the cache key and the live embedding/search
+    // operate on identical text — a trailing-space variant must not fork the
+    // key from the results it stands for.
+    const query = request.query.trim();
+
     // The cache memoizes ONLY the post-authorization retrieval. The key is
     // derived from the caller's VERIFIED effective permissions, so a hit can
     // only ever be the caller's own previously-authorized view.
     const cacheCtx = this.cacheContext(claims, actor);
-    const derived = cacheCtx.ready
-      ? deriveCacheKey({
+    let derived: ReturnType<typeof deriveCacheKey> | undefined;
+    if (cacheCtx.ready) {
+      try {
+        derived = deriveCacheKey({
           claims,
           scopes,
           classifications,
           embeddingModel,
-          query: request.query,
+          query,
           k,
           sourceId: request.source_id,
           mode: request.mode,
-        })
-      : undefined;
+        });
+      } catch {
+        // Key derivation must never break the retrieval hot path — degrade to
+        // live retrieval (the fail-safe invariant), counting a cache no-op.
+        derived = undefined;
+        this.deps.cacheMetrics?.request('disabled');
+      }
+    }
     if (cacheCtx.ready && derived !== undefined) {
       const entry = await cacheCtx.cache.get(derived.key);
       if (entry !== undefined) {
@@ -211,17 +224,12 @@ export class SearchService {
       this.deps.cacheMetrics?.request(cacheCtx.reason);
     }
 
-    const hits = await this.deps.store.search(
-      this.deps.embedder.embed(request.query),
-      request.query,
-      k,
-      {
-        tenant: claims.tenant,
-        classifications,
-        sourceId: request.source_id,
-        mode: request.mode,
-      },
-    );
+    const hits = await this.deps.store.search(this.deps.embedder.embed(query), query, k, {
+      tenant: claims.tenant,
+      classifications,
+      sourceId: request.source_id,
+      mode: request.mode,
+    });
     const results = hits.map(toResult);
 
     // Write-through on a miss: best-effort, errors swallowed by put(). The
