@@ -28,6 +28,13 @@ export interface SearchFilters {
 
 export interface SearchHit {
   lineage_id: string;
+  /**
+   * The stable source this chunk belongs to. Unlike lineage_id (a fresh
+   * UUIDv7 per re-indexed chunk version), source_id survives re-ingestion, so
+   * it is the correct handle for the session cache to evict a cached entry
+   * when its source mutates (session-cache.ts).
+   */
+  source_id: string;
   doc_id: string;
   doc_version: string;
   title: string;
@@ -173,7 +180,7 @@ export class PgKnowledgeStore implements KnowledgeStore {
         WHERE fts @@ websearch_to_tsquery('english', $5)
         LIMIT 50
       )
-      SELECT c.lineage_id, c.doc_id, c.doc_version, c.title, c.url,
+      SELECT c.lineage_id, c.source_id, c.doc_id, c.doc_version, c.title, c.url,
              c.effective_date::text AS effective_date, c.classification, c.content,
              ($7 * COALESCE(1.0/(60 + vec.rank), 0) + $8 * COALESCE(1.0/(60 + lex.rank), 0)) AS score
       FROM filtered c
