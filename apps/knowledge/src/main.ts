@@ -25,6 +25,7 @@ import type { SourceIngestionResult } from './ingestion-workflows.js';
 import { SearchService, type PolicyDecision, type SearchDeps } from './search.js';
 import { SessionCacheGenerations } from './session-cache-generations.js';
 import { runSessionCacheInvalidator } from './session-cache-invalidator.js';
+import { createSessionCacheMetrics } from './session-cache-metrics.js';
 import { SessionContextCache, ensureSessionCacheBucket } from './session-cache.js';
 import { PgKnowledgeStore } from './store.js';
 
@@ -69,7 +70,10 @@ const clientSecret = env('ACP_KNOWLEDGE_CLIENT_SECRET', 'knowledge-dev-secret');
 // cache. Authorization is never cached — SearchService still verifies + Cedar-
 // gates every call and emits retrieval.served on a hit.
 const sessionCacheEnabled = env('ACP_SESSION_CACHE_ENABLED', 'false') === 'true';
-let sessionCacheDeps: Pick<SearchDeps, 'cache' | 'gens' | 'killSwitch' | 'cacheTtlMs'> = {};
+let sessionCacheDeps: Pick<
+  SearchDeps,
+  'cache' | 'gens' | 'killSwitch' | 'cacheTtlMs' | 'cacheMetrics'
+> = {};
 let sessionCacheGenerations: SessionCacheGenerations | undefined;
 let sessionCacheKillSwitch: KillSwitchWatcher | undefined;
 if (sessionCacheEnabled) {
@@ -90,6 +94,7 @@ if (sessionCacheEnabled) {
     gens: sessionCacheGenerations,
     killSwitch: sessionCacheKillSwitch,
     cacheTtlMs,
+    cacheMetrics: createSessionCacheMetrics(),
   };
   logger.info({ maxValueBytes, maxBytes, cacheTtlMs }, 'session context cache enabled');
 }
