@@ -192,6 +192,19 @@ const services = [
     ['deploy/mocks/dist/netsec/main.js'],
     { ACP_MOCK_NETSEC_PORT: '7304', ACP_MOCK_FIXTURES: join(repoRoot, 'fixtures', 'acme-corp') },
   ],
+  // Item 3 (a2a proxy): a mock third-party A2A JSON-RPC remote. The external-echo
+  // proxy agent reaches it with its OWN credential (ACP_PROXY_CREDENTIAL); the
+  // mock rejects any other bearer, so the E2E proves the platform's delegated
+  // token never egresses to it.
+  [
+    'a2a-mock',
+    'node',
+    ['deploy/mocks/dist/a2a/main.js'],
+    {
+      ACP_MOCK_A2A_PORT: '7305',
+      ACP_MOCK_A2A_CREDENTIAL: 'external-echo-remote-dev-credential',
+    },
+  ],
   // Item 5: agent tool calls traverse the Tool Gateway PEP; the mocks stay
   // reachable on 7301/7302 as the gateway's upstreams only. Item 0c: each
   // agent holds its OWN token-service client so it can exchange the step's
@@ -249,6 +262,21 @@ const services = [
       ACP_AGENT_CLIENT_SECRET: 'agent-netsec-dev-secret',
     },
   ],
+  // Item 3 (a2a proxy): the external-echo proxy agent. It uses noRetriever, so
+  // the worker needs no NATS creds; it forwards its capability to the mock A2A
+  // remote (7305) with its OWN ACP_PROXY_CREDENTIAL — never the delegated token.
+  [
+    'external-echo-agent',
+    'node',
+    ['agents/external-echo/dist/main.js'],
+    {
+      ACP_PROXY_ENDPOINT: 'http://localhost:7305/a2a',
+      ACP_PROXY_CREDENTIAL: 'external-echo-remote-dev-credential',
+      ACP_AGENT_CLIENT_ID: 'agent-external-echo',
+      // Version-qualifies this worker's task queue (item 4).
+      ACP_AGENT_VERSION: '0.1.0',
+    },
+  ],
 ];
 
 // Pre-flight: a platform already running would produce EADDRINUSE chaos.
@@ -300,7 +328,9 @@ process.on('SIGTERM', () => shutdown(0));
 
 // Readiness gate: every HTTP door answers /healthz. The mocks (7301/7302)
 // have one; the agents are Temporal workers with no HTTP door.
-const healthPorts = [7101, 7102, 7103, 7104, 7105, 7106, 7107, 7100, 7108, 7301, 7302, 7303, 7304];
+const healthPorts = [
+  7101, 7102, 7103, 7104, 7105, 7106, 7107, 7100, 7108, 7301, 7302, 7303, 7304, 7305,
+];
 const deadline = Date.now() + 120_000;
 for (const port of healthPorts) {
   for (;;) {

@@ -177,6 +177,14 @@
     "scopes": []
   },
   {
+    "client_id": "agent-external-echo",
+    "client_secret": "agent-external-echo-dev-secret",
+    "principal": "agent:external-echo@0.1.0",
+    "tenant": "acme",
+    "roles": ["agent"],
+    "scopes": []
+  },
+  {
     "client_id": "svc-ci",
     "client_secret": "ci-dev-secret",
     "principal": "svc:agent-ci",
