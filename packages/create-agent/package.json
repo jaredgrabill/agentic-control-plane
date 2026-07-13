@@ -1,6 +1,6 @@
 {
   "name": "@acp/create-agent",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Scaffolder for ACP TypeScript agents: manifest, handlers, eval harness, CI — working out of the box",
   "license": "MIT",
   "type": "module",
