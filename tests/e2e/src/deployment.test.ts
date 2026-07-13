@@ -557,4 +557,67 @@ describe('deployment controller v0 (DoD)', () => {
     const post = (await acmeAudit('step.completed')).filter((e) => e.reason?.task_id === postId);
     expect(post.some((e) => e.artifacts?.agent_version === '0.2.0')).toBe(true);
   }, 300_000);
+
+  it('registry invariants (real pg): the partial-unique indexes reject duplicate active/candidate versions', async () => {
+    // The one_active_version / one_candidate_version partial-unique indexes are
+    // the registry's versioned-card invariants — unit tests run on an in-memory
+    // mock, so the actual index enforcement (and the 23505 + constraint-name
+    // shape PgRegistryStore's mapInvariant translates into InvariantViolation)
+    // only proves out against REAL postgres. Throwaway agent_ids; scoped cleanup.
+    const db = (registryDb ??= new pg.Pool({ connectionString: DB_URL }));
+    const agentId = `inv-test-${Math.floor(Math.random() * 1e6)}`;
+    const insert = (version: string, state: string) =>
+      db.query(
+        `INSERT INTO agent_versions (agent_id, version, state, card, updated_at)
+         VALUES ($1, $2, $3, $4, now())`,
+        [agentId, version, state, JSON.stringify({ v: version, lifecycle_state: state })],
+      );
+    try {
+      await insert('0.1.0', 'active');
+
+      // A duplicate active version violates one_active_version — the exact
+      // (code 23505, constraint name) pair mapInvariant matches to raise
+      // InvariantViolation('one_active_version').
+      const dupActive = await insert('0.2.0', 'active').then(
+        () => undefined,
+        (err: unknown) => err as { code?: string; constraint?: string },
+      );
+      expect(dupActive, 'second active insert must be rejected').toBeDefined();
+      expect(dupActive?.code).toBe('23505');
+      expect(dupActive?.constraint).toBe('one_active_version');
+
+      // One candidate at a time: shadow then canary for the same agent.
+      await insert('0.2.0', 'shadow');
+      const dupCandidate = await insert('0.3.0', 'canary').then(
+        () => undefined,
+        (err: unknown) => err as { code?: string; constraint?: string },
+      );
+      expect(dupCandidate?.code).toBe('23505');
+      expect(dupCandidate?.constraint).toBe('one_candidate_version');
+
+      // CONCURRENT duplicate-active race on a fresh agent: exactly one of two
+      // simultaneous inserts wins; the loser gets the same invariant violation
+      // (the index arbitrates under concurrency, not just sequential inserts).
+      const racerId = `${agentId}-race`;
+      const race = (version: string) =>
+        db
+          .query(
+            `INSERT INTO agent_versions (agent_id, version, state, card, updated_at)
+             VALUES ($1, $2, 'active', $3, now())`,
+            [racerId, version, JSON.stringify({ v: version, lifecycle_state: 'active' })],
+          )
+          .then(
+            () => 'inserted' as const,
+            (err: unknown) => (err as { constraint?: string }).constraint ?? 'other-error',
+          );
+      const outcomes = await Promise.all([race('1.0.0'), race('1.0.1')]);
+      expect(outcomes.filter((o) => o === 'inserted')).toHaveLength(1);
+      expect(outcomes.filter((o) => o === 'one_active_version')).toHaveLength(1);
+    } finally {
+      await db.query(`DELETE FROM agent_versions WHERE agent_id IN ($1, $2)`, [
+        agentId,
+        `${agentId}-race`,
+      ]);
+    }
+  }, 60_000);
 });

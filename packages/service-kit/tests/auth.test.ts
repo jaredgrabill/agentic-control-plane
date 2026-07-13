@@ -4,8 +4,10 @@ import {
   AuthError,
   JwtVerifier,
   assertPlatformClaims,
+  assertTenantAccess,
   delegationChain,
   intersectScopes,
+  isPlatformRole,
   scopesOf,
 } from '../src/auth.js';
 
@@ -128,6 +130,64 @@ describe('scopes', () => {
     expect(scopesOf({ scope: 'a b' })).toEqual(['a', 'b']);
     expect(intersectScopes(['a', 'c'], ['a', 'b'])).toEqual(['a']);
     expect(intersectScopes([], ['a'])).toEqual([]);
+  });
+});
+
+describe('isPlatformRole / assertTenantAccess', () => {
+  const platformSvc = { sub: 'svc:orchestrator', tenant: 'platform', roles: ['platform'] };
+  const platformAdmin = { sub: 'user:auditor', tenant: 'acme', roles: ['platform-admin'] };
+  // A tenant-scoped service principal: `svc:*` sub but NO platform role. Its
+  // name must NOT confer cross-tenant authority (would be a tenant-isolation
+  // hole — a per-tenant exporter could read every tenant's audit trail).
+  const tenantSvc = { sub: 'svc:prober', tenant: 'acme', roles: ['tenant-user'] };
+  const tenantUser = { sub: 'user:jane.doe', tenant: 'acme', roles: ['tenant-user'] };
+
+  it('recognizes the platform role family, not the principal-name shape', () => {
+    expect(isPlatformRole(platformSvc)).toBe(true);
+    expect(isPlatformRole(platformAdmin)).toBe(true);
+    // authority is the role, never the `svc:` name: a role-less service or a
+    // tenant-scoped `svc:` principal is not a platform operator.
+    expect(isPlatformRole(tenantSvc)).toBe(false);
+    expect(isPlatformRole({ sub: 'svc:agent-ci', roles: [] as string[] })).toBe(false);
+    expect(isPlatformRole(tenantUser)).toBe(false);
+    // 'platform' must be a role or role prefix, not a substring/tenant match.
+    expect(isPlatformRole({ sub: 'user:eve', roles: ['not-platform'] })).toBe(false);
+  });
+
+  it('lets platform-family callers cross tenants', () => {
+    expect(() => {
+      assertTenantAccess(platformSvc, 'acme');
+    }).not.toThrow();
+    expect(() => {
+      assertTenantAccess(platformAdmin, 'other-tenant');
+    }).not.toThrow();
+  });
+
+  it('binds a tenant-scoped svc principal to its own tenant', () => {
+    expect(() => {
+      assertTenantAccess(tenantSvc, 'acme');
+    }).not.toThrow();
+    try {
+      assertTenantAccess(tenantSvc, 'globex');
+      expect.unreachable('a svc:* name must not grant cross-tenant access');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as AuthError).statusCode).toBe(403);
+    }
+  });
+
+  it('binds a non-platform caller to its own token tenant', () => {
+    expect(() => {
+      assertTenantAccess(tenantUser, 'acme');
+    }).not.toThrow();
+    try {
+      assertTenantAccess(tenantUser, 'globex');
+      expect.unreachable('cross-tenant access must throw');
+    } catch (err) {
+      expect(err).toBeInstanceOf(AuthError);
+      expect((err as AuthError).statusCode).toBe(403);
+      expect((err as AuthError).message).toMatch(/may not access tenant globex/);
+    }
   });
 });
 

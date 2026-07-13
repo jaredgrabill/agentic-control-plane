@@ -12,12 +12,22 @@ import httpx
 from acp_agent_sdk.errors import CapabilityError, ErrorClass
 from acp_agent_sdk.model import ModelCallContext, ModelResponse
 
-_USAGE_KEYS = (
-    "input_tokens",
-    "output_tokens",
-    "cache_read_input_tokens",
-    "cache_creation_input_tokens",
+# Wire-shape parity with @acp/llm-client's completionResponseSchema (Ajv):
+# same required keys, additionalProperties: false at every level, same
+# per-field constraints. A response the TS client would refuse must be
+# refused here too (malformed -> RETRYABLE), never partially trusted.
+_RESPONSE_KEYS = frozenset(
+    ("text", "model_class", "model", "provider", "model_classes_version", "usage", "attempts")
 )
+_USAGE_KEYS = frozenset(
+    (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+    )
+)
+_ATTEMPT_KEYS = frozenset(("provider", "model", "outcome", "duration_ms"))
 
 
 class GatewayModel:
@@ -134,12 +144,48 @@ def _to_capability_error(res: httpx.Response) -> CapabilityError:
     return CapabilityError(ErrorClass.PERMANENT, message, details)
 
 
+def _is_nonneg_int(value: Any) -> bool:
+    # bool is an int subclass in Python; the wire type is integer, not boolean.
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
+def _is_nonneg_number(value: Any) -> bool:
+    return isinstance(value, int | float) and not isinstance(value, bool) and value >= 0
+
+
+def _is_nonempty_str(value: Any) -> bool:
+    return isinstance(value, str) and value != ""
+
+
+def _is_valid_attempt(attempt: Any) -> bool:
+    if not isinstance(attempt, dict) or set(attempt) != _ATTEMPT_KEYS:
+        return False
+    return (
+        _is_nonempty_str(attempt["provider"])
+        and _is_nonempty_str(attempt["model"])
+        and _is_nonempty_str(attempt["outcome"])
+        and _is_nonneg_number(attempt["duration_ms"])
+    )
+
+
 def _is_valid_completion(body: Any) -> bool:
-    if not isinstance(body, dict):
+    """Mirror of the TS Ajv completionResponseSchema: all required keys
+    present, no unknown keys anywhere, same field constraints."""
+    if not isinstance(body, dict) or set(body) != _RESPONSE_KEYS:
         return False
-    if not isinstance(body.get("text"), str) or not isinstance(body.get("model"), str):
+    if not isinstance(body["text"], str):
         return False
-    usage = body.get("usage")
-    if not isinstance(usage, dict):
+    if not all(
+        _is_nonempty_str(body[key])
+        for key in ("model_class", "model", "provider", "model_classes_version")
+    ):
         return False
-    return all(isinstance(usage.get(key), int) for key in _USAGE_KEYS)
+    usage = body["usage"]
+    if not isinstance(usage, dict) or set(usage) != _USAGE_KEYS:
+        return False
+    if not all(_is_nonneg_int(usage[key]) for key in _USAGE_KEYS):
+        return False
+    attempts = body["attempts"]
+    if not isinstance(attempts, list) or len(attempts) == 0:
+        return False
+    return all(_is_valid_attempt(attempt) for attempt in attempts)

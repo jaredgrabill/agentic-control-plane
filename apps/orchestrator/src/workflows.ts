@@ -62,6 +62,7 @@ import {
   type ProbeWorkflowInput,
   type StepDispatch,
   type StepExecution,
+  type TaskWorkflowOptions,
 } from './types.js';
 
 /** Risk classes whose completed writes are candidates for the compensation stack. */
@@ -72,7 +73,16 @@ const control = proxyActivities<ControlActivities>({
   retry: { maximumAttempts: 3 },
 });
 
-export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
+/**
+ * `opts` is internal orchestrator plumbing, NOT part of the protocol
+ * TaskRequest: only the ProbeWorkflow passes it (probe: true → every step
+ * routes active-only). The gateway starts TaskWorkflow with the single
+ * TaskRequest argument, so external callers cannot set it.
+ */
+export async function TaskWorkflow(
+  task: TaskRequest,
+  opts?: TaskWorkflowOptions,
+): Promise<TaskResult> {
   // Cancellation: the task body runs NON-cancellable so a cancel (or a
   // kill-switch-driven cancel) never tears the workflow down mid-write.
   // Instead the root scope's cancelRequested sets a flag and cancels ONLY the
@@ -95,6 +105,7 @@ export async function TaskWorkflow(task: TaskRequest): Promise<TaskResult> {
       (scope) => {
         waveScope = scope;
       },
+      opts,
     ),
   );
 }
@@ -103,6 +114,7 @@ async function runTaskBody(
   task: TaskRequest,
   isCancelled: () => boolean,
   setWaveScope: (scope: CancellationScope | undefined) => void,
+  opts?: TaskWorkflowOptions,
 ): Promise<TaskResult> {
   if (task.subject_token === undefined) {
     return fail(task, {
@@ -346,6 +358,7 @@ async function runTaskBody(
                   plan,
                   planDigest,
                   ...(remaining === undefined ? {} : { budget: remaining }),
+                  ...(opts?.probe === true ? { probe: true } : {}),
                 }),
               ),
             );
@@ -484,6 +497,8 @@ async function runTaskBody(
           depth: 1,
           plan,
           planDigest,
+          // NOT probe-flagged even inside a probe task: the compensator pin
+          // (exact version that did the write) always wins over active-only.
           compensation: {
             originalStepId: entry.originalStepId,
             originalCapability: entry.originalCapability,
@@ -752,6 +767,9 @@ async function runAgentStep(
             version: dispatch.compensation.agentVersion,
           },
         }),
+    // A probe step routes ACTIVE-ONLY: no canary session pin, no shadow
+    // mirror (the probe score attributes to the active version).
+    ...(dispatch.probe === true ? { activeOnly: true } : {}),
   });
   if (route === null) {
     return failed({
@@ -1344,6 +1362,10 @@ export async function ProbeWorkflow(input: ProbeWorkflowInput): Promise<void> {
                 input: { text: testCase.input, capability: target.capability },
                 budget: { max_steps: 2 },
               },
+              // Probe tasks route ACTIVE-ONLY: recordProbeResult attributes
+              // the known-answer score to the active version, so the probe
+              // must never session-pin onto a canary or mirror to a shadow.
+              { probe: true },
             ],
           });
           answer = result.answer ?? null;

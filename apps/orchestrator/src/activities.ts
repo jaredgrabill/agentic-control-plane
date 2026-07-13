@@ -404,6 +404,21 @@ export function createControlActivities(deps: ControlDeps): ControlActivities {
               boost,
             }).selected;
 
+      // A probe dispatch (activeOnly) routes to WHATEVER is currently active:
+      // recordProbeResult attributes the known-answer score to the ACTIVE
+      // version, so a probe must never session-pin onto a canary candidate or
+      // be shadow-mirrored. Distinct from `pin` (exact version, compensators):
+      // active-only follows promotions.
+      if (input.activeOnly === true) {
+        if (set.active === undefined) return null;
+        return {
+          card: set.active,
+          route: 'active',
+          bucket,
+          judge_sample: sample(set.active.manifest.id),
+        };
+      }
+
       // Canary session pinning: this task's bucket falls under the ramp → the
       // whole task runs the candidate; otherwise the incumbent.
       if (set.canary !== undefined && bucket < set.canary.ramp_percent) {

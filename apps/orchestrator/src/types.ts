@@ -25,6 +25,20 @@ export interface ProbeWorkflowInput {
   cycle?: number;
 }
 
+/**
+ * Internal (non-protocol) options the orchestrator attaches to a TaskWorkflow
+ * start alongside the TaskRequest. `probe` is set ONLY by the ProbeWorkflow on
+ * its child tasks: every step of a probe task routes ACTIVE-ONLY (resolveRoute
+ * skips the canary session pin and shadow mirroring), because
+ * recordProbeResult attributes the known-answer score to the ACTIVE version —
+ * a probe that silently ran on a canary candidate would mis-attribute it.
+ * Distinct from a compensator's `pin` (exact version): a probe wants whatever
+ * is active NOW, following promotions.
+ */
+export interface TaskWorkflowOptions {
+  probe?: boolean;
+}
+
 export type { GateReport, GateThresholds } from './deployment-gates.js';
 
 /**
@@ -78,6 +92,12 @@ export interface StepDispatch {
    * compensator is pre-authorized by the original write's approval).
    */
   compensation?: CompensationDispatch;
+  /**
+   * Set ONLY when this dispatch belongs to a ProbeWorkflow child task: the
+   * step routes ACTIVE-ONLY (no canary session pin, no shadow mirror) so the
+   * probe score attributes to the version recordProbeResult resolves.
+   */
+  probe?: boolean;
 }
 
 /** Compensation provenance carried on a compensator's StepDispatch. */
@@ -433,6 +453,12 @@ export interface ControlActivities {
     /** The step being routed — feeds deterministic per-step judge sampling (item 6). */
     stepId?: string;
     pin?: { agentId: string; version: string };
+    /**
+     * Probe dispatches: route to WHATEVER is currently active — skip the
+     * canary session pin and never mirror to a shadow. Distinct from `pin`
+     * (exact version, compensators): active-only follows promotions.
+     */
+    activeOnly?: boolean;
   }): Promise<RouteResult | null>;
   /**
    * Online-eval (item 6): score one completed step with the calibrated judge

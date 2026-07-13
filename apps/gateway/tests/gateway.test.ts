@@ -602,6 +602,28 @@ describe('approval API', () => {
       expect(req.config.thresholds.max_p95_ratio).toBe(1.5);
     });
 
+    it('403s a non-platform caller deploying into a foreign tenant', async () => {
+      // A tenant-user token (non-platform, non-svc) may only target its own tenant.
+      const userToken = () =>
+        makeToken({ sub: 'user:jane.doe', roles: ['tenant-user'], scope: 'deploy:write' });
+      const foreign = await app.inject({
+        method: 'POST',
+        url: '/v1/deployments',
+        headers: { authorization: `Bearer ${await userToken()}` },
+        payload: { agent_id: 'knowledge-agent', candidate_version: '0.2.0', tenant: 'globex' },
+      });
+      expect(foreign.statusCode).toBe(403);
+      expect(deployStarts).toHaveLength(0);
+
+      const own = await app.inject({
+        method: 'POST',
+        url: '/v1/deployments',
+        headers: { authorization: `Bearer ${await userToken()}` },
+        payload: { agent_id: 'knowledge-agent', candidate_version: '0.2.0', tenant: 'acme' },
+      });
+      expect(own.statusCode).toBe(202);
+    });
+
     it('409s a second concurrent deployment (singleton)', async () => {
       deployStartResult = { outcome: 'already_running' };
       const res = await app.inject({
