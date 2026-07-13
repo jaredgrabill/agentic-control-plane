@@ -10,6 +10,30 @@
     "python/acp-protocol": {
       "release-type": "python",
       "component": "acp-protocol"
+    },
+    "packages/agent-sdk": {
+      "release-type": "node",
+      "component": "agent-sdk"
+    },
+    "packages/tool-client": {
+      "release-type": "node",
+      "component": "tool-client"
+    },
+    "packages/llm-client": {
+      "release-type": "node",
+      "component": "llm-client"
+    },
+    "packages/create-agent": {
+      "release-type": "node",
+      "component": "create-agent"
+    },
+    "python/acp-agent-sdk": {
+      "release-type": "python",
+      "component": "acp-agent-sdk"
+    },
+    "python/acp-create-agent": {
+      "release-type": "python",
+      "component": "acp-create-agent"
     }
   },
   "plugins": [

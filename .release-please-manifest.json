@@ -1,4 +1,10 @@
 {
   "packages/protocol": "0.1.0",
-  "python/acp-protocol": "0.1.0"
+  "python/acp-protocol": "0.1.0",
+  "packages/agent-sdk": "0.1.0",
+  "packages/tool-client": "0.1.0",
+  "packages/llm-client": "0.1.0",
+  "packages/create-agent": "0.1.0",
+  "python/acp-agent-sdk": "0.1.0",
+  "python/acp-create-agent": "0.1.0"
 }

@@ -15,6 +15,10 @@
     "typecheck": "turbo run typecheck",
     "test": "turbo run test",
     "gen": "turbo run gen",
+    "api:report": "node scripts/api-report.mjs",
+    "api:check": "node scripts/api-report.mjs --check",
+    "schema:diff": "node scripts/schema-diff.mjs",
+    "schema:baseline": "node scripts/schema-diff.mjs --write-baseline",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
