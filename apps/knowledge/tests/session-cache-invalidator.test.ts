@@ -28,7 +28,7 @@ function mutation(sourceId: string | undefined, tenant = 'acme'): AuditEvent {
     action: { name: 'corpus.chunk_indexed', inputs_digest: `sha256:${'a'.repeat(64)}` },
     artifacts: { lineage_ids: [randomUUID()] },
     ...(sourceId !== undefined ? { details: { source_id: sourceId } } : {}),
-  } as AuditEvent;
+  };
 }
 
 function msg(event: AuditEvent, seq: number) {

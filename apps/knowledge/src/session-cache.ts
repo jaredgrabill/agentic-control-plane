@@ -187,6 +187,25 @@ export interface SessionCacheKv {
 
 export type CachePutResult = 'ok' | 'too_large' | 'error';
 
+export type CacheRequestResult =
+  | 'hit'
+  | 'miss'
+  | 'stale'
+  | 'expired'
+  | 'disabled'
+  | 'bypassed';
+
+/**
+ * Observability sink for the cache. Defined here (shared) so SearchService can
+ * record outcomes without importing the OTel-backed implementation; a no-op /
+ * absent recorder leaves the flow correct and untouched.
+ */
+export interface SessionCacheMetrics {
+  request(result: CacheRequestResult): void;
+  write(result: CachePutResult): void;
+  eviction(cause: 'stale' | 'expired'): void;
+}
+
 export type EntryValidation =
   | { ok: true }
   | { ok: false; reason: 'expired' | 'tenant_mismatch' | 'perm_mismatch' | 'query_mismatch' | 'stale'; source_id?: string };
@@ -285,6 +304,7 @@ export interface SessionCacheBucketOptions {
  * two views can never disagree. history:1 — only the latest value per key
  * matters. The generation keys (`gen.>`) live in the same bucket.
  */
+/* v8 ignore start -- bucket creation needs a live JetStream; exercised by the E2E suite */
 export async function ensureSessionCacheBucket(
   nc: NatsConnection,
   opts: SessionCacheBucketOptions,
@@ -297,3 +317,4 @@ export async function ensureSessionCacheBucket(
     ttl: opts.ttlMs,
   });
 }
+/* v8 ignore stop */

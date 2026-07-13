@@ -1,7 +1,10 @@
 import { createLogger } from '@acp/service-kit';
 import type { KvWatchInclude } from 'nats';
 import { describe, expect, it } from 'vitest';
-import { SessionCacheGenerations, type GenerationWatchKv } from '../src/session-cache-generations.js';
+import {
+  SessionCacheGenerations,
+  type GenerationWatchKv,
+} from '../src/session-cache-generations.js';
 
 const logger = createLogger('session-cache-generations-test');
 
@@ -15,19 +18,18 @@ interface Entry {
 class FakeWatchKv implements GenerationWatchKv {
   private readonly history: Entry[] = [];
   private readonly live: Entry[] = [];
-  private notify: (() => void) | null = null;
-  private closed = false;
+  private readonly ctl = { closed: false, notify: null as (() => void) | null };
 
   seed(key: string, value: string): void {
     this.history.push(mk(key, value, 'PUT'));
   }
   push(key: string, value: string, operation = 'PUT'): void {
     this.live.push(mk(key, value, operation));
-    this.notify?.();
+    this.ctl.notify?.();
   }
   close(): void {
-    this.closed = true;
-    this.notify?.();
+    this.ctl.closed = true;
+    this.ctl.notify?.();
   }
 
   watch(opts: {
@@ -35,15 +37,17 @@ class FakeWatchKv implements GenerationWatchKv {
     include: KvWatchInclude;
     initializedFn?: () => void;
   }): Promise<AsyncIterable<Entry>> {
-    const self = this;
+    const { history, live, ctl } = this;
     async function* gen(): AsyncGenerator<Entry> {
-      for (const e of self.history) yield e;
+      for (const e of history) yield e;
       opts.initializedFn?.();
-      while (!self.closed) {
-        while (self.live.length > 0) yield self.live.shift() as Entry;
-        if (self.closed) break;
+      while (!ctl.closed) {
+        while (live.length > 0) {
+          const e = live.shift();
+          if (e !== undefined) yield e;
+        }
         await new Promise<void>((resolve) => {
-          self.notify = resolve;
+          ctl.notify = resolve;
         });
       }
     }

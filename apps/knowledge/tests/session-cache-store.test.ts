@@ -98,6 +98,21 @@ describe('SessionContextCache store', () => {
     const cache = new SessionContextCache(kv, 262_144, logger);
     expect(await cache.get('k')).toBeUndefined();
   });
+
+  it('evicts a key, and a delete failure is swallowed', async () => {
+    const kv = new FakeKv();
+    const cache = new SessionContextCache(kv, 262_144, logger);
+    await cache.put('k', entry());
+    await cache.evict('k');
+    expect(kv.store.has('k')).toBe(false);
+    // A throwing delete must not surface on the hot path.
+    const throwing = new SessionContextCache(
+      { get: kv.get.bind(kv), put: kv.put.bind(kv), delete: () => Promise.reject(new Error('kv down')) },
+      262_144,
+      logger,
+    );
+    await expect(throwing.evict('k')).resolves.toBeUndefined();
+  });
 });
 
 const expected = { tenant: 'acme', permHashHex: 'p'.repeat(64), queryHashHex: 'q'.repeat(64) };

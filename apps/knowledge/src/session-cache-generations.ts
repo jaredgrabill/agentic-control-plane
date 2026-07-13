@@ -34,6 +34,7 @@ export interface GenerationWatchKv {
 export class SessionCacheGenerations {
   private readonly gens = new Map<string, string>();
   private stopped = false;
+  private seeded = false;
   private resolveReady!: () => void;
   /** Resolves once the initial history batch has been applied. */
   readonly ready: Promise<void>;
@@ -43,6 +44,15 @@ export class SessionCacheGenerations {
     this.ready = new Promise((resolve) => {
       this.resolveReady = resolve;
     });
+  }
+
+  /**
+   * Synchronous readiness for the retrieval hot path: false until the initial
+   * history batch has drained, so the cache treats itself as disabled and
+   * serves live rather than reading against an unseeded generation view.
+   */
+  isReady(): boolean {
+    return this.seeded;
   }
 
   static async start(nc: NatsConnection, logger: Logger): Promise<SessionCacheGenerations> {
@@ -58,7 +68,10 @@ export class SessionCacheGenerations {
       include: KvWatchInclude.AllHistory,
       // Fired once the historical batch is delivered — the map is now seeded
       // even if there were zero generation keys to replay.
-      initializedFn: () => watcher.resolveReady(),
+      initializedFn: () => {
+        watcher.seeded = true;
+        watcher.resolveReady();
+      },
     });
     void (async () => {
       for await (const entry of iter) {
