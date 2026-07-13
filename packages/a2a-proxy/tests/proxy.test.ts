@@ -152,24 +152,20 @@ describe('registerProxyCapabilities', () => {
 
 describe('sanitizeRemoteOutput', () => {
   it('strips first-party lineage keys the remote must never forge', () => {
-    const clean = sanitizeRemoteOutput(
-      { text: 'x', lineage_id: 'forged', provenance: [{}], card_signature: 'nope' },
-      'echo-remote',
-    );
+    const clean = sanitizeRemoteOutput({
+      text: 'x',
+      lineage_id: 'forged',
+      provenance: [{}],
+      card_signature: 'nope',
+    });
     expect(clean).not.toHaveProperty('lineage_id');
     expect(clean).not.toHaveProperty('provenance');
     expect(clean).not.toHaveProperty('card_signature');
     expect(clean.text).toBe('x');
   });
 
-  it('tags remote citations as external provenance', () => {
-    const clean = sanitizeRemoteOutput(
-      { citations: [{ doc_id: 'remote/doc' }, 'bare'] },
-      'echo-remote',
-    );
-    expect(clean.citations).toEqual([
-      { doc_id: 'remote/doc', source: 'external:echo-remote' },
-      { value: 'bare', source: 'external:echo-remote' },
-    ]);
+  it('empties remote citations (a remote can never supply first-party lineage)', () => {
+    const clean = sanitizeRemoteOutput({ citations: [{ doc_id: 'remote/doc', lineage_id: 'forged' }] });
+    expect(clean.citations).toEqual([]);
   });
 });

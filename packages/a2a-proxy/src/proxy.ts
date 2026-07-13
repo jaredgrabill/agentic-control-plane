@@ -94,7 +94,7 @@ async function proxyStep(
     case 'completed':
       // Untrusted output: sanitize provenance here; the SDK then validates it
       // against the declared output_schema (one repair retry, else permanent).
-      return sanitizeRemoteOutput(view.output, remoteName);
+      return sanitizeRemoteOutput(view.output);
     case 'input-required':
     case 'auth-required':
       // The remote is asking for more input. This is a terminal, non-retryable
@@ -102,7 +102,7 @@ async function proxyStep(
       // dispatch, inside the orchestrator, and is unreachable from here.
       throw new CapabilityError(
         ErrorClass.NeedsInput,
-        `remote agent requires additional input (${view.state})` +
+        `remote agent ${remoteName} requires additional input (${view.state})` +
           (view.message !== undefined ? `: ${view.message}` : ''),
       );
     case 'failed':
@@ -110,13 +110,13 @@ async function proxyStep(
     case 'canceled':
       throw new CapabilityError(
         ErrorClass.Permanent,
-        `remote agent task ${view.state}` +
+        `remote agent ${remoteName} task ${view.state}` +
           (view.message !== undefined ? `: ${view.message}` : ''),
       );
     default:
       throw new CapabilityError(
         ErrorClass.Permanent,
-        `remote agent returned an unexpected terminal state ${JSON.stringify(view.state)}`,
+        `remote agent ${remoteName} returned an unexpected terminal state ${JSON.stringify(view.state)}`,
       );
   }
 }
@@ -126,26 +126,23 @@ const LINEAGE_KEYS = ['lineage_id', 'provenance', 'signature', 'card_signature']
 
 /**
  * Sanitizes an untrusted remote output before it re-enters the platform:
- * strips any field that would forge first-party lineage, and TAGS any
- * remote-supplied citations with `source: external:<remoteName>` so downstream
- * consumers can never mistake them for governed first-party citations.
+ *
+ *   - strips any field that would forge first-party lineage/provenance; and
+ *   - EMPTIES the first-party `citations` array. A remote can never supply a
+ *     first-party citation — the platform's Citation contract requires a
+ *     lineage_id minted inside the trust boundary, and the whole point of this
+ *     adapter is that the remote is untrusted. Rather than forge lineage (a
+ *     leak) or masquerade remote docs as governed sources, remote citations are
+ *     dropped: the answer stands on its text alone, attributed to the proxy.
  */
-export function sanitizeRemoteOutput(
-  output: Record<string, unknown>,
-  remoteName: string,
-): Record<string, unknown> {
+export function sanitizeRemoteOutput(output: Record<string, unknown>): Record<string, unknown> {
   // Rebuild without the lineage keys (never `delete`, so no property is left as
   // an explicit `undefined` the strict output_schema could trip on).
   const clean: Record<string, unknown> = Object.fromEntries(
     Object.entries(output).filter(([key]) => !LINEAGE_KEYS.includes(key)),
   );
-  const citations = clean.citations;
-  if (Array.isArray(citations)) {
-    clean.citations = (citations as unknown[]).map((citation) =>
-      typeof citation === 'object' && citation !== null
-        ? { ...(citation as Record<string, unknown>), source: `external:${remoteName}` }
-        : { value: citation, source: `external:${remoteName}` },
-    );
+  if (Array.isArray(clean.citations)) {
+    clean.citations = [];
   }
   return clean;
 }
