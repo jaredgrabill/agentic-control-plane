@@ -20,6 +20,7 @@ export interface ChangeRecord {
   title: string;
   description?: string;
   service?: string;
+  deploy_id?: string;
   status: ChangeStatus;
   window?: ChangeWindow;
   created_at: string;

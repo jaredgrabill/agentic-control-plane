@@ -31,6 +31,29 @@ describe('ItsmStore read tools', () => {
     });
   });
 
+  it('change_record_lookup finds records by service and deploy_id', () => {
+    const store = freshStore();
+    const byDeploy = okData(store.changeRecordLookup({ deploy_id: 'd-2026-07-01-042' }));
+    expect((byDeploy.changes as { change_id: string }[]).map((c) => c.change_id)).toEqual([
+      'CHG-1006',
+    ]);
+    expect(byDeploy.total_matched).toBe(1);
+
+    const joined = okData(
+      store.changeRecordLookup({ service: 'payments-api', deploy_id: 'd-2026-07-01-042' }),
+    );
+    expect((joined.changes as { deploy_id?: string }[])[0]?.deploy_id).toBe('d-2026-07-01-042');
+
+    const empty = okData(store.changeRecordLookup({ deploy_id: 'd-0000-00-00-000' }));
+    expect(empty.changes).toEqual([]);
+    expect(empty.total_matched).toBe(0);
+
+    expect(store.changeRecordLookup({})).toEqual({
+      kind: 'invalid_input',
+      message: 'provide at least one of service or deploy_id',
+    });
+  });
+
   it('calendar_conflicts reports overlapping scheduled changes and freezes', () => {
     const store = freshStore();
     const data = okData(

@@ -52,6 +52,11 @@ export interface ChangeGetArgs {
   change_id?: string | undefined;
 }
 
+export interface ChangeRecordLookupArgs {
+  service?: string | undefined;
+  deploy_id?: string | undefined;
+}
+
 export interface CalendarConflictsArgs {
   window?: ChangeWindow | undefined;
   service?: string | undefined;
@@ -102,6 +107,42 @@ export class ItsmStore {
       return { kind: 'not_found', message: `change ${id} is not in the change log` };
     }
     return { kind: 'ok', data: { change: { ...record } } };
+  }
+
+  /**
+   * Read tool: find change records by service and/or deploy_id (at least one
+   * filter — an unfiltered dump of the change log is not a lookup). A
+   * covered-but-empty match is `ok` with an empty list so a caller can tell a
+   * genuine "no linked change" from a coverage miss; it never mutates.
+   */
+  changeRecordLookup(args: ChangeRecordLookupArgs): ItsmOutcome {
+    const service = args.service;
+    const deployId = args.deploy_id;
+    if (
+      (typeof service !== 'string' || service === '') &&
+      (typeof deployId !== 'string' || deployId === '')
+    ) {
+      return {
+        kind: 'invalid_input',
+        message: 'provide at least one of service or deploy_id',
+      };
+    }
+    const matched = [...this.changes.values()]
+      .filter(
+        (r) =>
+          (service === undefined || service === '' || r.service === service) &&
+          (deployId === undefined || deployId === '' || r.deploy_id === deployId),
+      )
+      .map((r) => ({ ...r }));
+    return {
+      kind: 'ok',
+      data: {
+        ...(service === undefined || service === '' ? {} : { service }),
+        ...(deployId === undefined || deployId === '' ? {} : { deploy_id: deployId }),
+        changes: matched,
+        total_matched: matched.length,
+      },
+    };
   }
 
   calendarConflicts(args: CalendarConflictsArgs): ItsmOutcome {

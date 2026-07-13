@@ -49,6 +49,21 @@ export function createItsmServer(
   );
 
   server.registerTool(
+    'change_record_lookup',
+    {
+      description:
+        'Find change records in the change log by service and/or deploy_id (at least one ' +
+        'filter). Returns matching records with their status, service, deploy_id, and window, ' +
+        'plus a total match count. A covered-but-empty result is an empty list, not an error.',
+      inputSchema: {
+        service: z.string().optional(),
+        deploy_id: z.string().optional(),
+      },
+    },
+    (args) => respond(changeDoc, store.changeRecordLookup(args)),
+  );
+
+  server.registerTool(
     'calendar_conflicts',
     {
       description:

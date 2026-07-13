@@ -130,6 +130,59 @@ describe('change.conflict_check', () => {
   });
 });
 
+describe('change.record_lookup', () => {
+  it('links a deploy back to its change record with the change-log citation', async () => {
+    const tools = new FakeToolClient({
+      'itsm.change_record_lookup': () =>
+        logResponse({
+          changes: [
+            {
+              change_id: 'CHG-1006',
+              title: 'Roll out payments-api autoscaling',
+              service: 'payments-api',
+              deploy_id: 'd-2026-07-01-042',
+              status: 'closed',
+            },
+          ],
+          total_matched: 1,
+        }),
+    });
+    const step = await buildAgent(tools).execute(
+      stepRequest('change.record_lookup', {
+        service: 'payments-api',
+        deploy_id: 'd-2026-07-01-042',
+      }),
+    );
+    expect(step.status).toBe('completed');
+    const output = step.output as unknown as AnswerOutput;
+    expect(output.text).toContain('CHG-1006');
+    expect(output.text).toContain('d-2026-07-01-042');
+    expect(output.citations).toEqual([LOG_PROV]);
+    expect(step.usage?.llm_calls).toBe(0);
+  });
+
+  it('reports no linked change, still cited, on an empty result', async () => {
+    const tools = new FakeToolClient({
+      'itsm.change_record_lookup': () => logResponse({ changes: [], total_matched: 0 }),
+    });
+    const step = await buildAgent(tools).execute(
+      stepRequest('change.record_lookup', { deploy_id: 'd-9999-99-99-999' }),
+    );
+    const output = step.output as unknown as AnswerOutput;
+    expect(output.text).toContain('No change record links');
+    expect(output.citations).toEqual([LOG_PROV]);
+    expect(output.abstained).toBeUndefined();
+  });
+
+  it('fails needs_input without a filter, before any tool call', async () => {
+    const tools = new FakeToolClient({});
+    const step = await buildAgent(tools).execute(stepRequest('change.record_lookup', {}));
+    expect(step.status).toBe('failed');
+    expect(step.error?.class).toBe('needs_input');
+    expect(tools.calls).toHaveLength(0);
+  });
+});
+
 describe('change.draft', () => {
   it('creates a draft, returns change_id + status, keyed by the step id', async () => {
     const tools = new FakeToolClient({

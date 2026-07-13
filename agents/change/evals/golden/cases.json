@@ -28,6 +28,32 @@
       "expect": { "abstain": true }
     },
     {
+      "name": "record lookup links a deploy back to its change record",
+      "capability": "change.record_lookup",
+      "input": { "service": "payments-api", "deploy_id": "d-2026-07-01-042" },
+      "expect": {
+        "must_contain": ["CHG-1006", "d-2026-07-01-042", "payments-api"],
+        "must_cite_docs": ["itsm/change-log"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "record lookup for a deploy with no linked change reports it, still cited",
+      "capability": "change.record_lookup",
+      "input": { "deploy_id": "d-9999-99-99-999" },
+      "expect": {
+        "must_contain": ["No change record links"],
+        "must_cite_docs": ["itsm/change-log"],
+        "min_confidence": 0.7
+      }
+    },
+    {
+      "name": "record lookup with no filter is a typed needs_input failure",
+      "capability": "change.record_lookup",
+      "input": {},
+      "expect": { "error_class": "needs_input" }
+    },
+    {
       "name": "draft creates a change and cites the change log",
       "capability": "change.draft",
       "input": { "title": "Rotate the payments-api TLS certificate", "service": "payments-api" },
