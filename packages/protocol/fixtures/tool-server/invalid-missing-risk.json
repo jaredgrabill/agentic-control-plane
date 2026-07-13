@@ -1,0 +1,15 @@
+{
+  "id": "itsm",
+  "url": "http://localhost:7303/mcp",
+  "version": "0.1.0",
+  "owning_team": "team-itsm",
+  "wrapped_sor": "acme ITSM",
+  "data_classification": "internal",
+  "auth": {
+    "mode": "token-exchange",
+    "audience": "acp:tools",
+    "scope": ["itsm:change:read"]
+  },
+  "tools": [{ "name": "change_get", "scope": "itsm:change:read" }],
+  "rate_limit": { "per_minute": 60, "burst": 20 }
+}

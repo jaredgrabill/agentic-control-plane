@@ -57,6 +57,9 @@ class EventType(StrEnum):
     killswitch_activated = "killswitch.activated"
     killswitch_cleared = "killswitch.cleared"
     task_rejected = "task.rejected"
+    tool_server_published = "tool_server.published"
+    tool_server_deprecated = "tool_server.deprecated"
+    client_provisioned = "client.provisioned"
 
 
 class DelegationLink(BaseModel):

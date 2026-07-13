@@ -49,7 +49,10 @@ export type EventType =
   | 'eval.budget_state_changed'
   | 'killswitch.activated'
   | 'killswitch.cleared'
-  | 'task.rejected';
+  | 'task.rejected'
+  | 'tool_server.published'
+  | 'tool_server.deprecated'
+  | 'client.provisioned';
 export type Digest = string;
 
 /**

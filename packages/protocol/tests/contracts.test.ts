@@ -2,11 +2,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  a2aAgentCard,
   agentCard,
   agentManifest,
   auditEvent,
   evalReport,
   taskMessage,
+  toolServerRecord,
   ProtocolValidationError,
 } from '../src/index.js';
 
@@ -14,7 +16,14 @@ const fixturesDir = join(import.meta.dirname, '..', 'fixtures');
 
 interface Case {
   file: string;
-  schema: 'agent-manifest' | 'agent-card' | 'task-contract' | 'audit-event' | 'eval-report';
+  schema:
+    | 'agent-manifest'
+    | 'agent-card'
+    | 'task-contract'
+    | 'audit-event'
+    | 'eval-report'
+    | 'a2a-agent-card'
+    | 'tool-server';
   valid: boolean;
 }
 const { cases } = JSON.parse(readFileSync(join(fixturesDir, 'expectations.json'), 'utf8')) as {
@@ -27,6 +36,8 @@ const parsers = {
   'task-contract': taskMessage,
   'audit-event': auditEvent,
   'eval-report': evalReport,
+  'a2a-agent-card': a2aAgentCard,
+  'tool-server': toolServerRecord,
 } as const;
 
 describe('shared contract fixtures', () => {
