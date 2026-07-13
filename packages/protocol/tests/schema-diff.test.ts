@@ -39,6 +39,27 @@ describe('schema-diff gate', () => {
     expect(msgs).toContain('subjects.widget: verb added: deleted');
   });
 
+  it('flags a constraint ADDED to a previously free-form field as breaking', () => {
+    const bundle = (props: Record<string, unknown>): SchemaBundle => ({
+      schemas: {
+        'w.schema.json': { type: 'object', additionalProperties: false, properties: props },
+      },
+      subjects: { version: 1, entities: {} },
+    });
+    // Baseline: a/b/c accept a superset; narrowing them by adding a type, enum,
+    // or pattern rejects previously-valid documents = breaking (not additive).
+    const base = bundle({ a: {}, b: { type: 'string' }, c: { type: 'string' } });
+    const narrowed = bundle({
+      a: { type: 'string' },
+      b: { type: 'string', enum: ['x', 'y'] },
+      c: { type: 'string', pattern: '^[a-z]+$' },
+    });
+    const msgs = diffBundles(base, narrowed).breaking.map((f) => f.msg);
+    expect(msgs).toContain('type constraint added: "string"');
+    expect(msgs.some((m) => m.startsWith('enum constraint added'))).toBe(true);
+    expect(msgs).toContain('pattern constraint added');
+  });
+
   it('the committed baseline matches the live protocol surface (no drift)', () => {
     // The gate that guards a no-change PR: the frozen baseline must equal what
     // `pnpm gen` reads today, or every unrelated PR would trip the gate.

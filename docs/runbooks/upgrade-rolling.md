@@ -58,9 +58,11 @@ triggers) so a re-run is always safe.
 vocabulary. Adding a new kind (e.g. a new lifecycle event) is safe and additive.
 **Never** rename, renumber, or remove an existing value: historical audit
 records carry it, and the per-tenant hash chain (`acp-audit-chain/v1`) binds the
-serialized event into every subsequent `record_hash`. A removed/renamed enum
-value makes `GET /v1/verify` report `hash_mismatch`. This is enforced as a
-breaking change by `schema-diff`.
+serialized event into every subsequent `record_hash`. Removing or renaming a
+value does not rewrite the stored rows, so `GET /v1/verify` still returns
+`verified: true` — but the historical records can no longer be decoded or
+schema-validated, and cross-language parity breaks. This is enforced as a
+breaking change by `schema-diff` (append-only enum rule).
 
 ## Deploy order (respect the parity gate)
 

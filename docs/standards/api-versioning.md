@@ -73,14 +73,21 @@ For the wire schemas and subject grammar:
 | Add a new schema, `$def`, or subject entity | **minor** |
 | Add a value to an enum | **minor** (append-only — see below) |
 | Add a value to a subject verb list | **minor** |
-| Loosen a constraint (drop/relax `minLength`, `pattern`, `maximum`, …) | **minor** |
+| Loosen a numeric/length bound (drop/raise `maximum`, drop/lower `minLength`, …) | **minor** |
 | Relax a required field to optional | **minor** |
 | Remove or rename a property, `$def`, schema, or subject | **major** |
 | Add a new **required** property | **major** (existing producers omit it) |
 | Remove an enum value or subject verb | **major** |
-| Change a `type`, `const`, `format`, `$ref`, or `pattern` | **major** |
+| Change OR newly add a `type`, `const`, `format`, `$ref`, `pattern`, or `enum` | **major** |
 | Tighten a numeric/length/item bound | **major** |
 | Close an object (`additionalProperties: true → false`) | **major** |
+
+The freeze gate (`scripts/schema-diff.mjs`) treats **any** change to a `pattern`
+or `format` — including relaxing one — as major: deciding whether one regex
+accepts a superset of another is undecidable, so it conservatively requires the
+`breaking` label rather than risk waving through a real narrowing. Likewise,
+*adding* a `type`/`enum`/`pattern`/`format`/`const` to a previously free-form
+field is major (it restricts the accepted set), symmetric to removing one.
 
 For the SDK packages, the usual SemVer rules on the exported TypeScript/Python
 surface apply: adding an export or an optional parameter is minor; removing or

@@ -68,20 +68,33 @@ function diffSchemaNode(path, base, cur, out) {
     return;
   }
 
-  // type: any change narrows or retypes the value → breaking.
-  if ('type' in base && JSON.stringify(base.type) !== JSON.stringify(cur.type)) {
-    breaking(`type ${JSON.stringify(base.type)} → ${JSON.stringify(cur.type)}`);
+  // type: any change narrows or retypes the value → breaking; ADDING a type
+  // where the baseline was untyped also narrows the accepted set → breaking.
+  if ('type' in base) {
+    if (JSON.stringify(base.type) !== JSON.stringify(cur.type)) {
+      breaking(`type ${JSON.stringify(base.type)} → ${JSON.stringify(cur.type)}`);
+    }
+  } else if ('type' in cur) {
+    breaking(`type constraint added: ${JSON.stringify(cur.type)}`);
   }
-  // const / format: a changed literal or format string breaks validators.
-  if ('const' in base && JSON.stringify(base.const) !== JSON.stringify(cur.const)) {
-    breaking(`const ${JSON.stringify(base.const)} → ${JSON.stringify(cur.const)}`);
+  // const / format: a changed OR newly-added literal/format narrows validators.
+  if ('const' in base) {
+    if (JSON.stringify(base.const) !== JSON.stringify(cur.const)) {
+      breaking(`const ${JSON.stringify(base.const)} → ${JSON.stringify(cur.const)}`);
+    }
+  } else if ('const' in cur) {
+    breaking(`const constraint added: ${JSON.stringify(cur.const)}`);
   }
-  if ('format' in base && base.format !== cur.format) {
-    breaking(`format ${base.format} → ${cur.format}`);
+  if ('format' in base) {
+    if (base.format !== cur.format) breaking(`format ${base.format} → ${cur.format}`);
+  } else if ('format' in cur) {
+    breaking(`format constraint added: ${cur.format}`);
   }
-  // pattern: any change tightens or retypes a string field → breaking.
-  if ('pattern' in base && base.pattern !== cur.pattern) {
-    breaking(`pattern changed`);
+  // pattern: any change OR a newly-added pattern tightens a string field → breaking.
+  if ('pattern' in base) {
+    if (base.pattern !== cur.pattern) breaking(`pattern changed`);
+  } else if ('pattern' in cur) {
+    breaking(`pattern constraint added`);
   }
   // $ref retarget is a structural change of the referenced contract.
   if ('$ref' in base && base.$ref !== cur.$ref) {
@@ -118,6 +131,9 @@ function diffSchemaNode(path, base, cur, out) {
     for (const v of arr(cur.enum)) {
       if (!baseEnum.has(v)) additive(`enum value added: ${JSON.stringify(v)}`);
     }
+  } else if (Array.isArray(cur.enum)) {
+    // A newly-added enum where the baseline was free-form restricts the set.
+    breaking(`enum constraint added: ${JSON.stringify(cur.enum)}`);
   }
 
   // Numeric constraints: added or tightened → breaking; removed or loosened → additive.
