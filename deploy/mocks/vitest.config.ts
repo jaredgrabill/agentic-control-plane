@@ -11,6 +11,7 @@ export default defineConfig({
         'src/cloud/main.ts',
         'src/forge/main.ts',
         'src/netsec/main.ts',
+        'src/a2a/main.ts',
         'src/shared/http.ts',
         'src/index.ts',
       ],

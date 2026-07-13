@@ -61,3 +61,10 @@ export {
   IdempotencyLedger,
   type LedgerLookup,
 } from './shared/idempotency.js';
+export {
+  authorized,
+  handleA2ARpc,
+  type A2ATask,
+  type JsonRpcRequest,
+  type JsonRpcResult,
+} from './a2a/server.js';
