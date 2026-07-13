@@ -5,6 +5,16 @@ import { genKey } from './session-cache.js';
 
 export const INVALIDATOR_CONSUMER = 'session-cache-invalidator';
 
+/**
+ * source_id must be a NATS-KV-legal key token so `gen.<tenant>.<source_id>` is
+ * a writable key. source_id is producer-controlled and (unlike tenant) has no
+ * schema pattern, so a KV-illegal char (space, `*`, `>`, `:`, …) would make
+ * kv.put throw at the KV layer — indistinguishable from a transient I/O error,
+ * which would NAK and redeliver forever (no max_deliver). We validate up front
+ * and park such a message instead, matching the malformed-event path.
+ */
+const KV_LEGAL_SOURCE_ID = /^[\w./=-]+$/;
+
 /** The narrow KV surface the invalidator writes generations through. */
 export interface InvalidatorKv {
   get(key: string): Promise<{ string(): string } | null>;
@@ -55,6 +65,16 @@ export async function handleCorpusMutation(
   const sourceId = typeof details?.source_id === 'string' ? details.source_id : undefined;
   if (sourceId === undefined) {
     msg.ack();
+    return 'skipped';
+  }
+  // A KV-illegal source_id can never become a writable key; redelivery cannot
+  // fix it, so park it rather than NAK-loop (validateKey would throw at put()).
+  if (!KV_LEGAL_SOURCE_ID.test(sourceId)) {
+    logger.error(
+      { subject: msg.subject, source_id: sourceId },
+      'corpus.mutation with a KV-illegal source_id terminated',
+    );
+    msg.term();
     return 'skipped';
   }
 

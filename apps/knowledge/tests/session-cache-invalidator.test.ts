@@ -126,6 +126,21 @@ describe('handleCorpusMutation', () => {
     expect(m.term).toHaveBeenCalledOnce();
   });
 
+  it('terminates a KV-illegal source_id instead of NAK-looping forever', async () => {
+    const kv = new FakeKv();
+    // A space is not a legal KV key char: kv.put would throw indistinguishably
+    // from a transient fault. Park it (term), never NAK — no source-controlled
+    // value can wedge the consumer in an infinite redelivery loop.
+    for (const bad of ['policy docs', 'a*b', 'a>b', 'ns:src', '']) {
+      const m = msg(mutation(bad), 9);
+      expect(await handleCorpusMutation(m, kv, logger)).toBe('skipped');
+      expect(m.term).toHaveBeenCalledOnce();
+      expect(m.nak).not.toHaveBeenCalled();
+      expect(m.ack).not.toHaveBeenCalled();
+    }
+    expect(kv.store.size).toBe(0);
+  });
+
   it('NAKs on a transient KV failure so the bump retries', async () => {
     const kv: InvalidatorKv = {
       get: () => Promise.reject(new Error('kv down')),

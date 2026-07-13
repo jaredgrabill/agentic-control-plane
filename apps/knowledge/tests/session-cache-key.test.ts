@@ -49,8 +49,8 @@ describe('deriveCacheKey — isolation (security crux)', () => {
     const a = deriveCacheKey(input());
     const b = deriveCacheKey(input({ claims: claims({ tenant: 'globex' }) }));
     expect(a.key).not.toBe(b.key);
-    expect(a.key.startsWith('acme.')).toBe(true);
-    expect(b.key.startsWith('globex.')).toBe(true);
+    expect(a.key.startsWith('ctx.acme.')).toBe(true);
+    expect(b.key.startsWith('ctx.globex.')).toBe(true);
     // Even the permission hash differs: tenant is inside the hashed snapshot too.
     expect(a.permHashHex).not.toBe(b.permHashHex);
   });
@@ -92,8 +92,11 @@ describe('deriveCacheKey — isolation (security crux)', () => {
     const b = deriveCacheKey(input({ query: 'change freeze policy' }));
     expect(a.key).toBe(b.key);
     expect(a.key).not.toContain('change');
-    // Key is exactly three dot-separated tokens: tenant + 2 hex digests.
-    expect(a.key.split('.')).toHaveLength(3);
+    // Key is exactly four dot-separated tokens: the `ctx` prefix + tenant + 2
+    // hex digests. The literal prefix keeps the entry namespace disjoint from
+    // the `gen.>` generation namespace even for a tenant named `gen`.
+    expect(a.key.split('.')).toHaveLength(4);
+    expect(a.key.startsWith('ctx.')).toBe(true);
     expect(a.queryHashHex).toMatch(/^[0-9a-f]{64}$/);
     expect(a.permHashHex).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -115,6 +118,15 @@ describe('deriveCacheKey — isolation (security crux)', () => {
     const all = deriveCacheKey(input({ sourceId: undefined }));
     const scoped = deriveCacheKey(input({ sourceId: 'policy-docs' }));
     expect(all.queryHashHex).not.toBe(scoped.queryHashHex);
+  });
+
+  it('a tenant named `gen` mints entry keys under ctx.>, never the gen.> namespace', () => {
+    // `gen` is a syntactically valid tenant (^[a-z0-9-]+$). Without the literal
+    // entry prefix its entries would land under `gen.>` — the generations
+    // watcher's subject — and a purge would sweep every tenant's generations.
+    const k = deriveCacheKey(input({ claims: claims({ tenant: 'gen' }) }));
+    expect(k.key.startsWith('ctx.gen.')).toBe(true);
+    expect(k.key.startsWith('gen.')).toBe(false);
   });
 
   it('rejects a crafted tenant that could smuggle a KV wildcard or key family', () => {

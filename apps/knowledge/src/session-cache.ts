@@ -30,9 +30,13 @@ export const SESSION_CACHE_BUCKET = 'acp_session_cache';
 
 export type SearchMode = 'hybrid' | 'vector' | 'lexical';
 
-/** Default query breadth, mirrored from SearchService so the key snapshot matches what runs. */
-const DEFAULT_K = 8;
-const MAX_K = 50;
+/**
+ * Default and max query breadth. Exported so SearchService and the cache-key
+ * snapshot clamp k with the SAME constants — a divergence would make the key
+ * describe a different search than the one that ran.
+ */
+export const DEFAULT_K = 8;
+export const MAX_K = 50;
 const DEFAULT_MODE: SearchMode = 'hybrid';
 
 /** sha256Digest returns `sha256:<hex>`; the key carries the bare hex (`.`/`>` free, KV-legal). */
@@ -104,8 +108,18 @@ export interface QuerySnapshotInput {
  */
 export interface CacheKeyInput extends PermSnapshotInput, QuerySnapshotInput {}
 
+/**
+ * Literal prefix on every entry key, so the entry namespace (`ctx.<tenant>.…`)
+ * can never collide with the generation namespace (`gen.<tenant>.…`). Without
+ * it a tenant literally named `gen` would mint entry keys under `gen.>` — the
+ * generations watcher's subject — mixing cached JSON into the generation view
+ * and letting a `gen`-tenant purge sweep every tenant's generations. Mirrors
+ * the kill-switch key families (a leading literal token, then the tenant).
+ */
+export const ENTRY_KEY_PREFIX = 'ctx';
+
 export interface CacheKey {
-  /** `${tenant}.${permHashHex}.${queryHashHex}` — the KV entry key. */
+  /** `ctx.${tenant}.${permHashHex}.${queryHashHex}` — the KV entry key. */
   key: string;
   tenant: string;
   permHashHex: string;
@@ -131,7 +145,7 @@ export interface CacheKey {
  *      delegated actor) yields a different permHash → a different key → the
  *      pre-change (broader) entry is unreachable and ages out via TTL.
  *  (5) Cross-tenant is doubly closed: tenant is inside the hashed snapshot AND
- *      the validated leading key token.
+ *      a validated key token (after the literal `ctx.` prefix).
  */
 export function deriveCacheKey(input: CacheKeyInput): CacheKey {
   const perm = permSnapshot(input);
@@ -145,7 +159,7 @@ export function deriveCacheKey(input: CacheKeyInput): CacheKey {
   };
   const queryHashHex = hex(sha256Digest(stableStringify(query)));
   return {
-    key: `${perm.tenant}.${permHashHex}.${queryHashHex}`,
+    key: `${ENTRY_KEY_PREFIX}.${perm.tenant}.${permHashHex}.${queryHashHex}`,
     tenant: perm.tenant,
     permHashHex,
     queryHashHex,
@@ -185,7 +199,7 @@ export interface SessionCacheEntry {
  * satisfies it structurally; an in-memory fake implements it for unit tests.
  */
 export interface SessionCacheKv {
-  get(key: string): Promise<{ string(): string } | null>;
+  get(key: string): Promise<{ string(): string; operation?: string } | null>;
   put(key: string, value: string): Promise<number>;
   delete(key: string): Promise<void>;
 }
@@ -257,6 +271,11 @@ export class SessionContextCache {
     try {
       const entry = await this.kv.get(key);
       if (entry === null) return undefined;
+      // nats@2 kv.get on a deleted/purged key returns the tombstone entry
+      // (operation DEL|PURGE, empty value), not null. Treat it as a miss —
+      // mirrors the generations watcher — rather than JSON.parse('') throwing
+      // and logging a phantom KV failure.
+      if (entry.operation === 'DEL' || entry.operation === 'PURGE') return undefined;
       return JSON.parse(entry.string()) as SessionCacheEntry;
     } catch (err) {
       this.logger.warn({ err }, 'session cache get failed — treating as a miss');
@@ -304,15 +323,17 @@ export interface SessionCachePurgeKv {
  * stops serving a halted tenant or denied principal immediately; this is the
  * belt to that suspenders when content must be provably gone before TTL
  * (hard-delete, crypto-shred, legal hold). It purges only the tenant's ENTRY
- * keys (`<tenant>.>`), never the generation keys (`gen.>`), so the staleness
- * view stays intact and every purged query simply re-fetches live.
+ * keys (`ctx.<tenant>.>`), never the generation keys (`gen.>`), so the staleness
+ * view stays intact and every purged query simply re-fetches live. The `ctx.`
+ * prefix also means a tenant named `gen` purges only its own entries, never
+ * every tenant's generations.
  */
 export class SessionCacheControl {
   constructor(private readonly kv: SessionCachePurgeKv) {}
 
   async purgeTenant(tenant: string): Promise<number> {
     const prefix = assertTenantId(tenant);
-    const iter = await this.kv.keys(`${prefix}.>`);
+    const iter = await this.kv.keys(`${ENTRY_KEY_PREFIX}.${prefix}.>`);
     let purged = 0;
     for await (const key of iter) {
       await this.kv.purge(key);
