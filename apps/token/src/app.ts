@@ -364,6 +364,18 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
       tenant,
     );
 
+    // Impersonation guard (SF4): the bus keys an agent's NATS permissions on its
+    // version-stripped id + tenant, so provisioning a client whose principal
+    // reuses an existing agent's identity would hand the caller that agent's
+    // dispatch subject — letting it intercept the real agent's steps and their
+    // delegated tokens. A provisioned identity must be fresh in this tenant.
+    if (deps.clients.agentIdentityTaken(req.principal, tenant)) {
+      throw new AuthError(
+        'an agent with this identity is already registered in this tenant; provision a fresh agent id',
+        409,
+      );
+    }
+
     const slug = req.principal.replace(/^agent:/, '').replace(/[^a-z0-9]+/g, '-');
     const clientId = `agent-${slug}-${randomBytes(4).toString('hex')}`;
     const clientSecret = randomBytes(24).toString('hex');

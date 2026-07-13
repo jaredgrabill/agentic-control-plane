@@ -138,7 +138,10 @@ export function sanitizeRemoteOutput(output: Record<string, unknown>): Record<st
   const clean: Record<string, unknown> = Object.fromEntries(
     Object.entries(output).filter(([key]) => !LINEAGE_KEYS.includes(key)),
   );
-  if (Array.isArray(clean.citations)) {
+  // Empty citations whenever present, regardless of type — a remote can never
+  // supply a first-party citation. Guarding only the array case would let a
+  // remote returning a non-array `citations` slip untouched past a lax schema.
+  if ('citations' in clean) {
     clean.citations = [];
   }
   return clean;

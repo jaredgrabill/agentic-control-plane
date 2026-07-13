@@ -62,6 +62,29 @@ export class ClientRegistry {
     return this.byId.has(clientId);
   }
 
+  /** Version-stripped agent id from a principal, e.g. agent:change-agent@0.1.0 -> change-agent. */
+  private static agentIdOf(principal: string): string | undefined {
+    return /^agent:([a-z0-9-]+)@/.exec(principal)?.[1];
+  }
+
+  /**
+   * True if an agent with this bus identity is already registered in this
+   * tenant. The bus derives NATS permissions from the version-STRIPPED agent id
+   * plus the tenant (`acp.<tenant>.agent.<id>.>`), so identity is keyed on
+   * (id-without-version, tenant) — bumping the semver does not dodge it, and the
+   * same agent id under a different tenant (a legitimate multi-tenant worker) is
+   * a distinct identity. Guards self-service provisioning against claiming an
+   * existing agent's bus identity (SF4 impersonation fix).
+   */
+  agentIdentityTaken(principal: string, tenant: string): boolean {
+    const id = ClientRegistry.agentIdOf(principal);
+    if (id === undefined) return false;
+    for (const c of this.byId.values()) {
+      if (c.tenant === tenant && ClientRegistry.agentIdOf(c.principal) === id) return true;
+    }
+    return false;
+  }
+
   /**
    * Registers a dynamically-provisioned client (paved-road self-service, SF4).
    * The dynamic client lives in the same in-memory registry as the static seed,

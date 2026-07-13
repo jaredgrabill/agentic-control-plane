@@ -1821,6 +1821,34 @@ describe('paved-road client provisioning (POST /v1/clients)', () => {
     expect((await provision('cli-jane', 'jane-secret', {})).statusCode).toBe(400);
   });
 
+  it('refuses provisioning that impersonates an existing agent identity', async () => {
+    // agent-something is a registered acme agent (principal agent:something@0.1.0).
+    // A tenant-user must not be able to claim its bus identity.
+    const res = await provision('cli-jane', 'jane-secret', {
+      principal: 'agent:something@0.1.0',
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('a version bump does not dodge the impersonation guard', async () => {
+    // The bus keys identity on the version-stripped id, so agent:something@9.9.9
+    // targets the same acp.acme.agent.something.> subject and must also be 409.
+    const res = await provision('cli-jane', 'jane-secret', {
+      principal: 'agent:something@9.9.9',
+    });
+    expect(res.statusCode).toBe(409);
+  });
+
+  it('allows the same agent id in a different tenant (multi-tenant workers)', async () => {
+    // (id, tenant) is the identity key: agent:something under globex is distinct
+    // from the acme agent-something, so a platform caller may provision it.
+    const res = await provision('svc-platform-only', 'platform-secret', {
+      principal: 'agent:something@0.1.0',
+      tenant: 'globex',
+    });
+    expect(res.statusCode).toBe(201);
+  });
+
   it('rate-limits provisioning per caller', async () => {
     const tight = await buildTokenApp({
       keys,

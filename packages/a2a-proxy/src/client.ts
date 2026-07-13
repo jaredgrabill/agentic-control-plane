@@ -138,6 +138,9 @@ export class A2AClient {
     try {
       res = await this.fetchImpl(this.opts.endpoint, {
         method: 'POST',
+        // The remote is untrusted: refuse redirects rather than let it 3xx the
+        // adapter (and its credential) to an attacker-chosen host.
+        redirect: 'error',
         headers: {
           'content-type': 'application/json',
           // The adapter's OWN remote credential — the only secret that ever
