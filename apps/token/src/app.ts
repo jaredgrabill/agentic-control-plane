@@ -1,6 +1,13 @@
+import { randomBytes, randomUUID } from 'node:crypto';
 import formbody from '@fastify/formbody';
 import type { AuditEvent } from '@acp/protocol';
-import { AuthError, createHttpServer, delegationChain, type Logger } from '@acp/service-kit';
+import {
+  assertTenantAccess,
+  AuthError,
+  createHttpServer,
+  delegationChain,
+  type Logger,
+} from '@acp/service-kit';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { ClientRegistry, RegisteredClient } from './clients.js';
 import type { KeyStore } from './keys.js';
@@ -32,6 +39,8 @@ export interface TokenAppDeps {
   brokerMaxTaskAgeSeconds?: number;
   /** ADR-0007 broker-time denylist: refuse mints for revoked identities. */
   killSwitch?: KillSwitchLike;
+  /** Paved-road (SF4) provisioning rate limit per caller. Default 20/min. */
+  provisionLimit?: { max: number; windowMs: number };
 }
 
 interface TokenBody {
@@ -319,7 +328,105 @@ export async function buildTokenApp(deps: TokenAppDeps): Promise<FastifyInstance
     });
   });
 
+  // --- Paved-road self-service client provisioning (item 3, SF4) ---
+  // Mints an agent-role, tenant-bound, ZERO-scope client so an external team can
+  // scaffold an agent and stand up its worker with NO platform change (no
+  // token-clients.json edit). The new client can NEVER carry a platform scope
+  // (role is forced agent, scopes forced []), is bound to the caller's tenant
+  // (assertTenantAccess), and its secret is returned exactly ONCE — there is no
+  // read-back route. Every provision is audited (client.provisioned).
+  const provisionLimiter = new RateLimiter(deps.provisionLimit ?? { max: 20, windowMs: 60_000 });
+  app.post('/v1/clients', async (request, reply) => {
+    const body = (request.body ?? {}) as TokenBody;
+    const caller = authenticateClient(deps.clients, request, body);
+
+    // Agents cannot provision agents — privilege containment. Only a human/
+    // service identity (tenant-user, tenant-admin, platform, CI) may onboard.
+    if (caller.roles.includes('agent')) {
+      throw new AuthError('agent-role clients may not provision clients', 403);
+    }
+    if (!provisionLimiter.allow(caller.client_id)) {
+      throw new AuthError('client provisioning rate limit exceeded — retry shortly', 429);
+    }
+
+    const req = (request.body ?? {}) as { principal?: unknown; tenant?: unknown };
+    if (typeof req.principal !== 'string' || !AGENT_PRINCIPAL_RE.test(req.principal)) {
+      throw new AuthError(
+        'principal is required and must be an agent principal (e.g. agent:my-agent@0.1.0)',
+        400,
+      );
+    }
+    const tenant = typeof req.tenant === 'string' && req.tenant !== '' ? req.tenant : caller.tenant;
+    // Tenant binding (item 1 helper): a non-platform caller may provision only
+    // within its own tenant; naming another tenant is a 403.
+    assertTenantAccess(
+      { sub: caller.principal, tenant: caller.tenant, roles: caller.roles },
+      tenant,
+    );
+
+    const slug = req.principal.replace(/^agent:/, '').replace(/[^a-z0-9]+/g, '-');
+    const clientId = `agent-${slug}-${randomBytes(4).toString('hex')}`;
+    const clientSecret = randomBytes(24).toString('hex');
+    // Forced: agent role, ZERO scopes. A provisioned client can never self-grant
+    // a platform scope; it receives authority only via broker delegation.
+    const provisioned: RegisteredClient = {
+      client_id: clientId,
+      client_secret: clientSecret,
+      principal: req.principal,
+      tenant,
+      roles: ['agent'],
+      scopes: [],
+    };
+    try {
+      deps.clients.register(provisioned);
+    } catch {
+      // Astronomically unlikely id collision — ask the caller to retry.
+      throw new AuthError('client id collision, please retry', 409);
+    }
+
+    await deps.audit.publish({
+      event_id: randomUUID(),
+      occurred_at: (deps.now?.() ?? new Date()).toISOString(),
+      tenant,
+      event_type: 'client.provisioned',
+      actor: { principal: caller.principal, delegation_chain: [{ sub: caller.principal }] },
+      action: { name: 'client.provisioned' },
+      details: { client_id: clientId, principal: req.principal, roles: ['agent'], scopes: [] },
+    });
+
+    // The secret is returned ONCE — it is never stored in retrievable form and
+    // there is no GET route for it.
+    return reply.status(201).send({
+      client_id: clientId,
+      client_secret: clientSecret,
+      principal: req.principal,
+      tenant,
+      roles: ['agent'],
+      scopes: [],
+    });
+  });
+
   return app;
+}
+
+/** Agent principal shape: agent:<id>@<semver>. */
+const AGENT_PRINCIPAL_RE = /^agent:[a-z][a-z0-9-]*@\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+
+/** Minimal fixed-window per-key rate limiter for the provisioning route. */
+class RateLimiter {
+  private readonly hits = new Map<string, number[]>();
+  constructor(private readonly opts: { max: number; windowMs: number }) {}
+  allow(key: string): boolean {
+    const now = Date.now();
+    const recent = (this.hits.get(key) ?? []).filter((t) => now - t < this.opts.windowMs);
+    if (recent.length >= this.opts.max) {
+      this.hits.set(key, recent);
+      return false;
+    }
+    recent.push(now);
+    this.hits.set(key, recent);
+    return true;
+  }
 }
 
 function authenticateClient(

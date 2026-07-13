@@ -57,6 +57,25 @@ export class ClientRegistry {
     return new ClientRegistry(parsed as RegisteredClient[]);
   }
 
+  /** True if a client with this id is already registered (static or dynamic). */
+  has(clientId: string): boolean {
+    return this.byId.has(clientId);
+  }
+
+  /**
+   * Registers a dynamically-provisioned client (paved-road self-service, SF4).
+   * The dynamic client lives in the same in-memory registry as the static seed,
+   * so its secret authenticates immediately — but it is NOT persisted, so a
+   * token-service restart drops it (a provisioned agent re-provisions, or a
+   * durable store replaces this in a later phase). Throws on a duplicate id.
+   */
+  register(client: RegisteredClient): void {
+    if (this.byId.has(client.client_id)) {
+      throw new Error(`client_id ${client.client_id} already registered`);
+    }
+    this.byId.set(client.client_id, client);
+  }
+
   /** Constant-time secret comparison; unknown client and bad secret are indistinguishable to callers. */
   authenticate(clientId: string, clientSecret: string): RegisteredClient {
     const client = this.byId.get(clientId);

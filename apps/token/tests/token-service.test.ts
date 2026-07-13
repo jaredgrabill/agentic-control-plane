@@ -1736,3 +1736,113 @@ describe('ADR-0007 broker-time denylist', () => {
     expect(deniedEvent()).toBeUndefined();
   });
 });
+
+describe('paved-road client provisioning (POST /v1/clients)', () => {
+  async function provision(
+    id: string,
+    secret: string,
+    body: Record<string, unknown>,
+  ): Promise<ReturnType<FastifyInstance['inject']>> {
+    return app.inject({
+      method: 'POST',
+      url: '/v1/clients',
+      headers: { authorization: basic(id, secret) },
+      payload: body,
+    });
+  }
+
+  it('provisions an agent-role, zero-scope, tenant-bound client and audits it', async () => {
+    auditEvents.length = 0;
+    const res = await provision('cli-jane', 'jane-secret', { principal: 'agent:pave-me@0.1.0' });
+    expect(res.statusCode).toBe(201);
+    const out = res.json<{
+      client_id: string;
+      client_secret: string;
+      tenant: string;
+      roles: string[];
+      scopes: string[];
+    }>();
+    expect(out.roles).toEqual(['agent']);
+    expect(out.scopes).toEqual([]);
+    expect(out.tenant).toBe('acme');
+    expect(out.client_secret.length).toBeGreaterThanOrEqual(16);
+    expect(auditEvents.some((e) => e.event_type === 'client.provisioned')).toBe(true);
+
+    // The provisioned secret authenticates immediately (usable, not just minted).
+    const mint = await app.inject({
+      method: 'POST',
+      url: '/v1/token',
+      headers: { authorization: basic(out.client_id, out.client_secret) },
+      payload: { grant_type: 'client_credentials', audience: 'acp:bus' },
+    });
+    expect(mint.statusCode).toBe(200);
+  });
+
+  it('forces agent role and zero scopes even when the body asks for more', async () => {
+    const res = await provision('cli-jane', 'jane-secret', {
+      principal: 'agent:no-escalation@0.1.0',
+      roles: ['platform'],
+      scopes: ['registry:admin'],
+    });
+    expect(res.statusCode).toBe(201);
+    const out = res.json<{ roles: string[]; scopes: string[] }>();
+    expect(out.roles).toEqual(['agent']);
+    expect(out.scopes).toEqual([]);
+  });
+
+  it('binds a non-platform caller to its own tenant (cross-tenant is 403)', async () => {
+    const res = await provision('cli-jane', 'jane-secret', {
+      principal: 'agent:cross-tenant@0.1.0',
+      tenant: 'globex',
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('lets a platform caller provision into another tenant', async () => {
+    const res = await provision('svc-platform-only', 'platform-secret', {
+      principal: 'agent:platform-onboard@0.1.0',
+      tenant: 'globex',
+    });
+    expect(res.statusCode).toBe(201);
+    expect(res.json<{ tenant: string }>().tenant).toBe('globex');
+  });
+
+  it('refuses an agent-role caller (no self-replication)', async () => {
+    const res = await provision('agent-something', 'agent-secret', {
+      principal: 'agent:spawn@0.1.0',
+    });
+    expect(res.statusCode).toBe(403);
+  });
+
+  it('rejects a malformed principal', async () => {
+    expect((await provision('cli-jane', 'jane-secret', { principal: 'not-an-agent' })).statusCode).toBe(
+      400,
+    );
+    expect((await provision('cli-jane', 'jane-secret', {})).statusCode).toBe(400);
+  });
+
+  it('rate-limits provisioning per caller', async () => {
+    const tight = await buildTokenApp({
+      keys,
+      clients: new ClientRegistry(CLIENTS),
+      issuer: ISSUER,
+      audit: { publish: () => Promise.resolve() },
+      logger: createLogger('token-ratelimit-test'),
+      provisionLimit: { max: 1, windowMs: 60_000 },
+    });
+    const first = await tight.inject({
+      method: 'POST',
+      url: '/v1/clients',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: { principal: 'agent:rl-one@0.1.0' },
+    });
+    expect(first.statusCode).toBe(201);
+    const second = await tight.inject({
+      method: 'POST',
+      url: '/v1/clients',
+      headers: { authorization: basic('cli-jane', 'jane-secret') },
+      payload: { principal: 'agent:rl-two@0.1.0' },
+    });
+    expect(second.statusCode).toBe(429);
+  });
+});
