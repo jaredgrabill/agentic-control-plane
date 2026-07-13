@@ -41,9 +41,13 @@ groups:
           /
           clamp_min(sum(rate(acp_step_dispatch_total[30m])), 1)
       - alert: DispatchAvailabilityBudgetBurnFast
-        # 14.4x burn of a 0.5% error budget over 1h AND 5m windows (multi-window).
+        # 14.4x burn of a 0.5% error budget over a single 30m window. The trailing
+        # `and … > 0` guard suppresses the alert on an IDLE stack: with no
+        # dispatches the ratio's clamp_min(denom,1) makes success 0/1 = 0, so
+        # (1 - 0) = 1 > 0.072 would otherwise page after 5 quiet minutes.
         expr: |
           (1 - acp:step_dispatch_success:ratio_30m) > (14.4 * 0.005)
+          and sum(rate(acp_step_dispatch_total[30m])) > 0
         for: 5m
         labels: { severity: critical, slo: availability }
         annotations:

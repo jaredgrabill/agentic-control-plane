@@ -10,14 +10,13 @@ rule_files:
 
 scrape_configs:
   # The collector re-exports all OTLP metrics (gen_ai.* / acp.*) here.
+  # OTLP metric names arrive dotted; the Prometheus exporter sanitizes dots to
+  # underscores (e.g. gen_ai.client.operation.duration →
+  # gen_ai_client_operation_duration), so the rules use the sanitized names. No
+  # metric_relabel_configs are needed (the empty list here was a no-op).
   - job_name: otel-collector
     static_configs:
       - targets: ['otel-collector:8889']
-    metric_relabel_configs:
-      # OTLP metric names arrive dotted; the Prometheus exporter sanitizes
-      # dots to underscores (e.g. gen_ai.client.operation.duration →
-      # gen_ai_client_operation_duration). The rules use the sanitized names.
-      []
 
   # The collector's own health/pipeline metrics (optional, useful for
   # debugging dropped spans/metrics).

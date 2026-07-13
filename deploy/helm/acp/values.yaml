@@ -15,6 +15,11 @@ fullnameOverride: ""
 
 global:
   image:
+    # HUMAN DEP: this monorepo container image is NOT yet built or published by
+    # any CI job. You must build and push it (all services share one image; args
+    # select the entrypoint — see run-platform.mjs) to this registry/repository
+    # before install, or every pod ImagePullBackOffs. Point these at your own
+    # registry if you mirror it. See docs/runbooks/deploy-helm.md prerequisites.
     registry: ghcr.io
     repository: jaredgrabill/agentic-control-plane
     # tag defaults to .Chart.AppVersion when empty.

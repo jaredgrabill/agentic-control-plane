@@ -12,11 +12,22 @@ name: docs-release
 on:
   push:
     tags:
-      # Protocol/SDK release tags cut by release-please, e.g. protocol-v1.0.0.
-      - '*-v[0-9]+.[0-9]+.[0-9]+'
+      # ONLY the protocol release tag drives the versioned docs site. The glob
+      # is scoped to `protocol-v*`: the earlier `*-v…` matched all eight
+      # component release tags (agent-sdk-v…, tool-client-v…, …), so a tool-client
+      # patch would deploy a bogus docs version and re-alias `latest`, clobbering
+      # the platform docs.
+      - 'protocol-v[0-9]+.[0-9]+.[0-9]+'
 
 permissions:
   contents: write
+
+# Serialize mike deploys: `mike --push` commits to gh-pages, so two concurrent
+# runs (e.g. several tags pushed together) race on a non-fast-forward push. This
+# group queues them; we never cancel an in-flight docs publish.
+concurrency:
+  group: docs-release
+  cancel-in-progress: false
 
 jobs:
   deploy-versioned-docs:

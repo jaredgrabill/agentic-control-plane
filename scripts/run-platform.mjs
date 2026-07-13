@@ -276,7 +276,9 @@ const services = [
     {
       ACP_PROXY_ENDPOINT: 'http://localhost:7305/a2a',
       ACP_PROXY_CREDENTIAL: 'external-echo-remote-dev-credential',
-      ACP_AGENT_CLIENT_ID: 'agent-external-echo',
+      // No ACP_AGENT_CLIENT_ID: this proxy skips NATS/token-exchange wiring, and
+      // the worker's default (`agent-${agentId}` = agent-external-echo) is the
+      // same value anyway — an explicit override here was dead.
       // Version-qualifies this worker's task queue (item 4).
       ACP_AGENT_VERSION: '0.1.0',
     },
