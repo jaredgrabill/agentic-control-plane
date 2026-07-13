@@ -45,6 +45,7 @@
       },
       "tools": {
         "change_get": { "scope": "itsm:change:read", "risk": "R0" },
+        "change_record_lookup": { "scope": "itsm:change:read", "risk": "R0" },
         "calendar_conflicts": { "scope": "itsm:calendar:read", "risk": "R0" },
         "change_create_draft": { "scope": "itsm:change:draft", "risk": "R1" },
         "change_submit": { "scope": "itsm:change:submit", "risk": "R2" },

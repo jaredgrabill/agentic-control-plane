@@ -53,6 +53,25 @@
       "status": "submitted",
       "window": { "start": "2026-07-18T09:00:00Z", "end": "2026-07-18T09:30:00Z" },
       "created_at": "2026-07-08T13:20:00Z"
+    },
+    {
+      "change_id": "CHG-1006",
+      "title": "Roll out payments-api autoscaling and connection-pool changes",
+      "description": "Deploy d-2026-07-01-042 raised the payments-api autoscaling floor and enlarged the DB connection pool, driving the week-over-week cost increase.",
+      "service": "payments-api",
+      "deploy_id": "d-2026-07-01-042",
+      "status": "closed",
+      "window": { "start": "2026-07-01T02:00:00Z", "end": "2026-07-01T03:00:00Z" },
+      "created_at": "2026-06-30T17:45:00Z"
+    },
+    {
+      "change_id": "CHG-4001",
+      "title": "Apply CVE-2026-31337 patch to payments-api image",
+      "description": "Roll the payments-api image to 2.4.2 to close the critical CVE-2026-31337 finding. Reserved for the governed patch-rollout acceptance scenario.",
+      "service": "payments-api",
+      "status": "draft",
+      "window": { "start": "2026-07-13T02:00:00Z", "end": "2026-07-13T03:00:00Z" },
+      "created_at": "2026-07-12T18:00:00Z"
     }
   ]
 }

@@ -5,7 +5,11 @@
  *   1. SLO: an external team can scaffold an agent and take it from a bare
  *      manifest to a registered SHADOW version in well under the SLO — the
  *      whole path is API-driven (provision client → register → baseline →
- *      shadow), no operator in the loop.
+ *      shadow), no operator in the loop. With { driveToActive: true } the same
+ *      API-only path is driven all the way to ACTIVE via the registered→active
+ *      admin edge (agent-lifecycle.md: there is no shadow→active edge, so the
+ *      onboarding-to-active proof takes the direct admin promotion), and the
+ *      zero-change invariant is re-asserted at active.
  *   2. ZERO PLATFORM CHANGES: onboarding touches NO platform-owned file —
  *      not apps/**, packages/**, deploy/** (incl. token-clients.json),
  *      .github/**, policies/**, or run-platform.mjs. The one seam that used to
@@ -138,6 +142,10 @@ export async function runPavedRoadSlo(options = {}) {
     id: 'svc-orchestrator',
     secret: 'orchestrator-dev-secret',
   };
+  // The admin holds registry:admin (the registered→active promotion edge). Used
+  // only when driveToActive is set; onboarding stays fully API-driven.
+  const admin = options.admin ?? { id: 'svc-ci', secret: 'ci-dev-secret' };
+  const driveToActive = options.driveToActive === true;
 
   const agentId = `paved-probe-${randomBytes(4).toString('hex')}`;
   const version = '0.1.0';
@@ -204,27 +212,55 @@ export async function runPavedRoadSlo(options = {}) {
   });
   await expectJson(baselineRes, [200], 'baseline');
 
-  // 5. Transition registered → shadow (a registry:deploy edge).
-  const deployToken = await mintToken(
-    tokenUrl,
-    deployer.id,
-    deployer.secret,
-    'acp:registry',
-    'registry:deploy',
-  );
-  const shadowRes = await fetch(`${registryUrl}/v1/agents/${agentId}/versions/${version}/state`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${deployToken}` },
-    body: JSON.stringify({ state: 'shadow', reason: 'paved-road slo probe' }),
-  });
-  const shadowCard = await expectJson(shadowRes, [200], 'shadow transition');
-  assert.equal(shadowCard.lifecycle_state, 'shadow');
-  log(`transitioned ${agentId}@${version} to shadow`);
+  // 5. Terminal transition. Default: registered → shadow (a registry:deploy
+  //    edge). driveToActive: registered → active directly (the registry:admin
+  //    promotion edge — there is no shadow→active edge, so the onboarding-to-
+  //    active proof takes the documented admin promotion).
+  let lifecycleState;
+  if (driveToActive) {
+    const adminToken = await mintToken(
+      tokenUrl,
+      admin.id,
+      admin.secret,
+      'acp:registry',
+      'registry:admin',
+    );
+    const activeRes = await fetch(`${registryUrl}/v1/agents/${agentId}/state`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${adminToken}` },
+      body: JSON.stringify({ state: 'active', reason: 'paved-road onboarding to active' }),
+    });
+    const activeCard = await expectJson(activeRes, [200], 'active transition');
+    lifecycleState = activeCard.lifecycle_state;
+    assert.equal(lifecycleState, 'active');
+    log(`promoted ${agentId}@${version} to active (registered→active admin edge)`);
+  } else {
+    const deployToken = await mintToken(
+      tokenUrl,
+      deployer.id,
+      deployer.secret,
+      'acp:registry',
+      'registry:deploy',
+    );
+    const shadowRes = await fetch(`${registryUrl}/v1/agents/${agentId}/versions/${version}/state`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${deployToken}` },
+      body: JSON.stringify({ state: 'shadow', reason: 'paved-road slo probe' }),
+    });
+    const shadowCard = await expectJson(shadowRes, [200], 'shadow transition');
+    lifecycleState = shadowCard.lifecycle_state;
+    assert.equal(lifecycleState, 'shadow');
+    log(`transitioned ${agentId}@${version} to shadow`);
+  }
 
   const elapsedMs = Date.now() - started;
 
   // 6. SLO assertion.
-  assert.ok(elapsedMs < sloMs, `scaffold→shadow took ${elapsedMs}ms, over the SLO of ${sloMs}ms`);
+  const target = driveToActive ? 'active' : 'shadow';
+  assert.ok(
+    elapsedMs < sloMs,
+    `scaffold→${target} took ${elapsedMs}ms, over the SLO of ${sloMs}ms`,
+  );
 
   // 7. Zero-platform-changes invariant: onboarding introduced NO new platform diff.
   const after = platformChanges(repoRoot);
@@ -235,7 +271,16 @@ export async function runPavedRoadSlo(options = {}) {
     `onboarding changed platform-owned files (must be zero):\n${introduced.join('\n')}`,
   );
 
-  return { ok: true, agentId, version, clientId: client.client_id, elapsedMs, sloMs };
+  return {
+    ok: true,
+    agentId,
+    version,
+    clientId: client.client_id,
+    lifecycleState,
+    reachedActive: lifecycleState === 'active',
+    elapsedMs,
+    sloMs,
+  };
 }
 
 // CLI entrypoint.

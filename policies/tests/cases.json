@@ -399,6 +399,21 @@
       }
     },
     {
+      "name": "change agent calls change_record_lookup through the gateway PEP (R0 read)",
+      "expect": "allow",
+      "determined_by": "allow-tool-itsm-change-record-lookup",
+      "request": {
+        "principal": {
+          "type": "Agent",
+          "id": "agent:change-agent@0.1.0",
+          "attrs": { "tenant": "acme" }
+        },
+        "action": "tool:itsm:change_record_lookup",
+        "resource": { "type": "Service", "id": "svc:itsm", "attrs": {} },
+        "context": { "scopes": ["itsm:change:read"], "tenant": "acme" }
+      }
+    },
+    {
       "name": "change agent calls calendar_conflicts through the gateway PEP (R0 read)",
       "expect": "allow",
       "determined_by": "allow-tool-itsm-calendar-conflicts",
